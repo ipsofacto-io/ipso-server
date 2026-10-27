@@ -1,5 +1,7 @@
 # ipso-server
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/ipsofacto-io/ipso-server/badge)](https://scorecard.dev/viewer/?uri=github.com/ipsofacto-io/ipso-server)
+
 Source-available ipso control plane: bitemporal decision registry, API, web app and PR checks.
 
 > Status: skeleton. The control plane lands in a later change.
