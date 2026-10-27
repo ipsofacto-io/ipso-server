@@ -17,4 +17,4 @@ jobs:
       actions: read
       id-token: write
       security-events: write
-    uses: ergoprobat/.github/.github/workflows/scorecard.yml@ec03d934c0dd0bb3289c86b190fe34a5732705ca
+    uses: ipsofacto-io/.github/.github/workflows/scorecard.yml@ec03d934c0dd0bb3289c86b190fe34a5732705ca
