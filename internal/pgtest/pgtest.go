@@ -128,7 +128,6 @@ func (s *Server) createRoles(ctx context.Context) error {
 func (s *Server) NewDatabase(t testing.TB) *Database {
 	t.Helper()
 	ctx := t.Context()
-	name := fmt.Sprintf("ipso_test_%d", s.databases.Add(1))
 
 	admin, err := sql.Open("pgx", s.dsn(Admin, "postgres", ""))
 	if err != nil {
@@ -136,9 +135,12 @@ func (s *Server) NewDatabase(t testing.TB) *Database {
 	}
 	defer func() { _ = admin.Close() }()
 
-	var create string
-	if err := admin.QueryRowContext(ctx,
-		`SELECT format('CREATE DATABASE %I OWNER ipso_migrate', $1::text)`, name).Scan(&create); err != nil {
+	// The server builds the name from a counter and quotes it, so no string built in Go
+	// reaches a statement.
+	var name, create string
+	if err := admin.QueryRowContext(ctx, `
+		SELECT name, format('CREATE DATABASE %I OWNER ipso_migrate', name)
+		FROM (SELECT 'ipso_test_' || $1::bigint AS name) AS named`, s.databases.Add(1)).Scan(&name, &create); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := admin.ExecContext(ctx, create); err != nil {
