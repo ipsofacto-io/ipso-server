@@ -17,7 +17,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 )
 
-var embeddedFiles = []string{"00001_btree_gist.sql", "00002_registry_decision_version.sql"}
+var embeddedFiles = []string{"00001_btree_gist.sql", "00002_registry_decision_version.sql", "00003_registry_scope.sql"}
 
 func scalar(t *testing.T, db *sql.DB, query string) int {
 	t.Helper()
