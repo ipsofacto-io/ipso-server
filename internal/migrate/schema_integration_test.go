@@ -24,12 +24,14 @@ const (
 
 const insertVersion = `
 	INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
-	VALUES ($1::uuid, $2::int, $3::uuid, '{"statement":"synthetic"}', '{}', $4::text::tstzrange)`
+	VALUES ($1::uuid, $2::int, $3::uuid, '{"statement":"synthetic"}', ARRAY[$5::uuid], $4::text::tstzrange)`
 
-// schema is a migrated database with a pool for each role the tests act as.
+// schema is a migrated database with a pool for each role the tests act as. orgs holds one
+// org scope for each tenant, which the decision rows point at.
 type schema struct {
 	app   *sql.DB
 	admin *sql.DB
+	orgs  map[string]string
 }
 
 // migrated applies the embedded migrations as the migration role to an empty database.
@@ -39,12 +41,37 @@ func migrated(t *testing.T) schema {
 	if _, err := migrate.Run(t.Context(), db.DSN(pgtest.Migrate)); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	return schema{app: db.Open(t, pgtest.App), admin: db.Open(t, pgtest.Admin)}
+	s := schema{app: db.Open(t, pgtest.App), admin: db.Open(t, pgtest.Admin), orgs: make(map[string]string)}
+	for _, tenant := range []string{tenantA, tenantB} {
+		s.orgs[tenant] = s.addScope(t, tenant, "", "org", "acme")
+	}
+	return s
+}
+
+// addScope inserts a scope as the application role and returns its id. An empty parent means
+// a root.
+func (s schema) addScope(t *testing.T, tenant, parent, kind, selector string) string {
+	t.Helper()
+	id, err := s.tryScope(t, tenant, parent, kind, selector)
+	if err != nil {
+		t.Fatalf("insert %s scope %q: %v", kind, selector, err)
+	}
+	return id
+}
+
+func (s schema) tryScope(t *testing.T, tenant, parent, kind, selector string) (string, error) {
+	t.Helper()
+	var id string
+	err := s.app.QueryRowContext(t.Context(), `
+		INSERT INTO registry.scope (tenant_id, parent_id, kind, selector)
+		VALUES ($1::uuid, nullif($2, '')::uuid, $3, $4)
+		RETURNING id`, tenant, parent, kind, selector).Scan(&id)
+	return id, err
 }
 
 func (s schema) insert(t *testing.T, tenant string, version int, validPeriod string) {
 	t.Helper()
-	if _, err := s.app.ExecContext(t.Context(), insertVersion, decision, version, tenant, validPeriod); err != nil {
+	if _, err := s.app.ExecContext(t.Context(), insertVersion, decision, version, tenant, validPeriod, s.orgs[tenant]); err != nil {
 		t.Fatalf("insert version %d: %v", version, err)
 	}
 }
@@ -128,7 +155,7 @@ func TestPrimaryKeyRejectsAnOverlappingPeriod(t *testing.T) {
 	s := migrated(t)
 	s.insert(t, tenantA, 1, "[2026-01-01,2026-06-01)")
 
-	_, err := s.app.ExecContext(t.Context(), insertVersion, decision, 2, tenantA, "[2026-03-01,2026-09-01)")
+	_, err := s.app.ExecContext(t.Context(), insertVersion, decision, 2, tenantA, "[2026-03-01,2026-09-01)", s.orgs[tenantA])
 	requireSQLState(t, err, "23P01")
 
 	s.insert(t, tenantA, 2, "[2026-06-01,2026-09-01)") // adjacent, no overlap
@@ -313,8 +340,8 @@ func TestInsertSetsTransactionTime(t *testing.T) {
 		before := dbNow(t, s.admin)
 		_, err := s.app.ExecContext(ctx, `
 			INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period, sys_period)
-			VALUES ($1::uuid, $2::int, $3::uuid, '{}', '{}', $4::text::tstzrange, $5::text::tstzrange)`,
-			decision, i+1, tenantA, validPeriods[i], supplied)
+			VALUES ($1::uuid, $2::int, $3::uuid, '{}', ARRAY[$6::uuid], $4::text::tstzrange, $5::text::tstzrange)`,
+			decision, i+1, tenantA, validPeriods[i], supplied, s.orgs[tenantA])
 		if err != nil {
 			t.Fatalf("insert with sys_period %s: %v", supplied, err)
 		}
@@ -350,7 +377,7 @@ func TestTableRejectsAClosedPeriodWhenTriggersAreOff(t *testing.T) {
 	}
 	_, err = conn.ExecContext(ctx, `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period, sys_period)
-		VALUES ($1::uuid, 1, $2::uuid, '{}', '{}', '[2026-01-01,)', '[2000-01-01,2000-02-01)')`, decision, tenantA)
+		VALUES ($1::uuid, 1, $2::uuid, '{}', ARRAY[$3::uuid], '[2026-01-01,)', '[2000-01-01,2000-02-01)')`, decision, tenantA, s.orgs[tenantA])
 	requireSQLState(t, err, "23514")
 	if pgErr := pgError(t, err); pgErr.ConstraintName != "decision_version_sys_period_open" {
 		t.Errorf("constraint = %q, want decision_version_sys_period_open", pgErr.ConstraintName)
@@ -393,6 +420,7 @@ func TestTriggerFunctionsAreDefinerFunctionsOfTheMigrationRole(t *testing.T) {
 	for _, function := range []string{
 		"registry.decision_version_open_sys_period()",
 		"registry.decision_version_archive()",
+		"registry.scope_write_closure()",
 	} {
 		t.Run(function, func(t *testing.T) {
 			var (
@@ -419,7 +447,7 @@ func TestTriggerFunctionsAreDefinerFunctionsOfTheMigrationRole(t *testing.T) {
 	}
 }
 
-func TestTriggersRunOnTheCurrentTableOnly(t *testing.T) {
+func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 	s := migrated(t)
 	rows, err := s.admin.QueryContext(t.Context(), `
 		SELECT tgrelid::regclass::text, tgname, tgtype
@@ -445,10 +473,13 @@ func TestTriggersRunOnTheCurrentTableOnly(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	// tgtype bits: 1 row, 2 before, 4 insert, 8 delete, 16 update.
+	// tgtype bits: 1 row, 2 before, 4 insert, 8 delete, 16 update. An after trigger has no bit 2.
 	want := []trigger{
 		{"registry.decision_version", "decision_version_archive", 1 | 2 | 8 | 16},
 		{"registry.decision_version", "decision_version_open_sys_period", 1 | 2 | 4},
+		{"registry.decision_version", "decision_version_scope_refs", 1 | 2 | 4 | 16},
+		{"registry.scope", "scope_prepare", 1 | 2 | 4},
+		{"registry.scope", "scope_write_closure", 1 | 4},
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("triggers = %+v, want %+v", got, want)
