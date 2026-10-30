@@ -475,11 +475,17 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 	}
 	// tgtype bits: 1 row, 2 before, 4 insert, 8 delete, 16 update. An after trigger has no bit 2.
 	want := []trigger{
+		{"registry.baseline", "baseline_fingerprints", 1 | 2 | 4},
+		{"registry.baseline", "baseline_open_sys_period", 1 | 2 | 4},
 		{"registry.decision_version", "decision_version_archive", 1 | 2 | 8 | 16},
 		{"registry.decision_version", "decision_version_open_sys_period", 1 | 2 | 4},
 		{"registry.decision_version", "decision_version_scope_refs", 1 | 2 | 4 | 16},
+		{"registry.grandfather_period", "grandfather_period_open_sys_period", 1 | 2 | 4},
 		{"registry.scope", "scope_prepare", 1 | 2 | 4},
 		{"registry.scope", "scope_write_closure", 1 | 4},
+		{"registry.supersession", "supersession_check", 1 | 2 | 4},
+		{"registry.supersession", "supersession_close", 1 | 4},
+		{"registry.supersession", "supersession_open_sys_period", 1 | 2 | 4},
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("triggers = %+v, want %+v", got, want)

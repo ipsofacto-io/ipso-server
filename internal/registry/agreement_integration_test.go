@@ -81,6 +81,74 @@ func TestSelectorGrammarAgreesWithPostgreSQL(t *testing.T) {
 	})
 }
 
+// The literal repository grammar is written twice: as baseline_repo in migration 00004 and as
+// literalRepoOK. A stored baseline name is not folded, so mixed case is refused by both.
+func TestBaselineRepoGrammarAgreesWithPostgreSQL(t *testing.T) {
+	r := newRegistryDB(t)
+	decision := uuid.MustParse("00000000-0000-4000-8000-0000000000d9")
+	if _, err := r.app.ExecContext(t.Context(), `
+		INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period)
+		VALUES ($1, $2, '[2026-01-01,)')`, tenantA, decision); err != nil {
+		t.Fatal(err)
+	}
+
+	owner := strings.Repeat("a", 63)
+	boundary := func(n int) string {
+		rest := n - len(owner) - 1 - 100 - 1
+		return owner + "/" + strings.Repeat("b", 100) + "/" + strings.Repeat("c", rest)
+	}
+	inputs := []string{
+		"acme/payments", "acme/.github", "acme/a.b_c-d", "acme/group/sub/service",
+		"acme/" + strings.Repeat("a", 100),
+		"acme/infra-*", "acme/*", "acme/a?c", "acme/g*/s?",
+		boundary(255), boundary(256),
+	}
+	inputs = append(inputs, badRepos...)
+	inputs = append(inputs, generate(rngFrom(t), 400)...)
+
+	accepted, refused := 0, 0
+	seen := make(map[string]bool)
+	for _, input := range inputs {
+		if seen[input] {
+			continue
+		}
+		seen[input] = true
+		_, err := r.app.ExecContext(t.Context(), `
+			INSERT INTO registry.baseline (tenant_id, decision_id, repo, fingerprints)
+			VALUES ($1, $2, $3, '{}'::bytea[])`, tenantA, decision, input)
+		goOK := literalRepoOK(input)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || (pgErr.Code != "23514" && pgErr.Code != "23505") {
+				t.Errorf("%q: PostgreSQL refused it with %v, want a CHECK violation", input, err)
+				continue
+			}
+			if pgErr.Code == "23505" {
+				if !goOK {
+					t.Errorf("%q: unique violation, but Go rejects the name", input)
+				}
+				continue
+			}
+		}
+		if (err == nil) != goOK {
+			t.Errorf("%q: PostgreSQL accepts %v, Go accepts %v", input, err == nil, goOK)
+		}
+		if err == nil {
+			accepted++
+		} else {
+			refused++
+		}
+	}
+	if accepted == 0 || refused == 0 {
+		t.Errorf("%d accepted and %d refused, want both", accepted, refused)
+	}
+}
+
+func rngFrom(t *testing.T) *rand.Rand {
+	t.Helper()
+	return rand.New(rand.NewPCG(3, 4))
+}
+
 // generate builds strings from fragments that sit on the edges of the grammar, so that a large
 // share of them is valid and the rest breaks exactly one rule.
 func generate(rng *rand.Rand, n int) []string {

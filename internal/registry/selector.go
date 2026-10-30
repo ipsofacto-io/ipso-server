@@ -1,5 +1,6 @@
 // Package registry resolves which decisions apply to a repository, a path, and an environment
-// (ADR-0051). It reads the scope tree and the bitemporal decision tables that the migrations
+// (ADR-0051) and which of a decision's violations a baseline grandfathers (ADR-0052). It reads
+// the scope tree, the bitemporal decision tables, and the baseline tables that the migrations
 // create. It never writes them.
 package registry
 
@@ -29,8 +30,9 @@ const (
 )
 
 // The grammar of a stored selector. Every expression is also a CHECK constraint on
-// registry.scope in migration 00003_registry_scope.sql, and a test requires the two to agree.
-// Each one is valid in PostgreSQL and in Go.
+// registry.scope in migration 00003_registry_scope.sql, and literalRepoExpr is also the
+// baseline_repo constraint in migration 00004_registry_supersession.sql. A test requires
+// the database and Go to agree. Each expression is valid in PostgreSQL and in Go.
 var (
 	nameExpr = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 	// repoExpr is an owner name and one to ten segments that may hold * and ?.
@@ -133,10 +135,27 @@ type subject struct {
 	env     string
 }
 
+// canonicalRepo folds a repository name to lowercase ASCII and checks the literal repo
+// grammar. A subject and a baseline name the same repositories, so both go through here.
+func canonicalRepo(repo string) (string, error) {
+	folded, ok := asciiLower(repo)
+	if !ok || !literalRepoOK(folded) {
+		return "", fmt.Errorf("%w: repo must be a lowercase owner/name", ErrInvalidSubject)
+	}
+	return folded, nil
+}
+
+// literalRepoOK reports whether a stored repository name matches the baseline_repo
+// constraint. The name is compared as given, with no case folding, because the constraint
+// does not fold it either.
+func literalRepoOK(repo string) bool {
+	return len(repo) <= maxSelectorLength && literalRepoExpr.MatchString(repo) && !dotSegmentExpr.MatchString(repo)
+}
+
 func newSubject(in Subject) (subject, error) {
-	repo, ok := asciiLower(in.Repo)
-	if !ok || len(repo) > maxSelectorLength || !literalRepoExpr.MatchString(repo) || dotSegmentExpr.MatchString(repo) {
-		return subject{}, fmt.Errorf("%w: repo must be a lowercase owner/name", ErrInvalidSubject)
+	repo, err := canonicalRepo(in.Repo)
+	if err != nil {
+		return subject{}, err
 	}
 	out := subject{repo: strings.Split(repo, "/")}
 	out.org = out.repo[0]

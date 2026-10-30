@@ -96,27 +96,39 @@ func Resolve(ctx context.Context, db *sql.DB, tenant uuid.UUID, in Subject, vali
 		return nil, err
 	}
 
+	var decisions []Decision
+	err = readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
+		matched, err := matchingScopes(ctx, tx, subject, knownAt)
+		if err != nil {
+			return err
+		}
+		if len(matched) == 0 {
+			return nil
+		}
+		scopes, err := ancestorsOf(ctx, tx, matched)
+		if err != nil {
+			return err
+		}
+		decisions, err = readDecisions(ctx, tx, scopes, validAt, knownAt)
+		return err
+	})
+	return decisions, err
+}
+
+// readTx runs fn in one read-only REPEATABLE READ transaction with ipso.tenant set for that
+// transaction only. A session with no tenant matches no row, and a pooled connection does not
+// keep the setting. fn's error is returned as it is.
+func readTx(ctx context.Context, db *sql.DB, tenant uuid.UUID, fn func(context.Context, *sql.Tx) error) error {
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
-		return nil, fmt.Errorf("begin: %w", err)
+		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx, `SELECT set_config('ipso.tenant', $1, true)`, tenant.String()); err != nil {
-		return nil, fmt.Errorf("set the tenant: %w", err)
+		return fmt.Errorf("set the tenant: %w", err)
 	}
-	matched, err := matchingScopes(ctx, tx, subject, knownAt)
-	if err != nil {
-		return nil, err
-	}
-	if len(matched) == 0 {
-		return nil, nil
-	}
-	scopes, err := ancestorsOf(ctx, tx, matched)
-	if err != nil {
-		return nil, err
-	}
-	return readDecisions(ctx, tx, scopes, validAt, knownAt)
+	return fn(ctx, tx)
 }
 
 func matchingScopes(ctx context.Context, tx *sql.Tx, s subject, knownAt time.Time) ([]uuid.UUID, error) {
