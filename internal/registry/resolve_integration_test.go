@@ -29,7 +29,7 @@ func TestQueriesMatchNothingWithoutATenant(t *testing.T) {
 		t.Error("the scope query returned a row for a session with no tenant")
 	}
 
-	closure, err := r.app.QueryContext(t.Context(), ancestorsOfMatched, []uuid.UUID{org})
+	closure, err := r.app.QueryContext(t.Context(), ancestorsOfMatched, []uuid.UUID{org}, later)
 	if err != nil {
 		t.Fatal(err)
 	}

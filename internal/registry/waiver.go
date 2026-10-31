@@ -108,7 +108,7 @@ func Apply(ctx context.Context, db *sql.DB, tenant, decision uuid.UUID, in Subje
 		if len(matched) == 0 {
 			return nil
 		}
-		scopes, err := ancestorsOf(ctx, tx, matched)
+		scopes, err := ancestorsOf(ctx, tx, matched, knownAt)
 		if err != nil {
 			return err
 		}

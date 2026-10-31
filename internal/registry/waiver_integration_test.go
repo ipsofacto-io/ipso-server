@@ -346,3 +346,73 @@ func TestNotifyRecordsEachDueOffsetOnce(t *testing.T) {
 		t.Errorf("ticket_ref = %q, want TICKET-14", ticket)
 	}
 }
+
+func TestApplyKeepsTheParentChainAsKnownBeforeAMove(t *testing.T) {
+	r := newRegistryDB(t)
+	org := r.scope(t, tenantA, uuid.Nil, "org", "acme")
+	payments := r.scope(t, tenantA, org, "domain", "payments")
+	labs := r.scope(t, tenantA, org, "domain", "labs")
+	repo := r.scope(t, tenantA, payments, "repo", "acme/payments")
+	decision := uuid.MustParse("00000000-0000-4000-8000-0000000000d1")
+	r.decision(t, tenantA, decision, "[2026-01-01,2026-06-01)", payments)
+	r.addWaiver(t, tenantA, decision, payments, "[2026-02-01,2026-04-01)", "TICKET-MOVE")
+
+	before := mark(t, r.admin)
+	if _, err := r.app.ExecContext(t.Context(), `
+		WITH cfg AS (SELECT set_config('ipso.tenant', $1::text, true))
+		UPDATE registry.scope AS s SET parent_id = $3 FROM cfg WHERE s.id = $2`, tenantA, repo, labs); err != nil {
+		t.Fatal(err)
+	}
+	after := mark(t, r.admin)
+	march := at(t, r, "2026-03-01")
+	subject := Subject{Repo: "acme/payments"}
+
+	got, err := Apply(t.Context(), r.app, tenantA, decision, subject, OutcomeFail, march, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != OutcomeWaived {
+		t.Errorf("as known before the move = %s, want waived", got)
+	}
+	got, err = Apply(t.Context(), r.app, tenantA, decision, subject, OutcomeFail, march, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != OutcomeFail {
+		t.Errorf("as known after the move = %s, want fail", got)
+	}
+}
+
+func TestApplyStopsWaivingARetiredScope(t *testing.T) {
+	r := newRegistryDB(t)
+	org := r.scope(t, tenantA, uuid.Nil, "org", "acme")
+	repo := r.scope(t, tenantA, org, "repo", "acme/payments")
+	decision := uuid.MustParse("00000000-0000-4000-8000-0000000000d1")
+	r.decision(t, tenantA, decision, "[2026-01-01,2026-06-01)", repo)
+	r.addWaiver(t, tenantA, decision, repo, "[2026-02-01,2026-04-01)", "TICKET-RETIRE")
+
+	before := mark(t, r.admin)
+	if _, err := r.app.ExecContext(t.Context(), `
+		WITH cfg AS (SELECT set_config('ipso.tenant', $1::text, true))
+		DELETE FROM registry.scope AS s USING cfg WHERE s.id = $2`, tenantA, repo); err != nil {
+		t.Fatal(err)
+	}
+	after := mark(t, r.admin)
+	march := at(t, r, "2026-03-01")
+	subject := Subject{Repo: "acme/payments"}
+
+	got, err := Apply(t.Context(), r.app, tenantA, decision, subject, OutcomeFail, march, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != OutcomeWaived {
+		t.Errorf("as known before retirement = %s, want waived", got)
+	}
+	got, err = Apply(t.Context(), r.app, tenantA, decision, subject, OutcomeFail, march, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != OutcomeFail {
+		t.Errorf("as known after retirement = %s, want fail", got)
+	}
+}

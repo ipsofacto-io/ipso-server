@@ -32,13 +32,13 @@ func TestScopeObjectsExist(t *testing.T) {
 	s := migrated(t)
 	ctx := t.Context()
 
-	for _, name := range []string{"scope", "scope_closure"} {
+	for _, name := range []string{"scope", "scope_history", "scope_closure", "scope_closure_history", "scope_all", "scope_closure_all"} {
 		var found bool
 		if err := s.admin.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, "registry."+name).Scan(&found); err != nil || !found {
 			t.Errorf("registry.%s missing (err %v)", name, err)
 		}
 	}
-	for _, index := range []string{"scope_candidates", "decision_version_scope_refs_gin", "decision_version_history_scope_refs_gin"} {
+	for _, index := range []string{"scope_candidates", "scope_history_candidates", "scope_closure_history_descendant", "decision_version_scope_refs_gin", "decision_version_history_scope_refs_gin"} {
 		var found bool
 		if err := s.admin.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, "registry."+index).Scan(&found); err != nil || !found {
 			t.Errorf("index registry.%s missing (err %v)", index, err)
@@ -308,37 +308,78 @@ func TestClosureHoldsEveryAncestorOfANode(t *testing.T) {
 	}
 }
 
-func TestApplicationRoleCannotChangeScopesOrWriteTheClosure(t *testing.T) {
+func TestApplicationRoleScopePrivileges(t *testing.T) {
 	s := migrated(t)
 	ctx := t.Context()
 	org := s.orgs[tenantA]
-	s.addScope(t, tenantA, org, "domain", "payments")
+	domain := s.addScope(t, tenantA, org, "domain", "payments")
+	leaf := s.addScope(t, tenantA, domain, "service", "billing")
+	other := s.addScope(t, tenantA, org, "domain", "labs")
 
-	statements := map[string]string{
-		"update a scope":             `UPDATE registry.scope SET selector = 'other'`,
-		"delete a scope":             `DELETE FROM registry.scope`,
-		"truncate scopes":            `TRUNCATE registry.scope`,
-		"insert a closure row":       `INSERT INTO registry.scope_closure SELECT tenant_id, id, id, 0 FROM registry.scope LIMIT 1`,
-		"update a closure row":       `UPDATE registry.scope_closure SET depth = 9`,
-		"delete a closure row":       `DELETE FROM registry.scope_closure`,
-		"truncate the closure":       `TRUNCATE registry.scope_closure`,
-		"disable the scope triggers": `ALTER TABLE registry.scope DISABLE TRIGGER ALL`,
-		"call the closure trigger":   `SELECT registry.scope_write_closure()`,
-		"call the scope trigger":     `SELECT registry.scope_prepare()`,
-		"call the refs trigger":      `SELECT registry.decision_version_check_scope_refs()`,
+	denied := map[string]string{
+		"truncate scopes":              `TRUNCATE registry.scope`,
+		"insert a closure row":         `INSERT INTO registry.scope_closure SELECT tenant_id, id, id, 0, sys_period FROM registry.scope LIMIT 1`,
+		"update a closure row":         `UPDATE registry.scope_closure SET depth = 9`,
+		"delete a closure row":         `DELETE FROM registry.scope_closure`,
+		"truncate the closure":         `TRUNCATE registry.scope_closure`,
+		"insert a history row":         `INSERT INTO registry.scope_history (tenant_id, id, kind, selector, match_org, sys_period) SELECT tenant_id, id, kind, selector, match_org, tstzrange(lower(sys_period), clock_timestamp()) FROM registry.scope LIMIT 1`,
+		"update a history row":         `UPDATE registry.scope_history SET selector = selector`,
+		"delete a history row":         `DELETE FROM registry.scope_history`,
+		"truncate history":             `TRUNCATE registry.scope_history`,
+		"insert a closure history row": `INSERT INTO registry.scope_closure_history SELECT tenant_id, descendant_id, ancestor_id, depth, tstzrange(lower(sys_period), clock_timestamp()) FROM registry.scope_closure LIMIT 1`,
+		"truncate closure history":     `TRUNCATE registry.scope_closure_history`,
+		"disable the scope triggers":   `ALTER TABLE registry.scope DISABLE TRIGGER ALL`,
+		"call the closure trigger":     `SELECT registry.scope_write_closure()`,
+		"call the scope trigger":       `SELECT registry.scope_prepare()`,
+		"call the version trigger":     `SELECT registry.scope_version()`,
+		"call the rewrite trigger":     `SELECT registry.scope_rewrite_closure()`,
+		"call the refs trigger":        `SELECT registry.decision_version_check_scope_refs()`,
 	}
-	for name, statement := range statements {
+	for name, statement := range denied {
 		t.Run(name, func(t *testing.T) {
 			_, err := s.app.ExecContext(ctx, statement)
 			requireSQLState(t, err, "42501")
 		})
 	}
-	if n := count(t, s.app, `SELECT count(*) FROM registry.scope`); n != 3 {
-		t.Errorf("scopes = %d, want 3: both orgs and the domain", n)
-	}
-	if n := count(t, s.app, `SELECT count(*) FROM registry.scope_closure`); n != 4 {
-		t.Errorf("closure rows = %d, want 4", n)
-	}
+
+	t.Run("selector update", func(t *testing.T) {
+		_, err := s.app.ExecContext(ctx, `
+			WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
+			UPDATE registry.scope AS s SET selector = 'other' FROM cfg WHERE s.id = $2::uuid`, tenantA, leaf)
+		requireCheck(t, err, "only the parent")
+		if n := count(t, s.admin, `SELECT count(*) FROM registry.scope_history`); n != 0 {
+			t.Errorf("a refused update archived %d rows", n)
+		}
+	})
+	t.Run("delete a parent", func(t *testing.T) {
+		_, err := s.app.ExecContext(ctx, `
+			WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
+			DELETE FROM registry.scope AS s USING cfg WHERE s.id = $2::uuid`, tenantA, domain)
+		requireCheck(t, err, "children")
+		if n := count(t, s.admin, `SELECT count(*) FROM registry.scope WHERE id = $1::uuid`, domain); n != 1 {
+			t.Errorf("the parent was removed")
+		}
+	})
+	t.Run("re-parent", func(t *testing.T) {
+		if _, err := s.app.ExecContext(ctx, `
+			WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
+			UPDATE registry.scope AS s SET parent_id = $3::uuid FROM cfg WHERE s.id = $2::uuid`, tenantA, leaf, other); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("retire a leaf", func(t *testing.T) {
+		if _, err := s.app.ExecContext(ctx, `
+			WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
+			DELETE FROM registry.scope AS s USING cfg WHERE s.id = $2::uuid`, tenantA, leaf); err != nil {
+			t.Fatal(err)
+		}
+		if n := count(t, s.admin, `SELECT count(*) FROM registry.scope WHERE id = $1::uuid`, leaf); n != 0 {
+			t.Errorf("the retired scope is still current")
+		}
+		if n := count(t, s.app, `SELECT count(*) FROM registry.scope_history WHERE id = $1::uuid AND upper(sys_period) IS NOT NULL`, leaf); n != 2 {
+			t.Errorf("history rows = %d, want 2: the re-parent and the retirement", n)
+		}
+	})
 }
 
 func TestScopeFunctionsAreOwnedByTheMigrationRoleAndNotCallable(t *testing.T) {
@@ -349,6 +390,8 @@ func TestScopeFunctionsAreOwnedByTheMigrationRoleAndNotCallable(t *testing.T) {
 	}{
 		{"registry.scope_prepare()", false},
 		{"registry.scope_write_closure()", true},
+		{"registry.scope_version()", true},
+		{"registry.scope_rewrite_closure()", true},
 		{"registry.decision_version_check_scope_refs()", false},
 	}
 	for _, f := range functions {
