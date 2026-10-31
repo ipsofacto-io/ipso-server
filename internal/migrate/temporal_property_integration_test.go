@@ -17,8 +17,9 @@ import (
 // Property tests for the temporal invariants in section 9.5 of the specification.
 // Each example writes as ipso_app in one transaction and rolls it back. A rejected
 // statement runs in a savepoint, because a constraint failure aborts the transaction.
-// Waiver and premise tables are not in this schema. Those two invariants are IPSO-25
-// and IPSO-125.
+// The premise invariant remains IPSO-125. A recorded waiver is contained in a
+// current decision version. A later supersession can shorten the decision
+// without rewriting the waiver, and Apply then refuses those valid times.
 
 const (
 	propFrom  = "00000000-0000-4000-8000-0000000000e1"
@@ -331,6 +332,79 @@ func TestPropertySupersessionChainsAreAcyclic(t *testing.T) {
 		assertAcyclic(rt, propEdges(rt, tx, tenant))
 		assertNoOverlap(rt, tx)
 	})
+}
+
+func TestPropertyWaiverNeverExtendsBeyondTheDecision(t *testing.T) {
+	s := migrated(t)
+	outside := map[string]string{}
+	for _, tenant := range []string{tenantA, tenantB} {
+		outside[tenant] = s.addScope(t, tenant, "", "org", "other")
+	}
+
+	rapid.Check(t, func(rt *rapid.T) {
+		tx := propBegin(rt, s.app)
+		defer func() { _ = tx.Rollback() }()
+
+		tenant := rapid.SampledFrom([]string{tenantA, tenantB}).Draw(rt, "tenant")
+		start := rapid.IntRange(10, 400).Draw(rt, "start")
+		decisionLen := rapid.IntRange(150, 200).Draw(rt, "decisionLen")
+		insideLen := rapid.IntRange(1, 60).Draw(rt, "insideLen")
+		insideOffset := rapid.IntRange(0, decisionLen-insideLen).Draw(rt, "insideOffset")
+		longLen := rapid.IntRange(91, 120).Draw(rt, "longLen")
+		past := rapid.IntRange(1, 30).Draw(rt, "past")
+
+		decision := propPeriod(start, start+decisionLen)
+		inside := propPeriod(start+insideOffset, start+insideOffset+insideLen)
+		tooLong := propPeriod(start, start+longLen)
+		sticksOut := propPeriod(start, start+decisionLen+past)
+		scope := s.orgs[tenant]
+
+		propInsert(rt, tx, propFrom, 1, tenant, propBody, pgArray([]string{scope}), decision)
+		if err := propTryWaiver(rt, tx, tenant, propFrom, scope, inside); err != nil {
+			rt.Fatalf("contained waiver %s: %v", inside, err)
+		}
+		assertWaiversInside(rt, tx, tenant)
+
+		before := propWaiverCount(rt, tx, tenant, propFrom)
+		_ = wantState(rt, propTryWaiver(rt, tx, tenant, propFrom, scope, tooLong), "23514")
+		_ = wantState(rt, propTryWaiver(rt, tx, tenant, propFrom, scope, sticksOut), "23514")
+		_ = wantState(rt, propTryWaiver(rt, tx, tenant, propFrom, outside[tenant], inside), "23514")
+		if got := propWaiverCount(rt, tx, tenant, propFrom); got != before {
+			rt.Fatalf("rejected waivers changed the count from %d to %d", before, got)
+		}
+		assertWaiversInside(rt, tx, tenant)
+	})
+}
+
+func propTryWaiver(rt *rapid.T, tx *sql.Tx, tenant, decision, scope, valid string) error {
+	return propTry(rt, tx, `
+		INSERT INTO registry.waiver
+			(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'synthetic exception', 'team:platform',
+		        $4::text::tstzrange, 'TICKET-1')`,
+		tenant, decision, scope, valid)
+}
+
+func propWaiverCount(rt *rapid.T, tx *sql.Tx, tenant, decision string) int {
+	return propCount(rt, tx, `
+		SELECT count(*) FROM registry.waiver
+		WHERE tenant_id = $1::uuid AND decision_id = $2::uuid`, tenant, decision)
+}
+
+func assertWaiversInside(rt *rapid.T, tx *sql.Tx, tenant string) {
+	n := propCount(rt, tx, `
+		SELECT count(*)
+		FROM registry.waiver w
+		WHERE w.tenant_id = $1::uuid
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM registry.decision_version d
+		      WHERE d.tenant_id = w.tenant_id
+		        AND d.decision_id = w.decision_id
+		        AND d.valid_period @> w.valid_period)`, tenant)
+	if n != 0 {
+		rt.Fatalf("%d waivers extend beyond the decision", n)
+	}
 }
 
 func propBegin(rt *rapid.T, db *sql.DB) *sql.Tx {
