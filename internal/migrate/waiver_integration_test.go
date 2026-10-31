@@ -182,12 +182,18 @@ func TestWaiverBoundHoldsWhenTriggersAreOff(t *testing.T) {
 	if pgError(t, err).ConstraintName != "waiver_bounds" {
 		t.Errorf("constraint = %q, want waiver_bounds", pgError(t, err).ConstraintName)
 	}
-	_, err = conn.ExecContext(ctx, `
+
+	// replica skips foreign-key triggers as well as user triggers. Disabling
+	// only the user triggers leaves the key in force.
+	if _, err := s.admin.ExecContext(ctx, `ALTER TABLE registry.waiver DISABLE TRIGGER USER`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.admin.ExecContext(ctx, `
 		INSERT INTO registry.waiver
-			(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref, sys_period)
+			(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref)
 		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform',
 		        tstzrange(clock_timestamp(), clock_timestamp() + interval '1 day', '[)'),
-		        'TICKET-FK', tstzrange(clock_timestamp(), NULL))`,
+		        'TICKET-FK')`,
 		tenantA, oldDecision, s.orgs[tenantB])
 	requireSQLState(t, err, "23503")
 	if pgError(t, err).ConstraintName != "waiver_scope" {
