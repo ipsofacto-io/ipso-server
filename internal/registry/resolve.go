@@ -98,21 +98,28 @@ func Resolve(ctx context.Context, db *sql.DB, tenant uuid.UUID, in Subject, vali
 
 	var decisions []Decision
 	err = readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
-		matched, err := matchingScopes(ctx, tx, subject, knownAt)
-		if err != nil {
-			return err
-		}
-		if len(matched) == 0 {
-			return nil
-		}
-		scopes, err := ancestorsOf(ctx, tx, matched)
-		if err != nil {
-			return err
-		}
-		decisions, err = readDecisions(ctx, tx, scopes, validAt, knownAt)
+		var err error
+		decisions, err = decisionsFor(ctx, tx, subject, validAt, knownAt)
 		return err
 	})
 	return decisions, err
+}
+
+// decisionsFor is the Q1 read inside a transaction that already has ipso.tenant set.
+// No match is a nil slice, which the caller tells from a failure by err alone.
+func decisionsFor(ctx context.Context, tx *sql.Tx, subject subject, validAt, knownAt time.Time) ([]Decision, error) {
+	matched, err := matchingScopes(ctx, tx, subject, knownAt)
+	if err != nil {
+		return nil, err
+	}
+	if len(matched) == 0 {
+		return nil, nil
+	}
+	scopes, err := ancestorsOf(ctx, tx, matched)
+	if err != nil {
+		return nil, err
+	}
+	return readDecisions(ctx, tx, scopes, validAt, knownAt)
 }
 
 // readTx runs fn in one read-only REPEATABLE READ transaction with ipso.tenant set for that

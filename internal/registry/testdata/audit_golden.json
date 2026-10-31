@@ -1,0 +1,132 @@
+{
+  "steps": [
+    {"tenant": "a", "scope": "org", "kind": "org", "selector": "acme"},
+    {"tenant": "a", "scope": "repo", "parent": "org", "kind": "repo", "selector": "acme/payments"},
+
+    {"tenant": "a", "decision": "keep", "scopes": ["repo"], "valid": "[2026-01-01,)"},
+    {"tenant": "a", "decision": "gone", "scopes": ["repo"], "valid": "[2026-01-01,)"},
+    {"tenant": "a", "decision": "old", "scopes": ["repo"], "valid": "[2026-01-01,)"},
+    {"tenant": "a", "decision": "next", "scopes": ["repo"], "valid": "[2026-06-01,)"},
+    {"tenant": "a", "decision": "pay", "scopes": ["repo"], "valid": "[2026-01-01,)"},
+
+    {"mark": "before"},
+
+    {"correct": "keep", "valid": "[2026-01-01,)"},
+    {"tenant": "a", "decision": "late", "scopes": ["repo"], "valid": "[2026-01-01,)"},
+    {"remove": "gone"},
+    {"supersede": "old", "successor": "next", "at": "2026-06-01T00:00:00Z"},
+
+    {"waiver": "soon", "decision": "pay", "scope": "repo", "valid": "[2026-03-01 00:00:00+00,2026-03-10 00:00:00+00)", "ticket": "soon"},
+    {"waiver": "edge", "decision": "pay", "scope": "repo", "valid": "[2026-03-01 00:00:00+00,2026-03-15 00:00:00+00)", "ticket": "edge"},
+    {"waiver": "later", "decision": "pay", "scope": "repo", "valid": "[2026-03-01 00:00:00+00,2026-04-15 00:00:00+00)", "ticket": "later"},
+    {"waiver": "past", "decision": "pay", "scope": "repo", "valid": "[2026-01-01 00:00:00+00,2026-02-01 00:00:00+00)", "ticket": "past"},
+    {"waiver": "onnow", "decision": "pay", "scope": "repo", "valid": "[2026-02-15 00:00:00+00,2026-03-01 00:00:00+00)", "ticket": "onnow"},
+
+    {"tenant": "b", "scope": "borg", "kind": "org", "selector": "acme"},
+    {"tenant": "b", "scope": "brepo", "parent": "borg", "kind": "repo", "selector": "acme/payments"},
+    {"tenant": "b", "decision": "secret", "scopes": ["brepo"], "valid": "[2026-01-01,)"},
+    {"waiver": "bsoon", "decision": "secret", "scope": "brepo", "valid": "[2026-03-01 00:00:00+00,2026-03-10 00:00:00+00)", "ticket": "bsoon"}
+  ],
+  "queries": [
+    {
+      "name": "q1-march",
+      "kind": "decisions",
+      "tenant": "a",
+      "repo": "acme/payments",
+      "valid": "2026-03-01T00:00:00Z",
+      "known": "end",
+      "want": ["keep@2", "late@1", "old@1", "pay@1"]
+    },
+    {
+      "name": "q2-correction",
+      "kind": "beliefs",
+      "tenant": "a",
+      "repo": "acme/payments",
+      "valid": "2026-03-01T00:00:00Z",
+      "then": "before",
+      "now": "end",
+      "added": ["late@1"],
+      "removed": ["gone@1"],
+      "changed": ["keep@1>keep@2"]
+    },
+    {
+      "name": "q3-before-correction",
+      "kind": "merges",
+      "tenant": "a",
+      "repo": "acme/payments",
+      "at": "before",
+      "want": ["keep@1", "gone@1", "old@1", "next@1", "pay@1"]
+    },
+    {
+      "name": "q3-after",
+      "kind": "merges",
+      "tenant": "a",
+      "repo": "acme/payments",
+      "at": "end",
+      "want": ["keep@2", "late@1", "next@1", "pay@1"]
+    },
+    {
+      "name": "q3-march-as-known-now",
+      "kind": "merges",
+      "tenant": "a",
+      "repo": "acme/payments",
+      "at": "2026-03-01T00:00:00Z",
+      "known": "end",
+      "want": ["keep@2", "late@1", "old@1", "pay@1"]
+    },
+    {
+      "name": "q4-before",
+      "kind": "supersessions",
+      "tenant": "a",
+      "decision": "old",
+      "known": "before",
+      "links": [],
+      "versions": ["old@1"],
+      "closed": []
+    },
+    {
+      "name": "q4-after",
+      "kind": "supersessions",
+      "tenant": "a",
+      "decision": "next",
+      "known": "end",
+      "links": ["old>next"],
+      "versions": ["old@1", "next@1"],
+      "closed": ["old"]
+    },
+    {
+      "name": "q4-other-tenant",
+      "kind": "supersessions",
+      "tenant": "a",
+      "decision": "secret",
+      "known": "end",
+      "links": [],
+      "versions": [],
+      "closed": []
+    },
+    {
+      "name": "q5-window",
+      "kind": "waivers",
+      "tenant": "a",
+      "known": "end",
+      "now": "2026-03-01T00:00:00Z",
+      "want": ["soon", "edge"]
+    },
+    {
+      "name": "q5-before-recorded",
+      "kind": "waivers",
+      "tenant": "a",
+      "known": "before",
+      "now": "2026-03-01T00:00:00Z",
+      "want": []
+    },
+    {
+      "name": "q5-other-tenant",
+      "kind": "waivers",
+      "tenant": "b",
+      "known": "end",
+      "now": "2026-03-01T00:00:00Z",
+      "want": ["bsoon"]
+    }
+  ]
+}
