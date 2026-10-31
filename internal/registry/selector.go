@@ -1,7 +1,7 @@
-// Package registry resolves which decisions apply to a repository, a path, and an environment
-// (ADR-0051) and which of a decision's violations a baseline grandfathers (ADR-0052). It reads
-// the scope tree, the bitemporal decision tables, and the baseline tables that the migrations
-// create. It never writes them.
+// Package registry is the bitemporal decision registry.
+// It resolves which decisions apply to a repository, a path, and an environment (ADR-0051),
+// records supersessions, baselines, and waivers (ADR-0052, ADR-0054), and answers the audit
+// reads for a belief diff, a supersession chain, and waiver expiry (ADR-0055).
 package registry
 
 import (
