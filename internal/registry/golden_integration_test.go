@@ -23,7 +23,7 @@ type goldenFile struct {
 }
 
 // goldenStep is one write or one clock reading. Exactly one of Scope, Decision, Correct,
-// Remove, and Mark is set.
+// Remove, Move, Retire, and Mark is set.
 type goldenStep struct {
 	Tenant string `json:"tenant"`
 
@@ -40,6 +40,10 @@ type goldenStep struct {
 	// is set, other scopes. Remove deletes the current row.
 	Correct string `json:"correct"`
 	Remove  string `json:"remove"`
+
+	// Move sets the scope's parent. Retire deletes a childless scope.
+	Move   string `json:"move"`
+	Retire string `json:"retire"`
 
 	// Mark records the database clock under this name.
 	Mark string `json:"mark"`
@@ -59,7 +63,15 @@ type goldenQuery struct {
 }
 
 func TestResolveGoldenQ1(t *testing.T) {
-	raw, err := os.ReadFile("testdata/q1_golden.json")
+	runGolden(t, "testdata/q1_golden.json")
+}
+
+func TestResolveGoldenScopeHistory(t *testing.T) {
+	runGolden(t, "testdata/q1_scope_history_golden.json")
+}
+
+func runGolden(t *testing.T, path string) {
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,6 +157,33 @@ func TestResolveGoldenQ1(t *testing.T) {
 			}
 			if _, err := r.app.ExecContext(ctx, `DELETE FROM registry.decision_version WHERE tenant_id = $1 AND decision_id = $2`, d.tenant, d.id); err != nil {
 				t.Fatalf("step %d: remove %s: %v", i, step.Remove, err)
+			}
+
+		case step.Move != "":
+			id, ok := scopes[step.Move]
+			parent, parentOK := scopes[step.Parent]
+			if !ok || !parentOK {
+				t.Fatalf("step %d: move %q under %q", i, step.Move, step.Parent)
+			}
+			if _, err := r.app.ExecContext(ctx, `
+				WITH cfg AS (SELECT set_config('ipso.tenant', $1::text, true))
+				UPDATE registry.scope AS s SET parent_id = $3 FROM cfg
+				WHERE s.tenant_id = $1::uuid AND s.id = $2`,
+				tenantOf(step.Tenant), id, parent); err != nil {
+				t.Fatalf("step %d: move %s: %v", i, step.Move, err)
+			}
+
+		case step.Retire != "":
+			id, ok := scopes[step.Retire]
+			if !ok {
+				t.Fatalf("step %d: unknown scope %q", i, step.Retire)
+			}
+			if _, err := r.app.ExecContext(ctx, `
+				WITH cfg AS (SELECT set_config('ipso.tenant', $1::text, true))
+				DELETE FROM registry.scope AS s USING cfg
+				WHERE s.tenant_id = $1::uuid AND s.id = $2`,
+				tenantOf(step.Tenant), id); err != nil {
+				t.Fatalf("step %d: retire %s: %v", i, step.Retire, err)
 			}
 
 		case step.Mark != "":

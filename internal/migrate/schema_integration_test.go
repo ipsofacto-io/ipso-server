@@ -491,6 +491,8 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 		{"registry.premise_reason", "premise_reason_check", 1 | 2 | 4},
 		{"registry.premise_reason", "premise_reason_open_sys_period", 1 | 2 | 4},
 		{"registry.scope", "scope_prepare", 1 | 2 | 4},
+		{"registry.scope", "scope_rewrite_closure", 1 | 16},
+		{"registry.scope", "scope_version", 1 | 2 | 8 | 16},
 		{"registry.scope", "scope_write_closure", 1 | 4},
 		{"registry.supersession", "supersession_check", 1 | 2 | 4},
 		{"registry.supersession", "supersession_close", 1 | 4},

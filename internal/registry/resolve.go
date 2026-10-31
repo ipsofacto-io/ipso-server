@@ -42,23 +42,25 @@ type Decision struct {
 const (
 	// selectingScopes reads the nodes that may select the subject: those of its org, with the
 	// literal repo or no literal repo, that were recorded by transaction time T. A domain and a
-	// service select nothing themselves. They apply through the closure.
+	// service select nothing themselves. They apply through the closure. scope_all includes a
+	// row archived by a later re-parent or retirement.
 	selectingScopes = `
 SELECT id, match_repo, match_path, match_env
-FROM registry.scope
+FROM registry.scope_all
 WHERE tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
   AND kind IN ('org', 'repo', 'path', 'env')
   AND match_org = $1
   AND repo_key IN ('', $2)
   AND sys_period @> $3::timestamptz`
 
-	// ancestorsOfMatched reads the closure rows of the matched nodes: each node and every
-	// ancestor of it.
+	// ancestorsOfMatched reads the closure rows of the matched nodes as known at T: each
+	// node and every ancestor of it.
 	ancestorsOfMatched = `
 SELECT descendant_id, ancestor_id
-FROM registry.scope_closure
+FROM registry.scope_closure_all
 WHERE tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
-  AND descendant_id = ANY($1::uuid[])`
+  AND descendant_id = ANY($1::uuid[])
+  AND sys_period @> $2::timestamptz`
 
 	// decisionsInForce reads the decisions that name one of the given scopes, valid at V as
 	// known at T. A decision is returned once, at its highest version.
@@ -115,7 +117,7 @@ func decisionsFor(ctx context.Context, tx *sql.Tx, subject subject, validAt, kno
 	if len(matched) == 0 {
 		return nil, nil
 	}
-	scopes, err := ancestorsOf(ctx, tx, matched)
+	scopes, err := ancestorsOf(ctx, tx, matched, knownAt)
 	if err != nil {
 		return nil, err
 	}
@@ -168,12 +170,12 @@ func matchingScopes(ctx context.Context, tx *sql.Tx, s subject, knownAt time.Tim
 	return matched, nil
 }
 
-// ancestorsOf returns the matched nodes and every ancestor of them, each once. It fails when a
-// matched node has no closure row for itself. It does not recount the ancestors: the trigger
-// is the only writer of the closure, so a changed closure means a superuser or a trigger bypass,
-// and that actor can edit decisions directly (ADR-0051).
-func ancestorsOf(ctx context.Context, tx *sql.Tx, matched []uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := tx.QueryContext(ctx, ancestorsOfMatched, matched)
+// ancestorsOf returns the matched nodes and every ancestor of them as known at knownAt, each
+// once. It fails when a matched node has no closure row for itself at that time. It does not
+// recount the ancestors: the trigger is the only writer of the closure, so a changed closure
+// means a superuser or a trigger bypass, and that actor can edit decisions directly (ADR-0051).
+func ancestorsOf(ctx context.Context, tx *sql.Tx, matched []uuid.UUID, knownAt time.Time) ([]uuid.UUID, error) {
+	rows, err := tx.QueryContext(ctx, ancestorsOfMatched, matched, knownAt)
 	if err != nil {
 		return nil, fmt.Errorf("read scope closure: %w", err)
 	}

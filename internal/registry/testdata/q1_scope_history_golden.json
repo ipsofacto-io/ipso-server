@@ -1,0 +1,57 @@
+{
+  "steps": [
+    {"mark": "t-start"},
+
+    {"tenant": "a", "scope": "a:org", "kind": "org", "selector": "acme"},
+    {"tenant": "a", "scope": "a:payments", "parent": "a:org", "kind": "domain", "selector": "payments"},
+    {"tenant": "a", "scope": "a:labs", "parent": "a:org", "kind": "domain", "selector": "labs"},
+    {"tenant": "a", "scope": "a:pay", "parent": "a:payments", "kind": "repo", "selector": "acme/payments"},
+    {"tenant": "a", "scope": "a:other", "parent": "a:labs", "kind": "repo", "selector": "acme/other"},
+    {"tenant": "a", "scope": "a:path", "parent": "a:pay", "kind": "path", "selector": "infra/**"},
+    {"tenant": "a", "scope": "a:env", "parent": "a:path", "kind": "env", "selector": "prod"},
+
+    {"tenant": "b", "scope": "b:org", "kind": "org", "selector": "acme"},
+    {"tenant": "b", "scope": "b:pay", "parent": "b:org", "kind": "repo", "selector": "acme/payments"},
+
+    {"tenant": "a", "decision": "d-org", "scopes": ["a:org"], "valid": "[2026-01-01,)"},
+    {"tenant": "a", "decision": "d-pay-domain", "scopes": ["a:payments"], "valid": "[2026-01-01,)"},
+    {"tenant": "a", "decision": "d-labs", "scopes": ["a:labs"], "valid": "[2026-01-01,)"},
+    {"tenant": "a", "decision": "d-repo", "scopes": ["a:pay"], "valid": "[2026-01-01,)"},
+    {"tenant": "a", "decision": "d-other", "scopes": ["a:other"], "valid": "[2026-01-01,)"},
+    {"tenant": "a", "decision": "d-path", "scopes": ["a:path"], "valid": "[2026-01-01,)"},
+    {"tenant": "a", "decision": "d-env", "scopes": ["a:env"], "valid": "[2026-01-01,)"},
+    {"tenant": "b", "decision": "b-org", "scopes": ["b:org"], "valid": "[2026-01-01,)"},
+    {"tenant": "b", "decision": "b-repo", "scopes": ["b:pay"], "valid": "[2026-01-01,)"},
+
+    {"mark": "then"},
+    {"tenant": "a", "move": "a:pay", "parent": "a:labs"},
+    {"mark": "moved"},
+    {"tenant": "a", "move": "a:path", "parent": "a:other"},
+    {"mark": "path-moved"},
+    {"tenant": "a", "retire": "a:env"},
+    {"mark": "retired"}
+  ],
+  "queries": [
+    {"name": "as known then, the repo is under payments", "tenant": "a", "repo": "acme/payments", "path": "infra/main.tf", "env": "prod", "valid": "2026-05-01", "known": "then",
+      "want": ["d-org", "d-pay-domain", "d-repo", "d-path", "d-env"]},
+    {"name": "as known after the repo move, the repo is under labs", "tenant": "a", "repo": "acme/payments", "path": "infra/main.tf", "env": "prod", "valid": "2026-05-01", "known": "moved",
+      "want": ["d-org", "d-labs", "d-repo", "d-path", "d-env"]},
+    {"name": "a later path move does not change the answer as known after the repo move", "tenant": "a", "repo": "acme/payments", "path": "infra/main.tf", "env": "prod", "valid": "2026-05-01", "known": "moved",
+      "want": ["d-org", "d-labs", "d-repo", "d-path", "d-env"]},
+    {"name": "as known after the path move, the path has left acme/payments", "tenant": "a", "repo": "acme/payments", "path": "infra/main.tf", "env": "prod", "valid": "2026-05-01", "known": "path-moved",
+      "want": ["d-org", "d-labs", "d-repo"]},
+    {"name": "as known after the path move, the path and env are under acme/other", "tenant": "a", "repo": "acme/other", "path": "infra/main.tf", "env": "prod", "valid": "2026-05-01", "known": "path-moved",
+      "want": ["d-org", "d-labs", "d-other", "d-path", "d-env"]},
+    {"name": "as known before the path move, acme/other does not have the path", "tenant": "a", "repo": "acme/other", "path": "infra/main.tf", "env": "prod", "valid": "2026-05-01", "known": "moved",
+      "want": ["d-org", "d-labs", "d-other"]},
+    {"name": "as known after retirement, the env decision is gone", "tenant": "a", "repo": "acme/other", "path": "infra/main.tf", "env": "prod", "valid": "2026-05-01", "known": "retired",
+      "want": ["d-org", "d-labs", "d-other", "d-path"]},
+    {"name": "as known before retirement, the env decision is still there", "tenant": "a", "repo": "acme/other", "path": "infra/main.tf", "env": "prod", "valid": "2026-05-01", "known": "path-moved",
+      "want": ["d-org", "d-labs", "d-other", "d-path", "d-env"]},
+
+    {"name": "tenant B sees its own decisions", "tenant": "b", "repo": "acme/payments", "valid": "2026-05-01", "known": "retired",
+      "want": ["b-org", "b-repo"]},
+    {"name": "tenant A does not see tenant B", "tenant": "a", "repo": "acme/payments", "valid": "2026-05-01", "known": "retired",
+      "want": ["d-org", "d-labs", "d-repo"]}
+  ]
+}

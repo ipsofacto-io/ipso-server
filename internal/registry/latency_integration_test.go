@@ -90,7 +90,7 @@ func TestResolveP95UnderBudgetAt10kDecisions(t *testing.T) {
 	a := seedTenant(t, r, tenantA)
 	seedTenant(t, r, tenantB)
 
-	for _, table := range []string{"scope", "scope_closure", "decision_version", "decision_version_history"} {
+	for _, table := range []string{"scope", "scope_history", "scope_closure", "scope_closure_history", "decision_version", "decision_version_history"} {
 		if _, err := r.admin.ExecContext(t.Context(), `ANALYZE registry.`+table); err != nil {
 			t.Fatal(err)
 		}
