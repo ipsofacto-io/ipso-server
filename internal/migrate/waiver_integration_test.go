@@ -53,11 +53,10 @@ func TestWaiverStaysInsideTheDecisionAndTheCap(t *testing.T) {
 		requireCheck(t, err, "outside the decision")
 	})
 	t.Run("a scope of another tenant", func(t *testing.T) {
+		// The scope check runs before the foreign key, so the caller sees the
+		// trigger. The key is checked with the triggers off.
 		err := s.tryWaiver(t, oldDecision, s.orgs[tenantB], "[2026-02-01,2026-03-01)", "a real exception", "team:platform", "TICKET-3")
-		requireSQLState(t, err, "23503")
-		if pgError(t, err).ConstraintName != "waiver_scope" {
-			t.Errorf("constraint = %q, want waiver_scope", pgError(t, err).ConstraintName)
-		}
+		requireCheck(t, err, "outside the decision")
 	})
 	if _, err := s.app.ExecContext(ctx, `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
@@ -182,6 +181,17 @@ func TestWaiverBoundHoldsWhenTriggersAreOff(t *testing.T) {
 	requireSQLState(t, err, "23514")
 	if pgError(t, err).ConstraintName != "waiver_bounds" {
 		t.Errorf("constraint = %q, want waiver_bounds", pgError(t, err).ConstraintName)
+	}
+	_, err = conn.ExecContext(ctx, `
+		INSERT INTO registry.waiver
+			(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref, sys_period)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform',
+		        tstzrange(clock_timestamp(), clock_timestamp() + interval '1 day', '[)'),
+		        'TICKET-FK', tstzrange(clock_timestamp(), NULL))`,
+		tenantA, oldDecision, s.orgs[tenantB])
+	requireSQLState(t, err, "23503")
+	if pgError(t, err).ConstraintName != "waiver_scope" {
+		t.Errorf("constraint = %q, want waiver_scope", pgError(t, err).ConstraintName)
 	}
 }
 
