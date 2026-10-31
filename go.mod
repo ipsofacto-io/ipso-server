@@ -8,6 +8,7 @@ require (
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
+	pgregory.net/rapid v1.2.0 // integration tests only
 )
 
 require (
