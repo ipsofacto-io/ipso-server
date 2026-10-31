@@ -486,6 +486,10 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 		{"registry.supersession", "supersession_check", 1 | 2 | 4},
 		{"registry.supersession", "supersession_close", 1 | 4},
 		{"registry.supersession", "supersession_open_sys_period", 1 | 2 | 4},
+		{"registry.waiver", "waiver_check", 1 | 2 | 4},
+		{"registry.waiver_notice", "waiver_notice_check", 1 | 2 | 4},
+		{"registry.waiver_notice", "waiver_notice_open_sys_period", 1 | 2 | 4},
+		{"registry.waiver", "waiver_open_sys_period", 1 | 2 | 4},
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("triggers = %+v, want %+v", got, want)
