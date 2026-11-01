@@ -23,9 +23,11 @@ const (
 	queueSize      = 256
 	workerCount    = 4
 	jobTimeout     = 2 * time.Minute
-	seenDeliveries = 4096
-	drainTimeout   = 30 * time.Second
-	zeroSHA        = "0000000000000000000000000000000000000000"
+	// evaluateTimeout leaves the rest of jobTimeout to close the check run.
+	evaluateTimeout = 100 * time.Second
+	seenDeliveries  = 4096
+	drainTimeout    = 30 * time.Second
+	zeroSHA         = "0000000000000000000000000000000000000000"
 )
 
 var (
@@ -339,11 +341,13 @@ func (s *Service) checkJob(name string, install installation, repo repository, s
 					err = errors.New("the check panicked")
 				}
 			}()
-			files, err := list(ctx, client)
+			evaluation, cancel := context.WithTimeout(ctx, evaluateTimeout)
+			defer cancel()
+			files, err := list(evaluation, client)
 			if err != nil {
 				return outcome{}, err
 			}
-			return client.evaluate(ctx, sha, files)
+			return client.evaluate(evaluation, sha, files)
 		}()
 		if runErr != nil {
 			result = outcome{
