@@ -174,25 +174,28 @@ func (s *RunTaskService) receive(w http.ResponseWriter, r *http.Request) {
 
 // callbackURL reports whether the request can be answered: a supported version, ids of the expected
 // form, a token, and a callback on the API host. A token is never sent anywhere else.
-func (s *RunTaskService) callbackURL(request runTaskRequest) (*url.URL, bool) {
+func (s *RunTaskService) callbackURL(request runTaskRequest) (string, bool) {
 	if request.PayloadVersion != 1 || !validTaskResult.MatchString(request.TaskResult) || !validRun.MatchString(request.Run) {
-		return nil, false
+		return "", false
 	}
 	if request.AccessToken == "" || len(request.AccessToken) > maxTokenBytes {
-		return nil, false
+		return "", false
 	}
 	return parseAPIURL(request.CallbackURL, s.cfg.APIHost, validResultPath)
 }
 
-func parseAPIURL(raw, host string, path *regexp.Regexp) (*url.URL, bool) {
+// parseAPIURL checks a URL from a request and builds a new one from the configured host and the checked
+// path, so nothing but that path comes from the request.
+func parseAPIURL(raw, host string, path *regexp.Regexp) (string, bool) {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "https" || parsed.Host != host || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return nil, false
+		return "", false
 	}
-	if !path.MatchString(parsed.Path) {
-		return nil, false
+	checked := parsed.Path
+	if !path.MatchString(checked) {
+		return "", false
 	}
-	return parsed, true
+	return (&url.URL{Scheme: "https", Host: host, Path: checked}).String(), true
 }
 
 func validTaskSignature(key, body []byte, header string) bool {
@@ -210,7 +213,7 @@ func validTaskSignature(key, body []byte, header string) bool {
 
 // runJob evaluates the plan and always tries to report. A run that cannot finish is reported as failed
 // with fixed text, so a broken evaluation does not read as a pass and no internal error reaches the run.
-func (s *RunTaskService) runJob(ctx context.Context, request runTaskRequest, callback *url.URL) error {
+func (s *RunTaskService) runJob(ctx context.Context, request runTaskRequest, callback string) error {
 	result, runErr := func() (result taskResult, err error) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -263,10 +266,10 @@ func codeOr(code, fallback string) string {
 
 // openPlan asks the API for the plan and follows one redirect, without the token, to an allowed host.
 // A plan that is not ready answers 204, and it gets a few more tries.
-func (s *RunTaskService) openPlan(ctx context.Context, planURL *url.URL, token string) (io.ReadCloser, error) {
+func (s *RunTaskService) openPlan(ctx context.Context, planURL, token string) (io.ReadCloser, error) {
 	const attempts = 6
 	for attempt := range attempts {
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, planURL.String(), nil)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, planURL, nil)
 		if err != nil {
 			return nil, errors.New("the plan request cannot be built")
 		}
@@ -343,7 +346,7 @@ func sleepContext(ctx context.Context, wait time.Duration) error {
 }
 
 // report sends the result. It tries three times when the failure may pass, and never follows a redirect.
-func (s *RunTaskService) report(ctx context.Context, request runTaskRequest, callback *url.URL, result taskResult) error {
+func (s *RunTaskService) report(ctx context.Context, request runTaskRequest, callback string, result taskResult) error {
 	body, err := json.Marshal(result.document())
 	if err != nil {
 		return errors.New("the result cannot be encoded")
@@ -368,10 +371,10 @@ func (s *RunTaskService) report(ctx context.Context, request runTaskRequest, cal
 	return last
 }
 
-func (s *RunTaskService) patch(ctx context.Context, callback *url.URL, token string, body []byte) (retry bool, err error) {
+func (s *RunTaskService) patch(ctx context.Context, callback, token string, body []byte) (retry bool, err error) {
 	ctx, cancel := context.WithTimeout(ctx, apiTimeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPatch, callback.String(), strings.NewReader(string(body)))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPatch, callback, strings.NewReader(string(body)))
 	if err != nil {
 		return false, errors.New("the callback cannot be built")
 	}
