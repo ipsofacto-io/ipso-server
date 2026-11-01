@@ -4,7 +4,7 @@
 
 Source-available ipso control plane: bitemporal decision registry, API, web app and PR checks.
 
-> Status: early. The binary has two commands. `ipso-server migrate` applies the PostgreSQL 18 schema. `ipso-server webhooks` serves the GitHub App webhook, holds no tenant data, and opens no database connection ([ADR-0061](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0061-github-app.md)). Audit query handlers for the five questions in section 2.3 exist and are not served until the control plane mounts them ([ADR-0055](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0055-audit-query-api.md)).
+> Status: early. The binary has three commands. `ipso-server migrate` applies the PostgreSQL 18 schema. `ipso-server webhooks` serves the GitHub App webhook, holds no tenant data, and opens no database connection ([ADR-0061](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0061-github-app.md)). `ipso-server runtasks` serves an HCP Terraform run task on the same terms ([ADR-0065](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0065-hcp-terraform-run-task.md)). Audit query handlers for the five questions in section 2.3 exist and are not served until the control plane mounts them ([ADR-0055](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0055-audit-query-api.md)).
 
 One Go modular monolith ships the registry API, the web SPA, the entitlement contract, the Helm chart and the Compose bundle, plus a separate Python worker for LLM extraction. The binary is `ipso-server`, which will start with `--role` once the control plane lands.
 
@@ -33,6 +33,10 @@ The registry schema holds the bitemporal decision tables, the scope tree and its
 ## GitHub App
 
 `ipso-server webhooks` receives `pull_request` and `push` webhooks and validates the decision files of the change with the rules of `ipso check`. It reports a check run named `ipso / decisions` with an annotation on each invalid file. At start it reads the registered App and refuses to run unless its permissions are exactly `checks:write`, `contents:read`, `metadata:read`, and `pull_requests:write`. [docs/github-app.md](docs/github-app.md) covers registering the App and installing it in a sandbox organization.
+
+## HCP Terraform run task
+
+`ipso-server runtasks` receives run task requests from HCP Terraform or Terraform Enterprise, checks their signature, reads the plan, and evaluates it against one signed policy bundle with the rules of `ipso check plan`. A blocking violation reports `failed`, which stops the apply when the task's enforcement level is mandatory. A warning reports `passed` with an outcome that shows it. The plan stays in memory for that job, and the log holds only its hash and counts. [docs/hcp-terraform-run-task.md](docs/hcp-terraform-run-task.md) covers the bundle, the task settings, and a validation on a real workspace.
 
 ## Decision proposals
 
