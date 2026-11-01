@@ -34,6 +34,10 @@ The registry schema holds the bitemporal decision tables, the scope tree and its
 
 `ipso-server webhooks` receives `pull_request` and `push` webhooks and validates the decision files of the change with the rules of `ipso check`. It reports a check run named `ipso / decisions` with an annotation on each invalid file. At start it reads the registered App and refuses to run unless its permissions are exactly `checks:write`, `contents:read`, `metadata:read`, and `pull_requests:write`. [docs/github-app.md](docs/github-app.md) covers registering the App and installing it in a sandbox organization.
 
+## Decision proposals
+
+`internal/proposals` turns the discussion of a merged pull request into decision proposals. It keeps text from outsiders and text with an injection marker away from the LLM, redacts secrets before any call, checks the answer strictly, and stores rows that can only be `pending` ([ADR-0062](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0062-pr-decision-proposals.md)). `GET /v1/proposals` is the inbox. The binary neither calls this package nor serves that route. The control plane wires both once the LLM gateway and row-level security exist.
+
 ## Development
 
 ```sh
