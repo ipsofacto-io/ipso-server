@@ -3,10 +3,16 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 
+	"github.com/ipsofacto-io/ipso-server/internal/integrations"
 	"github.com/ipsofacto-io/ipso-server/internal/migrate"
 )
 
@@ -31,6 +37,7 @@ func TestUsage(t *testing.T) {
 		{"no arguments", nil, 2, "usage:"},
 		{"unknown command", []string{"serve"}, 2, `unknown command "serve"`},
 		{"extra argument to migrate", []string{"migrate", "up"}, 2, "usage: ipso-server migrate"},
+		{"extra argument to webhooks", []string{"webhooks", "now"}, 2, "usage: ipso-server webhooks"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -150,5 +157,68 @@ func TestMigrateNeverPrintsThePassword(t *testing.T) {
 		if strings.Contains(stdout+stderr, secret) {
 			t.Errorf("%q: output leaks the password: %q", url, stdout+stderr)
 		}
+	}
+}
+
+func webhookEnv(t *testing.T) map[string]string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string]string{
+		appIDEnv:         "12345",
+		appPrivateKeyEnv: string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})),
+		webhookSecretEnv: strings.Repeat("s3", 16),
+		listenAddrEnv:    "127.0.0.1:0",
+	}
+}
+
+func TestWebhooksRequiresEverySecret(t *testing.T) {
+	for _, missing := range []string{appIDEnv, appPrivateKeyEnv, webhookSecretEnv} {
+		t.Run(missing, func(t *testing.T) {
+			values := webhookEnv(t)
+			delete(values, missing)
+			code, _, stderr := invoke(t, deps{getenv: env(values)}, "webhooks")
+			if code != 1 || !strings.Contains(stderr, missing+" is not set") {
+				t.Fatalf("code %d stderr %q", code, stderr)
+			}
+		})
+	}
+}
+
+func TestWebhooksRefusesABadKeyWithoutPrintingIt(t *testing.T) {
+	values := webhookEnv(t)
+	values[appPrivateKeyEnv] = "marker-not-a-key"
+	code, _, stderr := invoke(t, deps{getenv: env(values)}, "webhooks")
+	if code != 1 || strings.Contains(stderr, "marker-not-a-key") {
+		t.Fatalf("code %d stderr %q", code, stderr)
+	}
+}
+
+func TestWebhooksServes(t *testing.T) {
+	values := webhookEnv(t)
+	var got integrations.Config
+	d := deps{getenv: env(values), serve: func(_ context.Context, listener net.Listener, cfg integrations.Config) error {
+		got = cfg
+		return listener.Close()
+	}}
+	code, _, stderr := invoke(t, d, "webhooks")
+	if code != 0 {
+		t.Fatalf("code %d stderr %q", code, stderr)
+	}
+	if string(got.WebhookSecret) != values[webhookSecretEnv] || got.App == nil || got.OnMerged != nil {
+		t.Fatalf("config %+v", got)
+	}
+}
+
+func TestWebhooksReportsAServeError(t *testing.T) {
+	d := deps{getenv: env(webhookEnv(t)), serve: func(_ context.Context, listener net.Listener, _ integrations.Config) error {
+		_ = listener.Close()
+		return errors.New("the app permissions are not the set in section 3.1")
+	}}
+	code, _, stderr := invoke(t, d, "webhooks")
+	if code != 1 || !strings.Contains(stderr, "section 3.1") {
+		t.Fatalf("code %d stderr %q", code, stderr)
 	}
 }
