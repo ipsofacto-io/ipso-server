@@ -24,6 +24,34 @@ func Serve(ctx context.Context, listener net.Listener, cfg Config) error {
 	service := NewService(cfg)
 	mux := http.NewServeMux()
 	mux.Handle(webhookPath, service.Handler())
+	return listen(ctx, listener, mux, service.Run)
+}
+
+// ServeRunTasks listens until ctx ends. It serves the HCP Terraform run task and a health route, and
+// no tenant data (ADR-0065).
+func ServeRunTasks(ctx context.Context, listener net.Listener, cfg RunTaskConfig) error {
+	if len(cfg.HMACKey) < minSecretBytes {
+		return fmt.Errorf("the HMAC key is shorter than %d bytes", minSecretBytes)
+	}
+	if cfg.Bundle == nil {
+		return errors.New("the run task service has no policy bundle")
+	}
+	if cfg.APIHost != "" && !validHost.MatchString(cfg.APIHost) {
+		return errors.New("the API host is not a host name")
+	}
+	for _, host := range cfg.PlanHosts {
+		if !validHost.MatchString(host) {
+			return errors.New("a plan host is not a host name")
+		}
+	}
+	service := NewRunTaskService(cfg)
+	mux := http.NewServeMux()
+	mux.Handle(runTaskPath, service.Handler())
+	return listen(ctx, listener, mux, service.Run)
+}
+
+// listen serves mux with the health route until ctx ends, and runs the service's workers meanwhile.
+func listen(ctx context.Context, listener net.Listener, mux *http.ServeMux, run func(context.Context)) error {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -38,7 +66,7 @@ func Serve(ctx context.Context, listener net.Listener, cfg Config) error {
 
 	workers := make(chan struct{})
 	go func() {
-		service.Run(ctx)
+		run(ctx)
 		close(workers)
 	}()
 	served := make(chan error, 1)

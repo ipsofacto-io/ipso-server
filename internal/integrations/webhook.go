@@ -59,6 +59,8 @@ type Service struct {
 	cfg   Config
 	queue chan job
 	seen  *deliverySet
+	// timeout bounds one job. Zero means jobTimeout.
+	timeout time.Duration
 }
 
 type job struct {
@@ -115,7 +117,11 @@ func (s *Service) Run(ctx context.Context) {
 // work runs one job. A failed job forgets its delivery, so that a redelivery from GitHub can
 // retry it. A panic on hostile input fails that job and leaves the process running.
 func (s *Service) work(ctx context.Context, next job) {
-	ctx, cancel := context.WithTimeout(ctx, jobTimeout)
+	limit := s.timeout
+	if limit == 0 {
+		limit = jobTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	err := func() (err error) {
 		defer func() {

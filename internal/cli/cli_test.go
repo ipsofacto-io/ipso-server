@@ -38,6 +38,7 @@ func TestUsage(t *testing.T) {
 		{"unknown command", []string{"serve"}, 2, `unknown command "serve"`},
 		{"extra argument to migrate", []string{"migrate", "up"}, 2, "usage: ipso-server migrate"},
 		{"extra argument to webhooks", []string{"webhooks", "now"}, 2, "usage: ipso-server webhooks"},
+		{"extra argument to runtasks", []string{"runtasks", "now"}, 2, "usage: ipso-server runtasks"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -221,4 +222,71 @@ func TestWebhooksReportsAServeError(t *testing.T) {
 	if code != 1 || !strings.Contains(stderr, "section 3.1") {
 		t.Fatalf("code %d stderr %q", code, stderr)
 	}
+}
+
+func TestRunTasksReadsItsConfiguration(t *testing.T) {
+	complete := map[string]string{
+		runTaskHMACEnv:      "key",
+		runTaskBundleEnv:    "layout",
+		runTaskDigestEnv:    "sha256:abc",
+		runTaskPublicKeyEnv: "public.pem",
+		listenAddrEnv:       "127.0.0.1:0",
+		runTaskPolicyEnv:    "prod",
+		runTaskHostEnv:      "tfe.example.test",
+		runTaskPlanHostsEnv: "tfe.example.test,archive.example.test",
+	}
+	for _, missing := range []string{runTaskHMACEnv, runTaskBundleEnv, runTaskDigestEnv, runTaskPublicKeyEnv} {
+		t.Run("without "+missing, func(t *testing.T) {
+			values := map[string]string{}
+			for key, value := range complete {
+				if key != missing {
+					values[key] = value
+				}
+			}
+			code, _, stderr := invoke(t, deps{getenv: env(values)}, "runtasks")
+			if code != 1 || !strings.Contains(stderr, missing+" is not set") {
+				t.Fatalf("code %d stderr %q", code, stderr)
+			}
+		})
+	}
+	t.Run("a bundle that does not verify stops the start", func(t *testing.T) {
+		d := deps{
+			getenv: env(complete),
+			loadBundle: func(string, string, string) (integrations.PlanEvaluator, error) {
+				return nil, errors.New("bundle-unsigned")
+			},
+			runTasks: func(context.Context, net.Listener, integrations.RunTaskConfig) error {
+				t.Fatal("the service started")
+				return nil
+			},
+		}
+		code, _, stderr := invoke(t, d, "runtasks")
+		if code != 1 || !strings.Contains(stderr, "bundle-unsigned") {
+			t.Fatalf("code %d stderr %q", code, stderr)
+		}
+	})
+	t.Run("the service gets every setting", func(t *testing.T) {
+		var got integrations.RunTaskConfig
+		var layout, digest, key string
+		d := deps{
+			getenv: env(complete),
+			loadBundle: func(gotLayout, gotDigest, gotKey string) (integrations.PlanEvaluator, error) {
+				layout, digest, key = gotLayout, gotDigest, gotKey
+				return nil, nil
+			},
+			runTasks: func(_ context.Context, listener net.Listener, cfg integrations.RunTaskConfig) error {
+				got = cfg
+				return listener.Close()
+			},
+		}
+		if code, _, stderr := invoke(t, d, "runtasks"); code != 0 {
+			t.Fatalf("code %d stderr %q", code, stderr)
+		}
+		if layout != "layout" || digest != "sha256:abc" || key != "public.pem" {
+			t.Fatalf("bundle %q %q %q", layout, digest, key)
+		}
+		if string(got.HMACKey) != "key" || got.Env != "prod" || got.APIHost != "tfe.example.test" || strings.Join(got.PlanHosts, " ") != "tfe.example.test archive.example.test" {
+			t.Fatalf("config %+v", got)
+		}
+	})
 }
