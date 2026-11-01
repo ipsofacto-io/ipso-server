@@ -767,7 +767,7 @@ func loadSignedBundle(t *testing.T) *plancheck.Bundle {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundle, err := plancheck.Load(filepath.Join("testdata", "runtask", "layout"), strings.TrimSpace(string(digest)), filepath.Join("testdata", "runtask", "public.pem"))
+	bundle, err := plancheck.Load(filepath.Join("testdata", "runtask", "layout"), strings.TrimSpace(string(digest)), filepath.Join("testdata", "runtask", "public.pub"))
 	if err != nil {
 		t.Fatal(err)
 	}
