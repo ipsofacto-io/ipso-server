@@ -46,6 +46,8 @@ type fakeHCP struct {
 	callbacks  []capturedCallback
 	// callbackStatus answers the callback in order. The last one repeats.
 	callbackStatus []int
+	// planHang keeps the plan URL from answering until the test ends.
+	planHang chan struct{}
 }
 
 type capturedCallback struct {
@@ -68,6 +70,13 @@ func newFakeHCP(t *testing.T) *fakeHCP {
 	}))
 	t.Cleanup(f.download.Close)
 	f.api = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && f.planHang != nil {
+			select {
+			case <-f.planHang:
+			case <-r.Context().Done():
+			}
+			return
+		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if r.Method == http.MethodGet {
@@ -488,6 +497,18 @@ func TestRunTaskFailsClosed(t *testing.T) {
 			t.Fatalf("status %q tries %d", status, len(h.hcp.planAuth))
 		}
 	})
+}
+
+func TestRunTaskReportsWhenThePlanNeverArrives(t *testing.T) {
+	h := newRunTaskHarness(t, plancheck.Report{})
+	h.hcp.planHang = make(chan struct{})
+	t.Cleanup(func() { close(h.hcp.planHang) })
+	h.service.evaluateLimit = 50 * time.Millisecond
+	h.postSigned(t, nil)
+	status, _, _ := resultFields(t, h.waitForCallback(t, 1).body)
+	if status != statusFailed {
+		t.Fatalf("status %q", status)
+	}
 }
 
 func TestRunTaskStagesWithNoPlanToJudge(t *testing.T) {

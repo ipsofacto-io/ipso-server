@@ -28,6 +28,8 @@ const (
 	maxTokenBytes  = 8192
 	// runTaskJobTimeout stays inside the 10 minutes HCP Terraform waits for a first update.
 	runTaskJobTimeout = 8 * time.Minute
+	// runTaskEvaluateTimeout leaves the rest of the job to report, including a failure.
+	runTaskEvaluateTimeout = 7 * time.Minute
 
 	// DefaultHCPHost is the API host of HCP Terraform.
 	DefaultHCPHost = "app.terraform.io"
@@ -78,6 +80,8 @@ type RunTaskService struct {
 	now    func() time.Time
 	// wait is how long a plan that is not ready waits, and the base of the callback backoff.
 	wait time.Duration
+	// evaluateLimit bounds reading and evaluating one plan.
+	evaluateLimit time.Duration
 }
 
 // NewRunTaskService returns a service. Run its workers with Run before serving Handler.
@@ -95,8 +99,9 @@ func NewRunTaskService(cfg RunTaskConfig) *RunTaskService {
 		client: &http.Client{
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-		now:  time.Now,
-		wait: 5 * time.Second,
+		now:           time.Now,
+		wait:          5 * time.Second,
+		evaluateLimit: runTaskEvaluateTimeout,
 	}
 }
 
@@ -220,7 +225,9 @@ func (s *RunTaskService) runJob(ctx context.Context, request runTaskRequest, cal
 				err = errors.New("the evaluation panicked")
 			}
 		}()
-		return s.evaluate(ctx, request)
+		evaluation, cancel := context.WithTimeout(ctx, s.evaluateLimit)
+		defer cancel()
+		return s.evaluate(evaluation, request)
 	}()
 	if runErr != nil {
 		result = taskResult{status: statusFailed, message: "ipso could not finish this check, so the plan was not evaluated. Run the plan again to retry."}
