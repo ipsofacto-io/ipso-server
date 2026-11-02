@@ -1,7 +1,7 @@
 // Package proposals turns merged pull request discussion into decision proposals for a person to
 // review (ADR-0062). LLM output is advisory, so nothing here can approve a proposal (ADR-0005),
 // and the database refuses any status but pending. The binary does not call this package yet:
-// the control plane wires it once row-level security and the LLM gateway exist.
+// the control plane wires it to the LLM gateway once row-level security exists.
 package proposals
 
 import (
@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
+	"github.com/ipsofacto-io/ipso-server/internal/llmgw"
 )
 
 const (
@@ -36,12 +37,10 @@ const (
 var systemPrompt string
 
 // Completion is one answer from the LLM gateway.
-type Completion struct {
-	Text  string
-	Model string
-}
+type Completion = llmgw.Completion
 
-// CompleteFunc calls the LLM gateway of IPSO-55. It owns routing, budgets, and its own redaction.
+// CompleteFunc calls the LLM gateway for one tenant, as llmgw.Gateway.For returns it. The gateway
+// owns routing, budgets, and its own redaction (ADR-0081).
 type CompleteFunc func(ctx context.Context, system, user string) (Completion, error)
 
 // Proposal is one candidate that passed every check. It has no status field, because the only
