@@ -30,6 +30,7 @@ const (
 	maxPromptBytes   = 256 << 10
 	maxAnswerBytes   = 1 << 20
 	routeTimeout     = 90 * time.Second
+	settleTimeout    = 10 * time.Second
 )
 
 var (
@@ -123,7 +124,9 @@ func (g *Gateway) Complete(ctx context.Context, req Request) (Completion, error)
 		return Completion{}, err
 	}
 	settle := func(used int64) {
-		if err := g.ledger.Settle(context.WithoutCancel(ctx), req.Tenant, month, used-reserved); err != nil {
+		settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
+		defer cancel()
+		if err := g.ledger.Settle(settleCtx, req.Tenant, month, used-reserved); err != nil {
 			g.logger.Error("llm budget settle failed", "tenant", req.Tenant.String(), "error", err.Error())
 		}
 	}
@@ -138,6 +141,10 @@ func (g *Gateway) Complete(ctx context.Context, req Request) (Completion, error)
 				used = reserved
 			}
 			settle(used)
+			if strings.TrimSpace(answer.Text) == "" {
+				// A content filter answers with no text. The tokens are spent, and nothing is returned.
+				return Completion{}, fmt.Errorf("llm route %s: the answer is empty", route.name)
+			}
 			g.logger.Info("llm call", "tenant", req.Tenant.String(), "route", route.name, "provider", route.provider,
 				"model", answer.Model, "input_tokens", answer.InputTokens, "output_tokens", answer.OutputTokens, "ms", elapsed)
 			return answer, nil
@@ -234,7 +241,8 @@ func (g *Gateway) call(ctx context.Context, route endpoint, system, user string,
 	if err != nil {
 		return Completion{}, err
 	}
-	if answer.Model == "" {
+	// The model name ends up stored next to a proposal, so a provider's value must look like one.
+	if !modelName.MatchString(answer.Model) {
 		answer.Model = route.model
 	}
 	answer.Route = route.name

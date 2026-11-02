@@ -288,3 +288,34 @@ func TestForCompletesForOneTenant(t *testing.T) {
 		t.Fatalf("charged %d tokens to tenant A", ledger.tokens[tenantA])
 	}
 }
+
+func TestRoutesToATenantsOpenAICompatibleEndpoint(t *testing.T) {
+	setKeys(t)
+	own := Route{Name: "acme-openai", Provider: OpenAI, Endpoint: "https://llm.acme.example/v1/", Model: "gpt-4.1", KeyEnv: "IPSO_LLM_TENANT", AllowNonEU: true}
+	cfg := only("mistral")
+	cfg.Tenants = map[string]Tenant{tenantA.String(): {BYOK: []Route{own}}}
+	p := &provider{responses: []*http.Response{reply(200, strings.Replace(chatOK, "served-model", strings.Repeat("x", 300), 1))}}
+	g, _ := newGateway(t, cfg, p)
+	answer, err := g.Complete(t.Context(), Request{Tenant: tenantA, System: "s", User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := p.requests[0]
+	if got.url != "https://llm.acme.example/v1/chat/completions" || got.header.Get("Authorization") != "Bearer synthetic-ipso_llm_tenant" {
+		t.Fatalf("request = %s %v", got.url, got.header)
+	}
+	if answer.Model != "gpt-4.1" {
+		t.Fatalf("model = %q, want the route's model in place of an oversized name", answer.Model)
+	}
+}
+
+func TestEmptyAnswerIsAnErrorAndIsCharged(t *testing.T) {
+	p := &provider{responses: []*http.Response{reply(200, `{"choices":[{"message":{"content":null},"finish_reason":"content_filter"}],"usage":{"prompt_tokens":7,"completion_tokens":0}}`)}}
+	g, ledger := newGateway(t, only("mistral"), p)
+	if _, err := g.Complete(t.Context(), Request{Tenant: tenantA, System: "s", User: "u"}); err == nil {
+		t.Fatal("an empty answer was returned as a success")
+	}
+	if ledger.tokens[tenantA] != 7 {
+		t.Fatalf("charged %d tokens, want the 7 the provider reported", ledger.tokens[tenantA])
+	}
+}
