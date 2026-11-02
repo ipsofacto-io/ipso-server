@@ -13,8 +13,8 @@ func (s schema) tryWaiver(t *testing.T, decision, scope, valid, reason, approver
 	t.Helper()
 	_, err := s.app.ExecContext(t.Context(), `
 		INSERT INTO registry.waiver
-			(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::text::tstzrange, $7)`,
+			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'), $6::text::tstzrange, $7)`,
 		tenantA, decision, scope, reason, approver, valid, ticket)
 	return err
 }
@@ -68,8 +68,8 @@ func TestWaiverStaysInsideTheDecisionAndTheCap(t *testing.T) {
 	t.Run("longer than 90 days", func(t *testing.T) {
 		_, err := s.app.ExecContext(ctx, `
 			INSERT INTO registry.waiver
-				(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref)
-			VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform',
+				(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
 			        tstzrange(clock_timestamp(), clock_timestamp() + interval '90 days' + interval '1 second', '[)'),
 			        'TICKET-LONG')`, tenantA, newDecision, repo)
 		requireSQLState(t, err, "23514")
@@ -80,8 +80,8 @@ func TestWaiverStaysInsideTheDecisionAndTheCap(t *testing.T) {
 	t.Run("exactly 90 days", func(t *testing.T) {
 		_, err := s.app.ExecContext(ctx, `
 			INSERT INTO registry.waiver
-				(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref)
-			VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform',
+				(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
 			        tstzrange(clock_timestamp(), clock_timestamp() + interval '90 days', '[)'),
 			        'TICKET-90')`, tenantA, newDecision, repo)
 		if err != nil {
@@ -91,8 +91,8 @@ func TestWaiverStaysInsideTheDecisionAndTheCap(t *testing.T) {
 	t.Run("no end", func(t *testing.T) {
 		_, err := s.app.ExecContext(ctx, `
 			INSERT INTO registry.waiver
-				(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref)
-			VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform',
+				(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
 			        tstzrange(clock_timestamp(), NULL, '[)'), 'TICKET-OPEN')`,
 			tenantA, newDecision, repo)
 		requireSQLState(t, err, "23514")
@@ -148,8 +148,8 @@ func TestWaiverStaysInsideTheDecisionAndTheCap(t *testing.T) {
 	var recent bool
 	if err := s.app.QueryRowContext(ctx, `
 		INSERT INTO registry.waiver
-			(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref, sys_period)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform',
+			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref, sys_period)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
 		        '[2026-03-01,2026-04-01)', 'TICKET-SYS', tstzrange('2000-01-01'::timestamptz, NULL))
 		RETURNING lower(sys_period) > '2001-01-01'::timestamptz`,
 		tenantA, oldDecision, repo).Scan(&recent); err != nil {
@@ -173,8 +173,8 @@ func TestWaiverBoundHoldsWhenTriggersAreOff(t *testing.T) {
 	}
 	_, err = conn.ExecContext(ctx, `
 		INSERT INTO registry.waiver
-			(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref, sys_period)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform',
+			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref, sys_period)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
 		        tstzrange(clock_timestamp(), clock_timestamp() + interval '90 days' + interval '1 second', '[)'),
 		        'TICKET-LONG', tstzrange(clock_timestamp(), NULL))`,
 		tenantA, oldDecision, s.orgs[tenantA])
@@ -198,8 +198,8 @@ func TestWaiverNoticesFollowTheDueRule(t *testing.T) {
 	var due, later string
 	if err := s.app.QueryRowContext(ctx, `
 		INSERT INTO registry.waiver
-			(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform',
+			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
 		        tstzrange(clock_timestamp() - interval '30 days', clock_timestamp() - interval '1 hour', '[)'),
 		        'TICKET-DUE')
 		RETURNING id`, tenantA, oldDecision, org).Scan(&due); err != nil {
@@ -207,8 +207,8 @@ func TestWaiverNoticesFollowTheDueRule(t *testing.T) {
 	}
 	if err := s.app.QueryRowContext(ctx, `
 		INSERT INTO registry.waiver
-			(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform',
+			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
 		        tstzrange(clock_timestamp(), clock_timestamp() + interval '20 days', '[)'),
 		        'TICKET-LATER')
 		RETURNING id`, tenantA, oldDecision, org).Scan(&later); err != nil {
@@ -217,8 +217,8 @@ func TestWaiverNoticesFollowTheDueRule(t *testing.T) {
 	var shortID string
 	if err := s.app.QueryRowContext(ctx, `
 		INSERT INTO registry.waiver
-			(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform',
+			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
 		        tstzrange(clock_timestamp() - interval '2 days', clock_timestamp() - interval '1 hour', '[)'),
 		        'TICKET-SHORT')
 		RETURNING id`, tenantA, oldDecision, org).Scan(&shortID); err != nil {
