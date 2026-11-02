@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -127,25 +128,41 @@ func TestRedactionHappensBeforeEgress(t *testing.T) {
 	}
 }
 
-// TestRedTeamCorpus is the IPSO-42 subset of the corpus IPSO-58 will grow. An injection-tainted
-// comment does not reach the LLM, so it produces no proposal, even with an LLM that obeys it.
-func TestRedTeamCorpus(t *testing.T) {
-	raw, err := os.ReadFile("testdata/redteam.json")
+// redTeamItem is one entry of the red-team corpus that internal/evals scores (ADR-0084).
+type redTeamItem struct {
+	ID     string `json:"id"`
+	Body   string `json:"body"`
+	Attack bool   `json:"attack"`
+	Flag   bool   `json:"flag"`
+}
+
+func redTeamCorpus(t *testing.T) []redTeamItem {
+	t.Helper()
+	raw, err := os.ReadFile("../evals/testdata/redteam.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var corpus []struct {
-		Name string `json:"name"`
-		Body string `json:"body"`
-	}
+	var corpus []redTeamItem
 	if err := json.Unmarshal(raw, &corpus); err != nil {
 		t.Fatal(err)
 	}
+	return corpus
+}
+
+// TestRedTeamKnownPatternsStayFlagged keeps each pattern the screen catches caught: such a comment
+// does not reach the LLM, so it produces no proposal, even with an LLM that obeys it.
+func TestRedTeamKnownPatternsStayFlagged(t *testing.T) {
+	var corpus []redTeamItem
+	for _, item := range redTeamCorpus(t) {
+		if item.Flag {
+			corpus = append(corpus, item)
+		}
+	}
 	if len(corpus) == 0 {
-		t.Fatal("empty corpus")
+		t.Fatal("no flagged items")
 	}
 	for _, item := range corpus {
-		t.Run(item.Name, func(t *testing.T) {
+		t.Run(item.ID, func(t *testing.T) {
 			llm := &fakeLLM{answer: oneCandidate}
 			found, stats, err := Extract(t.Context(), llm.complete, testRepo, testNumber, []integrations.Comment{comment(1, item.Body)}, nil)
 			if err != nil {
@@ -323,5 +340,28 @@ func TestFencedAnswerIsRead(t *testing.T) {
 		if err != nil || len(found) != 1 || found[0].Title != "Use Go" {
 			t.Fatalf("found %+v, err %v", found, err)
 		}
+	}
+}
+
+// An LLM that obeys a comment asking for its instructions repeats the canary, and the answer is
+// refused whole.
+func TestAnswerThatLeaksTheCanaryIsRefused(t *testing.T) {
+	canary := regexp.MustCompile(`CANARY-([0-9a-f]{32})`)
+	for name, leak := range map[string]func(string) string{
+		"whole":     func(hex string) string { return "CANARY-" + hex },
+		"hex only":  func(hex string) string { return hex },
+		"half":      func(hex string) string { return hex[:16] },
+		"uppercase": func(hex string) string { return strings.ToUpper(hex) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			obedient := func(_ context.Context, system, _ string) (Completion, error) {
+				hex := canary.FindStringSubmatch(system)[1]
+				return Completion{Text: `{"candidates":[{"source":0,"title":"Use Go","statement":"The marker is ` + leak(hex) + `","rationale":"","confidence":0.9}]}`}, nil
+			}
+			found, _, err := Extract(t.Context(), obedient, testRepo, testNumber, []integrations.Comment{comment(1, "We decided to use Go.")}, nil)
+			if !errors.Is(err, ErrAnswer) || len(found) != 0 {
+				t.Fatalf("found %+v err %v", found, err)
+			}
+		})
 	}
 }

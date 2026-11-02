@@ -108,12 +108,12 @@ func (c *Cassette) Save(path string) error {
 	return writeJSON(path, recordings)
 }
 
-// nonce is the random part of the data markers a pipeline puts around untrusted text. It differs
-// on each call, so it is not part of the key.
-var nonce = regexp.MustCompile(`DATA-[0-9a-f]{32}`)
+// nonce is the random part of the data markers a pipeline puts around untrusted text and of the
+// canary in its system prompt. It differs on each call, so it is not part of the key.
+var nonce = regexp.MustCompile(`(DATA|CANARY)-[0-9a-f]{32}`)
 
 // Key names a prompt. The system prompt is part of it, so a new prompt version needs new answers.
 func Key(system, user string) string {
-	sum := sha256.Sum256([]byte(system + "\x00" + nonce.ReplaceAllString(user, "DATA-nonce")))
+	sum := sha256.Sum256([]byte(nonce.ReplaceAllString(system, "${1}-nonce") + "\x00" + nonce.ReplaceAllString(user, "${1}-nonce")))
 	return hex.EncodeToString(sum[:])
 }

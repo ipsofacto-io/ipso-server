@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	promptVersion  = "pr-decision-v1"
+	promptVersion  = "pr-decision-v2"
 	maxSent        = 20
 	maxBodyRunes   = 4000
 	maxCandidates  = 5
@@ -33,7 +33,7 @@ const (
 	maxOutputBytes = 64 << 10
 )
 
-//go:embed prompts/pr-decision-v1.txt
+//go:embed prompts/pr-decision-v2.txt
 var systemPrompt string
 
 // Completion is one answer from the LLM gateway.
@@ -93,9 +93,18 @@ func Extract(ctx context.Context, complete CompleteFunc, repo string, number int
 	if err != nil {
 		return nil, stats, err
 	}
-	answer, err := complete(ctx, systemPrompt, user)
+	canary, err := randomHex()
+	if err != nil {
+		return nil, stats, err
+	}
+	answer, err := complete(ctx, systemPrompt+" CANARY-"+canary+"\n", user)
 	if err != nil {
 		return nil, stats, fmt.Errorf("complete: %w", err)
+	}
+	// An answer that repeats the marker obeyed a comment over the instructions, so none of it is
+	// kept. Half the marker is enough to tell.
+	if strings.Contains(strings.ToLower(answer.Text), canary[:16]) {
+		return nil, stats, fmt.Errorf("%w: it repeats the secret marker", ErrAnswer)
 	}
 	candidates, err := parseAnswer(answer.Text)
 	if err != nil {
@@ -193,12 +202,21 @@ func userMessage(picks []selected) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	nonce := make([]byte, 16)
-	if _, err := rand.Read(nonce); err != nil {
+	nonce, err := randomHex()
+	if err != nil {
 		return "", err
 	}
-	marker := "DATA-" + hex.EncodeToString(nonce)
+	marker := "DATA-" + nonce
 	return marker + "\n" + string(encoded) + "\n" + marker, nil
+}
+
+// randomHex returns 32 random hexadecimal digits.
+func randomHex() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value), nil
 }
 
 type candidate struct {
