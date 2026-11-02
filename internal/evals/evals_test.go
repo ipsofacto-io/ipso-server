@@ -37,6 +37,12 @@ func TestEvals(t *testing.T) {
 	}
 	if *record {
 		cassette.Record(liveGateway(t))
+		// A run that stops early still keeps what it recorded, so its answers can be read.
+		defer func() {
+			if err := cassette.Save(cassettePath); err != nil {
+				t.Error(err)
+			}
+		}()
 	}
 
 	scores := Scores{}
@@ -75,11 +81,6 @@ func TestEvals(t *testing.T) {
 	}
 	t.Logf("scores:\n%s", Table(scores))
 
-	if *record {
-		if err := cassette.Save(cassettePath); err != nil {
-			t.Fatal(err)
-		}
-	}
 	if *report != "" {
 		if err := writeJSON(*report, scores); err != nil {
 			t.Fatal(err)

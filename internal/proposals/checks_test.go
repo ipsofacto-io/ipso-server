@@ -112,7 +112,7 @@ func TestRepairNamesTheConditionsThatDecide(t *testing.T) {
 			spec: RuleSpec{Rules: []Rule{{Message: "m", When: []Condition{
 				{Field: "path", Op: "suffix", Value: ".env"}, {Field: "content", Op: "contains", Value: "SECRET"},
 			}}}},
-			want:   `edit 1 must be denied, and the rule allows it: in rule 1, {"field":"content","op":"contains","value":"SECRET"} does not hold. Edit 1 is {"tool":"write","path":"service/.env","content":"PORT=1\n","added":"PORT=1\n","deny":true}`,
+			want:   `edit 1 must be denied, and the rule allows it: in rule 1, {"field":"content","op":"contains","value":"SECRET"} does not hold.`,
 			absent: `"value":".env"} does not hold`,
 		},
 		{
@@ -126,7 +126,7 @@ func TestRepairNamesTheConditionsThatDecide(t *testing.T) {
 				{Message: "m", When: []Condition{{Field: "path", Op: "suffix", Value: ".env"}}},
 				{Message: "m", When: []Condition{{Field: "path", Op: "suffix", Value: ".env", Not: true}}},
 			}},
-			want: `edit 2 must be allowed, and the rule denies it: every condition of rule 2 holds for it. Edit 2 is {"tool":"write","path":"service/main.go"`,
+			want: `edit 2 must be allowed, and the rule denies it: every condition of rule 2 holds for it.`,
 		},
 	} {
 		rule, err := rulecheck.Compile([]byte(render(tc.spec)))

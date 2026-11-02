@@ -29,14 +29,13 @@ const (
 	maxToolRunes       = 50
 	maxDecisionRunes   = 4000
 	maxShownRunes      = 1000
-	maxQuotedRunes     = 200
 	maxPreviousRunes   = 3000
 	maxDrafts          = 3
 	maxRules           = 3
 	maxConditions      = 5
 	maxValueRunes      = 200
 	maxMessageRunes    = 200
-	maxProblems        = 10
+	maxProblems        = 6
 )
 
 //go:embed prompts/check-rule-v4.txt
@@ -188,16 +187,16 @@ func checkUser(req CheckRequest) string {
 	var b strings.Builder
 	b.WriteString("Decision: " + req.Title + "\n" + req.Statement + "\n\nEdits a person wrote for this decision, and whether the check must deny each one:\n")
 	for i, f := range req.Fixtures {
-		fmt.Fprintf(&b, "edit %d: %s\n", i+1, f.shown(maxShownRunes))
+		fmt.Fprintf(&b, "edit %d: %s\n", i+1, f.shown())
 	}
 	return b.String()
 }
 
-// shown is the fixture as the model reads it, with each field cut to limit runes.
-func (f Fixture) shown(limit int) string {
+// shown is the fixture as the model reads it, with each field cut to maxShownRunes.
+func (f Fixture) shown() string {
 	return jsonText(Fixture{
-		Tool: truncate(f.Tool, limit), Path: truncate(f.Path, limit), Content: truncate(f.Content, limit),
-		Added: truncate(f.Added, limit), Command: truncate(f.Command, limit), Deny: f.Deny,
+		Tool: truncate(f.Tool, maxShownRunes), Path: truncate(f.Path, maxShownRunes), Content: truncate(f.Content, maxShownRunes),
+		Added: truncate(f.Added, maxShownRunes), Command: truncate(f.Command, maxShownRunes), Deny: f.Deny,
 	})
 }
 
@@ -285,19 +284,19 @@ func place(rule, condition int) string {
 }
 
 // explain says why the rule gets one edit wrong: for an edit to deny, which conditions of each rule
-// do not hold, and for an edit to allow, which rules hold.
+// do not hold, and for an edit to allow, which rules hold. The edit itself is numbered in the
+// request, so it is not quoted again.
 func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture) string {
 	verdict := fmt.Sprintf("edit %d must be allowed, and the rule denies it", number)
 	if f.Deny {
 		verdict = fmt.Sprintf("edit %d must be denied, and the rule allows it", number)
 	}
-	edit := fmt.Sprintf(" Edit %d is %s", number, f.shown(maxQuotedRunes))
 	if probe == nil {
-		return verdict + "." + edit
+		return verdict + "."
 	}
 	held, err := probe.Deny(f.edit())
 	if err != nil {
-		return verdict + "." + edit
+		return verdict + "."
 	}
 	holds := map[string]bool{}
 	for _, id := range held {
@@ -320,11 +319,11 @@ func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture) string
 	}
 	switch {
 	case len(reasons) == 0:
-		return verdict + "." + edit
+		return verdict + "."
 	case f.Deny:
-		return verdict + ": " + strings.Join(reasons, "; ") + "." + edit
+		return verdict + ": " + strings.Join(reasons, "; ") + "."
 	default:
-		return verdict + ": every condition of " + strings.Join(reasons, " and ") + " holds for it." + edit
+		return verdict + ": every condition of " + strings.Join(reasons, " and ") + " holds for it."
 	}
 }
 
