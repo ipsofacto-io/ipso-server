@@ -23,9 +23,14 @@ const (
 )
 
 func comment(id int, body string) integrations.Comment {
+	return commentOn(testNumber, id, body)
+}
+
+// commentOn is a member's comment on pull request number of the test repository.
+func commentOn(number, id int, body string) integrations.Comment {
 	return integrations.Comment{
 		ExternalID:  fmt.Sprintf("issuecomment-%d", id),
-		URL:         fmt.Sprintf("https://github.com/%s/pull/%d#issuecomment-%d", testRepo, testNumber, id),
+		URL:         fmt.Sprintf("https://github.com/%s/pull/%d#issuecomment-%d", testRepo, number, id),
 		Body:        body,
 		Association: "MEMBER",
 		AuthorType:  "User",

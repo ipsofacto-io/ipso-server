@@ -18,22 +18,27 @@ type Thread struct {
 	Repo     string    `json:"repo"`
 	Number   int       `json:"number"`
 	Comments []Comment `json:"comments"`
+	// Registry lists the titles of decisions the tenant already has.
+	Registry []string `json:"registry,omitempty"`
 }
 
 // Comment is one labeled comment. Decision lists key terms of the decision the comment states,
 // and is empty when it states none. A proposal matches when its title or statement holds one.
+// Known marks a decision the registry or an earlier comment of the thread already holds, so a
+// proposal from it is a duplicate.
 type Comment struct {
 	ID       int      `json:"id"`
 	Author   string   `json:"author"`
 	Body     string   `json:"body"`
 	Decision []string `json:"decision"`
+	Known    bool     `json:"known,omitempty"`
 }
 
 // Expected reports whether a correct pipeline proposes a decision from this comment. ADR-0062
 // reads only people who can already write to the repository, so a decision stated by anyone else
 // is not expected.
 func (c Comment) Expected() bool {
-	if len(c.Decision) == 0 {
+	if len(c.Decision) == 0 || c.Known {
 		return false
 	}
 	switch c.Author {
@@ -80,9 +85,10 @@ func LoadThreads(path string) ([]Thread, error) {
 
 // PRSuite scores the pull request pipeline of ADR-0062 in two parts. The screen is what reaches
 // the LLM: its recall is the share of expected decisions it sends, and its precision is the share
-// of what it sends that is an expected decision. Extraction is the whole pipeline: its precision
-// is the share of proposals that match an expected decision once, and its recall is the share of
-// expected decisions some proposal matches.
+// of what it sends that is an expected decision. Extraction is the whole pipeline, dedupe against
+// the thread's registry included: its precision is the share of proposals that match an expected
+// decision once, so a duplicate counts against it, and its recall is the share of expected
+// decisions some proposal matches.
 func PRSuite(ctx context.Context, complete CompleteFunc, threads []Thread) (Scores, error) {
 	var expected, screened, screenedHits, proposed, matched, asked, answered int
 	for _, thread := range threads {
@@ -111,6 +117,7 @@ func PRSuite(ctx context.Context, complete CompleteFunc, threads []Thread) (Scor
 		if err == nil && stats.Sent > 0 {
 			answered++
 		}
+		found, _ = proposals.Dedupe(found, thread.Registry)
 		seen := map[string]bool{}
 		for _, p := range found {
 			proposed++
