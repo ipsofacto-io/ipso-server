@@ -379,8 +379,8 @@ func TestPropertyWaiverNeverExtendsBeyondTheDecision(t *testing.T) {
 func propTryWaiver(rt *rapid.T, tx *sql.Tx, tenant, decision, scope, valid string) error {
 	return propTry(rt, tx, `
 		INSERT INTO registry.waiver
-			(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'synthetic exception', 'team:platform',
+			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'synthetic exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
 		        $4::text::tstzrange, 'TICKET-1')`,
 		tenant, decision, scope, valid)
 }

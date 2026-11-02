@@ -52,7 +52,13 @@ func newRegistryDB(t *testing.T) registryDB {
 	if _, err := migrate.Run(t.Context(), db.DSN(pgtest.Migrate)); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	return registryDB{app: db.Open(t, pgtest.App), admin: db.Open(t, pgtest.Admin)}
+	app := db.Open(t, pgtest.App)
+	for _, tenant := range []uuid.UUID{tenantA, tenantB} {
+		if _, err := app.ExecContext(t.Context(), `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'synthetic approver')`, tenant); err != nil {
+			t.Fatalf("insert the approver: %v", err)
+		}
+	}
+	return registryDB{app: app, admin: db.Open(t, pgtest.Admin)}
 }
 
 // tryScope inserts a scope as the application role. A nil parent makes a root.

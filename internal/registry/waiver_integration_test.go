@@ -16,8 +16,8 @@ func (r registryDB) addWaiver(t *testing.T, tenant, decision, scope uuid.UUID, v
 	var id uuid.UUID
 	err := r.app.QueryRowContext(t.Context(), `
 		INSERT INTO registry.waiver
-			(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref)
-		VALUES ($1, $2, $3, 'synthetic exception', 'team:platform', $4::text::tstzrange, $5)
+			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
+		VALUES ($1, $2, $3, 'synthetic exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'), $4::text::tstzrange, $5)
 		RETURNING id`, tenant, decision, scope, valid, ticket).Scan(&id)
 	if err != nil {
 		t.Fatalf("waiver: %v", err)
@@ -30,8 +30,8 @@ func (r registryDB) addWaiverBetween(t *testing.T, tenant, decision, scope uuid.
 	var id uuid.UUID
 	err := r.app.QueryRowContext(t.Context(), `
 		INSERT INTO registry.waiver
-			(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref)
-		VALUES ($1, $2, $3, 'synthetic exception', 'team:platform', tstzrange($4, $5, '[)'), $6)
+			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
+		VALUES ($1, $2, $3, 'synthetic exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'), tstzrange($4, $5, '[)'), $6)
 		RETURNING id`, tenant, decision, scope, start, end, ticket).Scan(&id)
 	if err != nil {
 		t.Fatalf("waiver: %v", err)
@@ -269,8 +269,8 @@ func TestNotifyRecordsEachDueOffsetOnce(t *testing.T) {
 		var id uuid.UUID
 		err := r.app.QueryRowContext(ctx, `
 			INSERT INTO registry.waiver
-				(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref)
-			VALUES ($1, $2, $3, 'synthetic exception', 'team:platform', `+span+`, $4)
+				(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
+			VALUES ($1, $2, $3, 'synthetic exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'), `+span+`, $4)
 			RETURNING id`, tenantA, decision, org, ticket).Scan(&id)
 		if err != nil {
 			t.Fatalf("waiver %s: %v", ticket, err)

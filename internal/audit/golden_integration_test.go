@@ -194,8 +194,8 @@ func TestAuditGolden(t *testing.T) {
 			var id uuid.UUID
 			if err := r.app.QueryRowContext(ctx, `
 				INSERT INTO registry.waiver
-					(tenant_id, decision_id, scope_id, reason, approver, valid_period, ticket_ref)
-				VALUES ($1, $2, $3, 'fixture', 'team:payments', $4::text::tstzrange, $5)
+					(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
+				VALUES ($1, $2, $3, 'fixture', 'team:payments', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'), $4::text::tstzrange, $5)
 				RETURNING id`, d.tenant, d.id, scope, step.Valid, step.Ticket).Scan(&id); err != nil {
 				t.Fatalf("step %d: waiver %s: %v", i, step.Waiver, err)
 			}
@@ -584,7 +584,13 @@ func newRegistryDB(t *testing.T) registryDB {
 	if _, err := migrate.Run(t.Context(), db.DSN(pgtest.Migrate)); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	return registryDB{app: db.Open(t, pgtest.App), admin: db.Open(t, pgtest.Admin)}
+	app := db.Open(t, pgtest.App)
+	for _, tenant := range []uuid.UUID{tenantA, tenantB} {
+		if _, err := app.ExecContext(t.Context(), `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'synthetic approver')`, tenant); err != nil {
+			t.Fatalf("insert the approver: %v", err)
+		}
+	}
+	return registryDB{app: app, admin: db.Open(t, pgtest.Admin)}
 }
 
 func (r registryDB) scope(t *testing.T, tenant, parent uuid.UUID, kind, selector string) uuid.UUID {

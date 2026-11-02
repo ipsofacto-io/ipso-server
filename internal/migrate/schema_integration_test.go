@@ -44,6 +44,9 @@ func migrated(t *testing.T) schema {
 	s := schema{app: db.Open(t, pgtest.App), admin: db.Open(t, pgtest.Admin), orgs: make(map[string]string)}
 	for _, tenant := range []string{tenantA, tenantB} {
 		s.orgs[tenant] = s.addScope(t, tenant, "", "org", "acme")
+		if _, err := s.app.ExecContext(t.Context(), `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1::uuid, 'human', 'synthetic approver')`, tenant); err != nil {
+			t.Fatalf("insert the approver: %v", err)
+		}
 	}
 	return s
 }
@@ -475,6 +478,10 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 	}
 	// tgtype bits: 1 row, 2 before, 4 insert, 8 delete, 16 update. An after trigger has no bit 2.
 	want := []trigger{
+		{"identity.action_log", "action_log_open_sys_period", 1 | 2 | 4},
+		{"identity.action_log", "action_log_stamp", 1 | 2 | 4},
+		{"proposals.approval", "approval_approver", 1 | 2 | 4},
+		{"proposals.approval", "approval_open_sys_period", 1 | 2 | 4},
 		{"registry.baseline", "baseline_fingerprints", 1 | 2 | 4},
 		{"registry.baseline", "baseline_open_sys_period", 1 | 2 | 4},
 		{"registry.decision_version", "decision_version_archive", 1 | 2 | 8 | 16},
@@ -490,6 +497,8 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 		{"registry.premise_host_allow", "premise_host_allow_prepare", 1 | 2 | 4},
 		{"registry.premise_reason", "premise_reason_check", 1 | 2 | 4},
 		{"registry.premise_reason", "premise_reason_open_sys_period", 1 | 2 | 4},
+		{"identity.principal", "principal_check", 1 | 2 | 4},
+		{"identity.principal", "principal_open_sys_period", 1 | 2 | 4},
 		{"proposals.proposal", "proposal_open_sys_period", 1 | 2 | 4},
 		{"registry.scope", "scope_prepare", 1 | 2 | 4},
 		{"registry.scope", "scope_rewrite_closure", 1 | 16},
@@ -498,6 +507,7 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 		{"registry.supersession", "supersession_check", 1 | 2 | 4},
 		{"registry.supersession", "supersession_close", 1 | 4},
 		{"registry.supersession", "supersession_open_sys_period", 1 | 2 | 4},
+		{"registry.waiver", "waiver_approver", 1 | 2 | 4},
 		{"registry.waiver", "waiver_check", 1 | 2 | 4},
 		{"registry.waiver_notice", "waiver_notice_check", 1 | 2 | 4},
 		{"registry.waiver_notice", "waiver_notice_open_sys_period", 1 | 2 | 4},
