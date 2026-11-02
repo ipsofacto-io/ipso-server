@@ -10,9 +10,20 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/redact"
 )
 
-// decisionLike is the deterministic filter in front of the LLM. It keeps text that does not read
-// like a decision off the wire. Its precision and recall are measured with IPSO-59.
-var decisionLike = regexp.MustCompile(`(?i)\b(we|team)\s+(have\s+)?(decided|agreed|chose|will\s+use|are\s+going\s+with)\b|\bdecision\s*:|\blet'?s\s+(go|stick)\s+with\b|\bwe\s+should\s+standardi[sz]e\b|\bgoing\s+forward\b`)
+// decisionLike is the classifier in front of the LLM. It keeps text that does not read like a
+// decision off the wire: a group that decided, agreed, chose, settled, standardized, or is moving
+// to something; a stated outcome ("decision:", "the decision is", "outcomes from the", "as
+// decided"); something deprecated or retired; a change from now on; and the same
+// first-person-plural verbs in Italian, German, French, and Spanish. The eval harness measures
+// its precision and recall (ADR-0085).
+var decisionLike = regexp.MustCompile(`(?i)` +
+	`\b(we|team)\s+(have\s+|'ve\s+)?(decided|agreed|chose|settled\s+on|standardi[sz]ed\s+on|will\s+use|are\s+going\s+with)\b` +
+	`|\bwe('re|\s+are)\s+(going|moving|switching|standardi[sz]ing)\s+(\S+\s+){0,3}?(with|to|on)\b|\bwe\s+should\s+standardi[sz]e\b` +
+	`|\boutcomes?\s+(from|of)\s+the\b|\b(is|are)\s+(now\s+)?(deprecated|retired)\b` +
+	`|\b(decision|settled|rule\s+from\s+today)\s*:|\bthe\s+decision\s+is\b|\bas\s+decided\b|\blet'?s\s+(go|stick)\s+with\b` +
+	`|\b(going\s+forward|from\s+now\s+on|from\s+(today|this\s+release)\s+on)\b` +
+	`|\babbiamo\s+(deciso|scelto|concordato)\b|\bwir\s+haben\s+(uns\s+)?(entschieden|beschlossen)\b` +
+	`|\b(nous\s+avons|on\s+a)\s+(d[ée]cid[ée]|choisi)|\b(hemos\s+decidido|decidimos)\b`)
 
 // injectionMarkers are lowercase, whitespace-collapsed phrases that address a model rather than a
 // reader. A comment that holds one is not sent to the LLM. This list is one control among
@@ -86,10 +97,13 @@ func grounded(title, statement string) bool {
 	return false
 }
 
+// subjectWords returns the distinct words of a text that are not filler.
 func subjectWords(text string) []string {
 	var words []string
+	seen := map[string]bool{}
 	for _, word := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
-		if utf8.RuneCountInString(word) >= 2 && !fillerWords[word] {
+		if utf8.RuneCountInString(word) >= 2 && !fillerWords[word] && !seen[word] {
+			seen[word] = true
 			words = append(words, word)
 		}
 	}

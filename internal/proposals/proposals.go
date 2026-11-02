@@ -31,6 +31,8 @@ const (
 	maxTitleRunes  = 120
 	maxFieldRunes  = 1000
 	maxOutputBytes = 64 << 10
+	// maxKnownProposals bounds how many pending proposals Dedupe compares against.
+	maxKnownProposals = 2000
 )
 
 //go:embed prompts/pr-decision-v2.txt
@@ -71,6 +73,8 @@ type Stats struct {
 	Flagged   int
 	Sent      int
 	Refused   int
+	// Duplicates counts proposals dropped because the tenant already has the decision.
+	Duplicates int
 }
 
 type selected struct {

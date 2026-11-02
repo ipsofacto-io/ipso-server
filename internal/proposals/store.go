@@ -35,11 +35,44 @@ func Process(ctx context.Context, db *sql.DB, complete CompleteFunc, tenant uuid
 	found, stats, err := Extract(ctx, complete, repo, number, comments, func(externalID string, digest [32]byte) bool {
 		return known[sourceKey(externalID, digest[:])]
 	})
+	if err != nil || len(found) == 0 {
+		return 0, stats, err
+	}
+	decided, err := knownDecisions(ctx, db, tenant)
 	if err != nil {
 		return 0, stats, err
 	}
+	found, stats.Duplicates = Dedupe(found, decided)
 	created, err := insert(ctx, db, tenant, found)
 	return created, stats, err
+}
+
+// knownDecisions returns the titles of the tenant's decisions in force and the text of its
+// pending proposals, newest first, for Dedupe.
+func knownDecisions(ctx context.Context, db *sql.DB, tenant uuid.UUID) ([]string, error) {
+	var texts []string
+	err := tenantTx(ctx, db, tenant, true, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT body->>'title' FROM registry.decision_version
+			WHERE tenant_id = $1 AND valid_period @> clock_timestamp() AND body ? 'title'
+			UNION ALL
+			(SELECT concat_ws(' ', payload->>'title', payload->>'statement') FROM proposals.proposal
+			 WHERE tenant_id = $1 AND status = 'pending'
+			 ORDER BY id DESC LIMIT $2)`, tenant, maxKnownProposals)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var text string
+			if err := rows.Scan(&text); err != nil {
+				return err
+			}
+			texts = append(texts, text)
+		}
+		return rows.Err()
+	})
+	return texts, err
 }
 
 func sourceKey(externalID string, digest []byte) string {

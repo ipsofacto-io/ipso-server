@@ -178,6 +178,46 @@ func TestRedTeamEndToEndLeavesOnlyPending(t *testing.T) {
 	}
 }
 
+// TestProcessDedupesAgainstTheRegistryAndPendingProposals proposes a decision once: not when a
+// decision in force has its title, and not when a pending proposal already states it (ADR-0085).
+func TestProcessDedupesAgainstTheRegistryAndPendingProposals(t *testing.T) {
+	db := newDB(t)
+	var scope uuid.UUID
+	if err := db.QueryRowContext(t.Context(), `
+		INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1, NULL, 'org', 'acme') RETURNING id`,
+		tenantA).Scan(&scope); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `
+		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
+		VALUES (gen_random_uuid(), 1, $1, '{"title": "Use Postgres for new services"}', ARRAY[$2::uuid], '[2026-01-01,)')`,
+		tenantA, scope); err != nil {
+		t.Fatal(err)
+	}
+
+	inRegistry := &fakeLLM{answer: oneCandidate}
+	created, stats, err := Process(t.Context(), db, inRegistry.complete, tenantA, testRepo, testNumber, []integrations.Comment{comment(1, "We decided to use Postgres for new services.")})
+	if err != nil || created != 0 || stats.Duplicates != 1 {
+		t.Fatalf("decision in force: created %d stats %+v err %v", created, stats, err)
+	}
+
+	natsAnswer := `{"candidates":[{"source":0,"title":"Use NATS for events","statement":"Services publish events on NATS.","rationale":"","confidence":0.8}]}`
+	first := &fakeLLM{answer: natsAnswer}
+	if created, _, err := Process(t.Context(), db, first.complete, tenantA, testRepo, testNumber, []integrations.Comment{comment(2, "We decided to use NATS for events.")}); err != nil || created != 1 {
+		t.Fatalf("first NATS proposal: created %d err %v", created, err)
+	}
+	again := &fakeLLM{answer: natsAnswer}
+	created, stats, err = Process(t.Context(), db, again.complete, tenantA, testRepo, testNumber+1, []integrations.Comment{commentOn(testNumber+1, 3, "We agreed again that services publish events on NATS.")})
+	if err != nil || created != 0 || stats.Duplicates != 1 {
+		t.Fatalf("pending proposal: created %d stats %+v err %v", created, stats, err)
+	}
+	// Another tenant has neither, so it gets the proposal.
+	other := &fakeLLM{answer: natsAnswer}
+	if created, _, err := Process(t.Context(), db, other.complete, tenantB, testRepo, testNumber, []integrations.Comment{comment(2, "We decided to use NATS for events.")}); err != nil || created != 1 {
+		t.Fatalf("other tenant: created %d err %v", created, err)
+	}
+}
+
 func TestInboxPages(t *testing.T) {
 	db := newDB(t)
 	llm := &fakeLLM{answer: oneCandidate}
