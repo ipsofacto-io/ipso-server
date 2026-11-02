@@ -49,11 +49,13 @@ jobs:
           curl -fsSL -o model.gguf "$MODEL_URL"
           printf '%s  llama.tar.gz\n%s  model.gguf\n' "$LLAMA_SHA256" "$MODEL_SHA256" | sha256sum -c -
           tar xzf llama.tar.gz
+          # One CPU kernel and a fixed batch on every runner, so a rerun reproduces the recording.
+          find "llama-${LLAMA_BUILD}" -name 'libggml-cpu-*.so' ! -name 'libggml-cpu-haswell.so' -delete
           key=$(openssl rand -hex 24)
           echo "::add-mask::$key"
           echo "IPSO_LLM_LOCAL=$key" >> "$GITHUB_ENV"
           LLAMA_API_KEY="$key" nohup "llama-${LLAMA_BUILD}/llama-server" -m model.gguf --alias qwen3-4b-q4_k_m --host 127.0.0.1 --port 8080 \
-            --ctx-size 8192 --parallel 1 --seed 0 --chat-template-kwargs '{"enable_thinking":false}' --threads "$(nproc)" > llama.log 2>&1 &
+            --ctx-size 8192 --parallel 1 --no-cache-prompt --seed 0 --chat-template-kwargs '{"enable_thinking":false}' --threads 4 > llama.log 2>&1 &
           for _ in $(seq 120); do
             curl -fs http://127.0.0.1:8080/health >/dev/null && exit 0
             sleep 2
