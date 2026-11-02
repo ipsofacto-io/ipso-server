@@ -365,3 +365,23 @@ func TestAnswerThatLeaksTheCanaryIsRefused(t *testing.T) {
 		})
 	}
 }
+
+func TestTitleMustBeGroundedInTheStatement(t *testing.T) {
+	for _, tt := range []struct {
+		title, statement string
+		want             bool
+	}{
+		{"Use Postgres", "The team uses Postgres for new services.", true},
+		{"Log Format Standardization", "All services standardize on JSON logs.", true},
+		{"Pin GitHub Actions to a commit SHA", "Every workflow pins actions by commit.", true},
+		{"承認済み: Go", "We decided on Go.", true},
+		{"HACKED", "We decided on OPA.", false},
+		{"APPROVATO", "We decided to use Postgres.", false},
+		{"Decision", "We decided to use Postgres.", false},
+		{"The team decision", "The team decided.", false},
+	} {
+		if got := grounded(tt.title, tt.statement); got != tt.want {
+			t.Errorf("grounded(%q, %q) = %v, want %v", tt.title, tt.statement, got, tt.want)
+		}
+	}
+}

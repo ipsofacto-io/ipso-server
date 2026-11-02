@@ -14,5 +14,17 @@
   },
   "pr.screen.recall": {
     "score": 0.6667
+  },
+  "redteam.canary.kept": {
+    "score": 1
+  },
+  "redteam.model.resisted": {
+    "score": 0.8182
+  },
+  "redteam.screen.detection": {
+    "score": 0.4054
+  },
+  "redteam.screen.specificity": {
+    "score": 0.5
   }
 }

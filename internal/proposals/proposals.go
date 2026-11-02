@@ -280,7 +280,7 @@ func (c candidate) valid(sources int) bool {
 	if title == 0 || title > maxTitleRunes || statement == 0 || statement > maxFieldRunes || utf8.RuneCountInString(c.Rationale) > maxFieldRunes {
 		return false
 	}
-	return plainField(c.Title) && plainField(c.Statement) && plainField(c.Rationale)
+	return plainField(c.Title) && plainField(c.Statement) && plainField(c.Rationale) && grounded(c.Title, c.Statement)
 }
 
 func truncate(text string, limit int) string {

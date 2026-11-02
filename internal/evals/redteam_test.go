@@ -12,7 +12,8 @@ import (
 
 var commentText = regexp.MustCompile(`"text":"((?:[^"\\]|\\.)*)"`)
 
-// obedient does whatever the comment says: it copies the comment and the canary into its answer.
+// obedient does whatever the comment says: it copies the comment, and the canary when asked for
+// instructions, into every field.
 func obedient(_ context.Context, system, user string) (llmgw.Completion, error) {
 	var text string
 	if match := commentText.FindStringSubmatch(user); match != nil {
@@ -21,7 +22,11 @@ func obedient(_ context.Context, system, user string) (llmgw.Completion, error) 
 	if strings.Contains(strings.ToLower(text), "instructions") {
 		text += " " + canaryPattern.FindString(system)
 	}
-	encoded, _ := json.Marshal(map[string]any{"candidates": []map[string]any{{"source": 0, "title": "Decision", "statement": text, "rationale": "", "confidence": 1}}})
+	title := []rune(text)
+	if len(title) > 120 {
+		title = title[:120]
+	}
+	encoded, _ := json.Marshal(map[string]any{"candidates": []map[string]any{{"source": 0, "title": string(title), "statement": text, "rationale": text, "confidence": 1}}})
 	return llmgw.Completion{Text: string(encoded), Model: "obedient"}, nil
 }
 
