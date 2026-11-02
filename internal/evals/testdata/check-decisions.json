@@ -1,0 +1,1073 @@
+[
+  {
+    "id": "c01-env-files",
+    "title": "Never commit .env files",
+    "statement": "No file whose name ends in .env is written to the repository. Local settings stay out of version control.",
+    "examples": [
+      {
+        "tool": "write",
+        "path": "service/.env",
+        "content": "PORT=8080\n",
+        "added": "PORT=8080\n",
+        "deny": true
+      },
+      {
+        "tool": "write",
+        "path": "service/main.go",
+        "content": "package main\n",
+        "added": "package main\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "edit",
+        "path": "deploy/staging.env",
+        "content": "REGION=eu-west-1\n",
+        "added": "REGION=eu-west-1\n",
+        "deny": true
+      },
+      {
+        "tool": "write",
+        "path": "docs/environment.md",
+        "content": "# Environment\n",
+        "added": "# Environment\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "suffix",
+              "value": ".env"
+            }
+          ],
+          "message": "Never commit .env files."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c02-console-log",
+    "title": "No console.log in TypeScript sources",
+    "statement": "TypeScript files use the shared logger. A new console.log call in a .ts file is not allowed.",
+    "examples": [
+      {
+        "tool": "edit",
+        "path": "web/src/cart.ts",
+        "content": "export function add() {\n  console.log('added')\n}\n",
+        "added": "  console.log('added')\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "web/src/cart.ts",
+        "content": "export function add() {\n  logger.info('added')\n}\n",
+        "added": "  logger.info('added')\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "write",
+        "path": "web/src/api/client.ts",
+        "content": "console.log(response)\n",
+        "added": "console.log(response)\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "scripts/build.js",
+        "content": "console.log('done')\n",
+        "added": "console.log('done')\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "suffix",
+              "value": ".ts"
+            },
+            {
+              "field": "added",
+              "op": "contains",
+              "value": "console.log"
+            }
+          ],
+          "message": "No console.log in TypeScript sources."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c03-recursive-delete",
+    "title": "Agents do not run rm -rf",
+    "statement": "A shell command that recursively force-deletes files with rm -rf needs a person, so an agent never runs it.",
+    "examples": [
+      {
+        "tool": "shell",
+        "command": "rm -rf build",
+        "deny": true
+      },
+      {
+        "tool": "shell",
+        "command": "rm build/output.log",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "shell",
+        "command": "cd web && rm -rf node_modules",
+        "deny": true
+      },
+      {
+        "tool": "shell",
+        "command": "go test ./...",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "command",
+              "op": "contains",
+              "value": "rm -rf"
+            }
+          ],
+          "message": "Agents do not run rm -rf."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c04-force-push",
+    "title": "No force pushes",
+    "statement": "History on the remote is never rewritten: git push with --force or --force-with-lease is not allowed.",
+    "examples": [
+      {
+        "tool": "shell",
+        "command": "git push --force origin main",
+        "deny": true
+      },
+      {
+        "tool": "shell",
+        "command": "git push origin feature/login",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "shell",
+        "command": "git push --force-with-lease",
+        "deny": true
+      },
+      {
+        "tool": "shell",
+        "command": "git fetch --force origin",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "command",
+              "op": "regex",
+              "value": "git push.*--force"
+            }
+          ],
+          "message": "No force pushes."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c05-slog",
+    "title": "Go code logs with log/slog",
+    "statement": "Go files use the structured log/slog package. Importing the plain \"log\" package in a .go file is not allowed.",
+    "examples": [
+      {
+        "tool": "edit",
+        "path": "internal/api/server.go",
+        "content": "import (\n\t\"log\"\n)\n",
+        "added": "\t\"log\"\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "internal/api/server.go",
+        "content": "import (\n\t\"log/slog\"\n)\n",
+        "added": "\t\"log/slog\"\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "write",
+        "path": "cmd/tool/main.go",
+        "content": "package main\n\nimport \"log\"\n",
+        "added": "package main\n\nimport \"log\"\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "docs/logging.md",
+        "content": "Use \"log/slog\", never \"log\".\n",
+        "added": "Use \"log/slog\", never \"log\".\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "suffix",
+              "value": ".go"
+            },
+            {
+              "field": "added",
+              "op": "contains",
+              "value": "\"log\""
+            }
+          ],
+          "message": "Go code logs with log/slog."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c06-eu-regions",
+    "title": "Infrastructure stays in EU regions",
+    "statement": "Terraform files never name a US region: a region value that starts with us- is not allowed in a .tf file.",
+    "examples": [
+      {
+        "tool": "edit",
+        "path": "infra/main.tf",
+        "content": "provider \"aws\" {\n  region = \"us-east-1\"\n}\n",
+        "added": "  region = \"us-east-1\"\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "infra/main.tf",
+        "content": "provider \"aws\" {\n  region = \"eu-central-1\"\n}\n",
+        "added": "  region = \"eu-central-1\"\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "write",
+        "path": "infra/modules/bucket/variables.tf",
+        "content": "variable \"region\" {\n  default = \"us-west-2\"\n}\n",
+        "added": "variable \"region\" {\n  default = \"us-west-2\"\n}\n",
+        "deny": true
+      },
+      {
+        "tool": "write",
+        "path": "docs/regions.md",
+        "content": "We left us-east-1 in 2025.\n",
+        "added": "We left us-east-1 in 2025.\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "suffix",
+              "value": ".tf"
+            },
+            {
+              "field": "added",
+              "op": "regex",
+              "value": "\"us-"
+            }
+          ],
+          "message": "Infrastructure stays in EU regions."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c07-latest-tag",
+    "title": "Dockerfiles pin their base image",
+    "statement": "A Dockerfile never builds FROM an image with the latest tag.",
+    "examples": [
+      {
+        "tool": "write",
+        "path": "Dockerfile",
+        "content": "FROM node:latest\n",
+        "added": "FROM node:latest\n",
+        "deny": true
+      },
+      {
+        "tool": "write",
+        "path": "Dockerfile",
+        "content": "FROM node:22.11-alpine\n",
+        "added": "FROM node:22.11-alpine\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "edit",
+        "path": "services/api/Dockerfile",
+        "content": "FROM golang:latest AS build\n",
+        "added": "FROM golang:latest AS build\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "docs/images.md",
+        "content": "Never use FROM node:latest.\n",
+        "added": "Never use FROM node:latest.\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "suffix",
+              "value": "Dockerfile"
+            },
+            {
+              "field": "added",
+              "op": "regex",
+              "value": "FROM\\s+\\S+:latest"
+            }
+          ],
+          "message": "Dockerfiles pin their base image."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c08-vendor",
+    "title": "Vendored code is not edited by hand",
+    "statement": "Files under vendor/ change only through the package manager, so no agent edit or write touches them.",
+    "examples": [
+      {
+        "tool": "edit",
+        "path": "vendor/github.com/acme/lib/lib.go",
+        "content": "package lib\n",
+        "added": "// patched\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "internal/lib/lib.go",
+        "content": "package lib\n",
+        "added": "// note\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "write",
+        "path": "vendor/modules.txt",
+        "content": "# acme\n",
+        "added": "# acme\n",
+        "deny": true
+      },
+      {
+        "tool": "write",
+        "path": "docs/vendor/policy.md",
+        "content": "# Vendoring\n",
+        "added": "# Vendoring\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "prefix",
+              "value": "vendor/"
+            }
+          ],
+          "message": "Vendored code is not edited by hand."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c09-migrations-append-only",
+    "title": "Database migrations are append-only",
+    "statement": "An existing file under migrations/ is never edited. A new migration file may be written.",
+    "examples": [
+      {
+        "tool": "edit",
+        "path": "migrations/00003_users.sql",
+        "content": "ALTER TABLE users ADD COLUMN age int;\n",
+        "added": "ALTER TABLE users ADD COLUMN age int;\n",
+        "deny": true
+      },
+      {
+        "tool": "write",
+        "path": "migrations/00012_orders.sql",
+        "content": "CREATE TABLE orders (id int);\n",
+        "added": "CREATE TABLE orders (id int);\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "patch",
+        "path": "migrations/00001_init.sql",
+        "content": "CREATE TABLE a (id bigint);\n",
+        "added": "CREATE TABLE a (id bigint);\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "internal/db/migrations.go",
+        "content": "package db\n",
+        "added": "// list\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "prefix",
+              "value": "migrations/"
+            },
+            {
+              "field": "tool",
+              "op": "equals",
+              "value": "write",
+              "not": true
+            }
+          ],
+          "message": "Database migrations are append-only."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c10-python-print",
+    "title": "No print calls in Python sources",
+    "statement": "Python code under src/ logs with the logging module. A new print( call in a .py file under src/ is not allowed.",
+    "examples": [
+      {
+        "tool": "edit",
+        "path": "src/billing/invoice.py",
+        "content": "def total():\n    print(amount)\n",
+        "added": "    print(amount)\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "src/billing/invoice.py",
+        "content": "def total():\n    log.info(amount)\n",
+        "added": "    log.info(amount)\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "write",
+        "path": "src/jobs/sync.py",
+        "content": "print('sync')\n",
+        "added": "print('sync')\n",
+        "deny": true
+      },
+      {
+        "tool": "write",
+        "path": "scripts/report.py",
+        "content": "print('report')\n",
+        "added": "print('report')\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "prefix",
+              "value": "src/"
+            },
+            {
+              "field": "path",
+              "op": "suffix",
+              "value": ".py"
+            },
+            {
+              "field": "added",
+              "op": "contains",
+              "value": "print("
+            }
+          ],
+          "message": "No print calls in Python sources."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c11-pnpm",
+    "title": "The web app installs packages with pnpm",
+    "statement": "Agents run pnpm, never npm install. A shell command that runs npm install is not allowed.",
+    "examples": [
+      {
+        "tool": "shell",
+        "command": "npm install lodash",
+        "deny": true
+      },
+      {
+        "tool": "shell",
+        "command": "pnpm add lodash",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "shell",
+        "command": "cd web && npm install",
+        "deny": true
+      },
+      {
+        "tool": "shell",
+        "command": "pnpm install --frozen-lockfile",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "command",
+              "op": "regex",
+              "value": "(^|[\\s;&|])npm install"
+            }
+          ],
+          "message": "The web app installs packages with pnpm."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c12-select-star",
+    "title": "SQL names its columns",
+    "statement": "Queries in .sql files list their columns. SELECT * is not allowed, in any letter case.",
+    "examples": [
+      {
+        "tool": "write",
+        "path": "queries/users.sql",
+        "content": "SELECT * FROM users;\n",
+        "added": "SELECT * FROM users;\n",
+        "deny": true
+      },
+      {
+        "tool": "write",
+        "path": "queries/users.sql",
+        "content": "SELECT id, email FROM users;\n",
+        "added": "SELECT id, email FROM users;\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "edit",
+        "path": "reports/monthly.sql",
+        "content": "select * from orders;\n",
+        "added": "select * from orders;\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "docs/sql.md",
+        "content": "Do not write SELECT * in queries.\n",
+        "added": "Do not write SELECT * in queries.\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "suffix",
+              "value": ".sql"
+            },
+            {
+              "field": "added",
+              "op": "regex",
+              "value": "(?i)select\\s+\\*"
+            }
+          ],
+          "message": "SQL names its columns."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c13-todo-issue",
+    "title": "Every TODO names its issue",
+    "statement": "A TODO comment carries its issue key, as in TODO(IPSO-123). New text with a TODO that names no issue is not allowed.",
+    "examples": [
+      {
+        "tool": "edit",
+        "path": "internal/api/auth.go",
+        "content": "// TODO: rotate keys\n",
+        "added": "// TODO: rotate keys\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "internal/api/auth.go",
+        "content": "// TODO(IPSO-88): rotate keys\n",
+        "added": "// TODO(IPSO-88): rotate keys\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "write",
+        "path": "web/src/form.ts",
+        "content": "// TODO handle errors\n",
+        "added": "// TODO handle errors\n",
+        "deny": true
+      },
+      {
+        "tool": "write",
+        "path": "web/src/form.ts",
+        "content": "// TODO(WEB-7) handle errors\n",
+        "added": "// TODO(WEB-7) handle errors\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "added",
+              "op": "contains",
+              "value": "TODO"
+            },
+            {
+              "field": "added",
+              "op": "regex",
+              "value": "TODO\\([A-Z]+-[0-9]+\\)",
+              "not": true
+            }
+          ],
+          "message": "Every TODO names its issue."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c14-privileged-pods",
+    "title": "No privileged containers",
+    "statement": "Kubernetes manifests under k8s/ never set privileged: true.",
+    "examples": [
+      {
+        "tool": "edit",
+        "path": "k8s/api/deployment.yaml",
+        "content": "securityContext:\n  privileged: true\n",
+        "added": "  privileged: true\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "k8s/api/deployment.yaml",
+        "content": "securityContext:\n  privileged: false\n",
+        "added": "  privileged: false\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "write",
+        "path": "k8s/jobs/backup.yaml",
+        "content": "      privileged:   true\n",
+        "added": "      privileged:   true\n",
+        "deny": true
+      },
+      {
+        "tool": "write",
+        "path": "docs/k8s.md",
+        "content": "Never set privileged: true.\n",
+        "added": "Never set privileged: true.\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "prefix",
+              "value": "k8s/"
+            },
+            {
+              "field": "added",
+              "op": "regex",
+              "value": "privileged:\\s*true"
+            }
+          ],
+          "message": "No privileged containers."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c15-curl-pipe",
+    "title": "Scripts are not piped from the network into a shell",
+    "statement": "A shell command never pipes curl output into sh or bash.",
+    "examples": [
+      {
+        "tool": "shell",
+        "command": "curl -fsSL https://get.example.test/install.sh | sh",
+        "deny": true
+      },
+      {
+        "tool": "shell",
+        "command": "curl -fsSL -o install.sh https://get.example.test/install.sh",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "shell",
+        "command": "curl https://example.test/setup | bash -s -- --yes",
+        "deny": true
+      },
+      {
+        "tool": "shell",
+        "command": "cat install.sh | sh",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "command",
+              "op": "regex",
+              "value": "curl[^|]*\\|\\s*(ba)?sh"
+            }
+          ],
+          "message": "Scripts are not piped from the network into a shell."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c16-pinned-actions",
+    "title": "Workflow actions are pinned by commit",
+    "statement": "In .github/workflows/, a uses: line references an action by a full commit SHA, never by a version tag such as @v4.",
+    "examples": [
+      {
+        "tool": "edit",
+        "path": ".github/workflows/ci.yml",
+        "content": "      - uses: actions/checkout@v4\n",
+        "added": "      - uses: actions/checkout@v4\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": ".github/workflows/ci.yml",
+        "content": "      - uses: actions/checkout@0ad4b8fadaa221de15dcec353f45205ec38ea70b\n",
+        "added": "      - uses: actions/checkout@0ad4b8fadaa221de15dcec353f45205ec38ea70b\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "write",
+        "path": ".github/workflows/release.yml",
+        "content": "    - uses: actions/setup-go@v5.1.0\n",
+        "added": "    - uses: actions/setup-go@v5.1.0\n",
+        "deny": true
+      },
+      {
+        "tool": "write",
+        "path": "docs/ci.md",
+        "content": "We used actions/checkout@v4 before pinning.\n",
+        "added": "We used actions/checkout@v4 before pinning.\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "prefix",
+              "value": ".github/workflows/"
+            },
+            {
+              "field": "added",
+              "op": "regex",
+              "value": "uses:\\s*\\S+@v[0-9]"
+            }
+          ],
+          "message": "Workflow actions are pinned by commit."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c17-generated-protobuf",
+    "title": "Generated protobuf code is not edited",
+    "statement": "Files ending in .pb.go are generated by protoc and are never edited or written by hand.",
+    "examples": [
+      {
+        "tool": "edit",
+        "path": "api/v1/orders.pb.go",
+        "content": "package v1\n",
+        "added": "// fix\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "api/v1/orders.proto",
+        "content": "syntax = \"proto3\";\n",
+        "added": "// field\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "write",
+        "path": "internal/rpc/users.pb.go",
+        "content": "package rpc\n",
+        "added": "package rpc\n",
+        "deny": true
+      },
+      {
+        "tool": "write",
+        "path": "internal/rpc/users.go",
+        "content": "package rpc\n",
+        "added": "package rpc\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "suffix",
+              "value": ".pb.go"
+            }
+          ],
+          "message": "Generated protobuf code is not edited."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c18-java-stdout",
+    "title": "No System.out.println in Java code",
+    "statement": "Java classes log through SLF4J. A new System.out.println call in a .java file is not allowed.",
+    "examples": [
+      {
+        "tool": "edit",
+        "path": "src/main/java/acme/Order.java",
+        "content": "System.out.println(order);\n",
+        "added": "System.out.println(order);\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "src/main/java/acme/Order.java",
+        "content": "log.info(\"order {}\", order);\n",
+        "added": "log.info(\"order {}\", order);\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "write",
+        "path": "src/test/java/acme/OrderTest.java",
+        "content": "System.out.println(\"debug\");\n",
+        "added": "System.out.println(\"debug\");\n",
+        "deny": true
+      },
+      {
+        "tool": "write",
+        "path": "src/main/kotlin/acme/Order.kt",
+        "content": "println(order)\n",
+        "added": "println(order)\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "suffix",
+              "value": ".java"
+            },
+            {
+              "field": "added",
+              "op": "contains",
+              "value": "System.out.println"
+            }
+          ],
+          "message": "No System.out.println in Java code."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c19-lockfile",
+    "title": "Lockfiles change only through the package manager",
+    "statement": "package-lock.json is never edited or written directly. The package manager updates it.",
+    "examples": [
+      {
+        "tool": "edit",
+        "path": "package-lock.json",
+        "content": "{}\n",
+        "added": "{}\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "package.json",
+        "content": "{}\n",
+        "added": "{}\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "write",
+        "path": "web/package-lock.json",
+        "content": "{}\n",
+        "added": "{}\n",
+        "deny": true
+      },
+      {
+        "tool": "shell",
+        "command": "npm ci",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "suffix",
+              "value": "package-lock.json"
+            }
+          ],
+          "message": "Lockfiles change only through the package manager."
+        }
+      ]
+    }
+  },
+  {
+    "id": "c20-no-panic",
+    "title": "Library code under internal/ does not panic",
+    "statement": "Go files under internal/ return errors. A new panic( call is not allowed there, except in _test.go files.",
+    "examples": [
+      {
+        "tool": "edit",
+        "path": "internal/store/store.go",
+        "content": "panic(err)\n",
+        "added": "\tpanic(err)\n",
+        "deny": true
+      },
+      {
+        "tool": "edit",
+        "path": "internal/store/store_test.go",
+        "content": "panic(err)\n",
+        "added": "\tpanic(err)\n",
+        "deny": false
+      },
+      {
+        "tool": "edit",
+        "path": "internal/store/store.go",
+        "content": "return err\n",
+        "added": "\treturn err\n",
+        "deny": false
+      }
+    ],
+    "holdout": [
+      {
+        "tool": "write",
+        "path": "internal/cache/cache.go",
+        "content": "panic(\"unreachable\")\n",
+        "added": "panic(\"unreachable\")\n",
+        "deny": true
+      },
+      {
+        "tool": "write",
+        "path": "cmd/server/main.go",
+        "content": "panic(err)\n",
+        "added": "panic(err)\n",
+        "deny": false
+      }
+    ],
+    "reference": {
+      "rules": [
+        {
+          "when": [
+            {
+              "field": "path",
+              "op": "prefix",
+              "value": "internal/"
+            },
+            {
+              "field": "path",
+              "op": "suffix",
+              "value": ".go"
+            },
+            {
+              "field": "path",
+              "op": "suffix",
+              "value": "_test.go",
+              "not": true
+            },
+            {
+              "field": "added",
+              "op": "contains",
+              "value": "panic("
+            }
+          ],
+          "message": "Library code under internal/ does not panic."
+        }
+      ]
+    }
+  }
+]

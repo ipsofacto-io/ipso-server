@@ -2,6 +2,7 @@ package proposals
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
+	"github.com/ipsofacto-io/ipso/pkg/rulecheck"
 )
 
 const (
@@ -125,45 +127,16 @@ func tenantTx(ctx context.Context, db *sql.DB, tenant uuid.UUID, readOnly bool, 
 // TenantFunc returns the authenticated tenant. Handler reads no tenant from the request.
 type TenantFunc func(*http.Request) (uuid.UUID, bool)
 
-// Handler returns the inbox route, GET /v1/proposals. The binary does not serve it. The control
-// plane mounts it with the tenant from the token. A missing tenant is 401 and runs no query. A
-// query key tenant or tenant_id is 400 and runs no query. Another tenant's rows are never read.
+// Handler returns the review routes, GET /v1/proposals for decision proposals and
+// GET /v1/check-proposals for drafted checks. The binary does not serve them. The control plane
+// mounts them with the tenant from the token. A missing tenant is 401 and runs no query. A query
+// key tenant or tenant_id is 400 and runs no query. Another tenant's rows are never read.
 func Handler(db *sql.DB, tenantFrom TenantFunc) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/proposals", func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query()
-		for key := range query {
-			if strings.EqualFold(key, "tenant") || strings.EqualFold(key, "tenant_id") {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid query"})
-				return
-			}
-		}
-		if tenantFrom == nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		tenant, before, limit, ok := readPage(w, r, tenantFrom)
+		if !ok {
 			return
-		}
-		tenant, ok := tenantFrom(r)
-		if !ok || tenant == uuid.Nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
-		}
-		limit := defaultPage
-		if raw := query.Get("limit"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil || parsed < 1 || parsed > maxPage {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid query"})
-				return
-			}
-			limit = parsed
-		}
-		var before any
-		if raw := query.Get("before"); raw != "" {
-			parsed, err := uuid.Parse(raw)
-			if err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid query"})
-				return
-			}
-			before = parsed
 		}
 		items, err := inbox(r.Context(), db, tenant, before, limit)
 		if err != nil {
@@ -172,7 +145,59 @@ func Handler(db *sql.DB, tenantFrom TenantFunc) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"proposals": items})
 	})
+	mux.HandleFunc("GET /v1/check-proposals", func(w http.ResponseWriter, r *http.Request) {
+		tenant, before, limit, ok := readPage(w, r, tenantFrom)
+		if !ok {
+			return
+		}
+		items, err := checkInbox(r.Context(), db, tenant, before, limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"check_proposals": items})
+	})
 	return mux
+}
+
+// readPage reads the tenant and the page of a review request. When the request cannot be served,
+// it writes the answer and returns false.
+func readPage(w http.ResponseWriter, r *http.Request, tenantFrom TenantFunc) (uuid.UUID, any, int, bool) {
+	query := r.URL.Query()
+	for key := range query {
+		if strings.EqualFold(key, "tenant") || strings.EqualFold(key, "tenant_id") {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid query"})
+			return uuid.Nil, nil, 0, false
+		}
+	}
+	if tenantFrom == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return uuid.Nil, nil, 0, false
+	}
+	tenant, ok := tenantFrom(r)
+	if !ok || tenant == uuid.Nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return uuid.Nil, nil, 0, false
+	}
+	limit := defaultPage
+	if raw := query.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > maxPage {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid query"})
+			return uuid.Nil, nil, 0, false
+		}
+		limit = parsed
+	}
+	var before any
+	if raw := query.Get("before"); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid query"})
+			return uuid.Nil, nil, 0, false
+		}
+		before = parsed
+	}
+	return tenant, before, limit, true
 }
 
 type inboxItem struct {
@@ -223,6 +248,54 @@ func inbox(ctx context.Context, db *sql.DB, tenant uuid.UUID, before any, limit 
 	return items, nil
 }
 
+type checkInboxItem struct {
+	ID              uuid.UUID       `json:"id"`
+	Status          string          `json:"status"`
+	DecisionID      uuid.UUID       `json:"decision_id"`
+	DecisionVersion int             `json:"decision_version"`
+	Engine          string          `json:"engine"`
+	Target          string          `json:"target"`
+	Spec            json.RawMessage `json:"spec"`
+	Rego            string          `json:"rego"`
+	Fixtures        json.RawMessage `json:"fixtures"`
+	Repaired        bool            `json:"repaired"`
+	ModelID         string          `json:"model_id"`
+	PromptVersion   string          `json:"prompt_version"`
+	CapturedAt      time.Time       `json:"captured_at"`
+}
+
+func checkInbox(ctx context.Context, db *sql.DB, tenant uuid.UUID, before any, limit int) ([]checkInboxItem, error) {
+	items := []checkInboxItem{}
+	err := tenantTx(ctx, db, tenant, true, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id, status, decision_id, decision_version, engine, target, spec, rego, fixtures, repaired,
+			       model_id, prompt_version, lower(sys_period)
+			FROM proposals.check_proposal
+			WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id < $2::uuid)
+			ORDER BY id DESC
+			LIMIT $3`, tenant, before, limit)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var item checkInboxItem
+			var spec, fixtures []byte
+			if err := rows.Scan(&item.ID, &item.Status, &item.DecisionID, &item.DecisionVersion, &item.Engine, &item.Target, &spec,
+				&item.Rego, &fixtures, &item.Repaired, &item.ModelID, &item.PromptVersion, &item.CapturedAt); err != nil {
+				return err
+			}
+			item.Spec, item.Fixtures = spec, fixtures
+			items = append(items, item)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -231,4 +304,57 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	encoder := json.NewEncoder(w)
 	encoder.SetEscapeHTML(false)
 	_ = encoder.Encode(body)
+}
+
+// ProposeCheck stores a drafted check for review and reports whether it added a row. It writes the
+// Rego again from the rule, compiles it, and runs every fixture before it writes, so a rule that
+// fails one never reaches review, whoever built the Check. The row can only be pending.
+func ProposeCheck(ctx context.Context, db *sql.DB, tenant uuid.UUID, check Check) (bool, error) {
+	if tenant == uuid.Nil {
+		return false, errors.New("no tenant")
+	}
+	if check.DecisionID == uuid.Nil || check.Version < 1 {
+		return false, fmt.Errorf("%w: it names no decision", ErrCheckRequest)
+	}
+	if err := check.Spec.validate(); err != nil {
+		return false, fmt.Errorf("%w: %w", ErrCheckRequest, err)
+	}
+	if err := validFixtures(check.Fixtures); err != nil {
+		return false, err
+	}
+	rego := check.Rego()
+	rule, err := rulecheck.Compile([]byte(rego))
+	if err != nil {
+		return false, err
+	}
+	if problems := failingFixtures(rule, check.Fixtures); len(problems) > 0 {
+		return false, ErrCheckFailed
+	}
+	spec, err := json.Marshal(check.Spec)
+	if err != nil {
+		return false, err
+	}
+	fixtures, err := json.Marshal(check.Fixtures)
+	if err != nil {
+		return false, err
+	}
+	digest := sha256.Sum256([]byte(rego))
+	created := false
+	err = tenantTx(ctx, db, tenant, false, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, `
+			INSERT INTO proposals.check_proposal
+				(tenant_id, decision_id, decision_version, spec, rego, rego_sha256, fixtures, fixtures_total,
+				 fixtures_passed, repaired, model_id, prompt_version)
+			VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $8, $9, $10, $11)
+			ON CONFLICT ON CONSTRAINT check_proposal_once DO NOTHING`,
+			tenant, check.DecisionID, check.Version, string(spec), rego, digest[:], string(fixtures), len(check.Fixtures),
+			check.Repaired, check.Model, check.PromptVersion)
+		if err != nil {
+			return fmt.Errorf("insert a check proposal: %w", err)
+		}
+		rows, err := result.RowsAffected()
+		created = rows == 1
+		return err
+	})
+	return created && err == nil, err
 }

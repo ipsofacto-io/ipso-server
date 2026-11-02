@@ -483,6 +483,7 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 		{"proposals.agent_proposal", "agent_proposal_open_sys_period", 1 | 2 | 4},
 		{"proposals.approval", "approval_approver", 1 | 2 | 4},
 		{"proposals.approval", "approval_open_sys_period", 1 | 2 | 4},
+		{"proposals.check_proposal", "check_proposal_open_sys_period", 1 | 2 | 4},
 		{"registry.baseline", "baseline_fingerprints", 1 | 2 | 4},
 		{"registry.baseline", "baseline_open_sys_period", 1 | 2 | 4},
 		{"registry.decision_version", "decision_version_archive", 1 | 2 | 8 | 16},
