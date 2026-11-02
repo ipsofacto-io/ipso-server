@@ -1,0 +1,18 @@
+{
+  "pr.extract.precision": {
+    "score": 0.9091
+  },
+  "pr.extract.recall": {
+    "score": 0.5556
+  },
+  "pr.extract.valid": {
+    "score": 1,
+    "min": 0.9
+  },
+  "pr.screen.precision": {
+    "score": 0.75
+  },
+  "pr.screen.recall": {
+    "score": 0.6667
+  }
+}

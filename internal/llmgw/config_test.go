@@ -107,6 +107,36 @@ func TestNonEURouteNeedsExplicitBYOK(t *testing.T) {
 	}
 }
 
+func TestOpenAIEndpointTakesHTTPOnlyOnLoopback(t *testing.T) {
+	setKeys(t)
+	cases := map[string]string{
+		"https://api.openai.com/v1":    "https://api.openai.com/v1/chat/completions",
+		"http://127.0.0.1:8080/v1":     "http://127.0.0.1:8080/v1/chat/completions",
+		"http://[::1]:8080/v1/":        "http://[::1]:8080/v1/chat/completions",
+		"http://localhost:11434/v1":    "http://localhost:11434/v1/chat/completions",
+		"http://api.openai.com/v1":     "",
+		"http://10.0.0.5:8080/v1":      "",
+		"http://169.254.169.254/v1":    "",
+		"http://127.0.0.1.nip.io/v1":   "",
+		"http://u:p@127.0.0.1:8080/v1": "",
+		"http://127.0.0.1:8080/v1?a=b": "",
+		"https://api.openai.com:8443":  "",
+		"ftp://127.0.0.1/v1":           "",
+	}
+	for endpoint, want := range cases {
+		route := Route{Name: "own", Provider: OpenAI, Endpoint: endpoint, Model: "m", KeyEnv: "IPSO_LLM_TENANT", AllowNonEU: true}
+		got, err := resolve(route, true)
+		switch {
+		case want == "" && err == nil:
+			t.Errorf("%s: accepted as %s", endpoint, got.url)
+		case want != "" && err != nil:
+			t.Errorf("%s: %v", endpoint, err)
+		case want != "" && (got.url != want || got.eu):
+			t.Errorf("%s: url %s eu %v, want %s and not EU", endpoint, got.url, got.eu, want)
+		}
+	}
+}
+
 func TestTenantRoutesPickOperatorAndOwnRoutes(t *testing.T) {
 	setKeys(t)
 	tenant := uuid.MustParse("00000000-0000-4000-8000-00000000000b")
