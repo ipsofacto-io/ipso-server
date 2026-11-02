@@ -14,7 +14,7 @@ An edit has these fields:
 
 A candidate denies an edit when any of its rules holds, and a rule holds when every condition in "when" holds. Use one to three rules of at most five conditions. To deny either of two cases, write a rule for each. To allow an exception, add a condition for the exception with "not": true.
 
-A condition has a field, an op, a value, and an optional "not": true. The ops:
+A condition has a field, an op, a value, and an optional "not": true. Use "not" only for an exception, or for text that must be present. The ops:
 - equals, prefix, suffix, contains: the field is, starts with, ends with, or holds the value, as plain text with no backslash, including quotes, * and parentheses.
 - glob: the whole field matches a glob; * stays inside one directory, ** crosses them.
 - regex: an RE2 pattern matches anywhere in the field; (?i) ignores case. In JSON, write each backslash twice, as in "\\s+".
@@ -22,9 +22,11 @@ A condition has a field, an op, a value, and an optional "not": true. The ops:
 prefix and suffix suit path: a file kind by name or extension, such as "Makefile" or ".py", and a directory, such as "docs/". For text in content, added, or command, use contains or regex. A missing field is the empty string. Use "added" for text the edit introduces and "content" for what the whole file must hold. Keep the check as general as the decision, not tied to the paths of the examples: it also runs on edits you do not see.
 
 Examples.
-Decision: "Shell scripts start with set -euo pipefail."
-{"difference":"The edits to deny are .sh files whose content lacks set -euo pipefail.","candidates":[{"rules":[{"when":[{"field":"path","op":"suffix","value":".sh"},{"field":"content","op":"contains","value":"set -euo pipefail","not":true}],"message":"Shell scripts start with set -euo pipefail."}]},{"rules":[{"when":[{"field":"path","op":"suffix","value":".sh"},{"field":"content","op":"regex","value":"set\\s+-euo\\s+pipefail","not":true}],"message":"Shell scripts start with set -euo pipefail."}]}]}
+Decision: "Terraform never makes a bucket public."
+{"difference":"The edits to deny add acl = \"public-read\" to .tf files.","candidates":[{"rules":[{"when":[{"field":"path","op":"suffix","value":".tf"},{"field":"added","op":"contains","value":"acl = \"public-read\""}],"message":"Terraform never makes a bucket public."}]},{"rules":[{"when":[{"field":"path","op":"suffix","value":".tf"},{"field":"added","op":"regex","value":"acl\\s*=\\s*\"public-read\""}],"message":"Terraform never makes a bucket public."}]}]}
 Decision: "Agents never run terraform destroy."
 {"difference":"The commands to deny run terraform destroy.","candidates":[{"rules":[{"when":[{"field":"command","op":"regex","value":"terraform\\s+destroy"}],"message":"Agents never run terraform destroy."}]}]}
 Decision: "Generated code under gen/ is not edited, except gen/README.md."
 {"difference":"The edits to deny change files under gen/ other than gen/README.md.","candidates":[{"rules":[{"when":[{"field":"path","op":"prefix","value":"gen/"},{"field":"path","op":"equals","value":"gen/README.md","not":true}],"message":"Generated code under gen/ is not edited."}]}]}
+Decision: "Shell scripts start with set -euo pipefail."
+{"difference":"The edits to deny are .sh files whose content lacks set -euo pipefail.","candidates":[{"rules":[{"when":[{"field":"path","op":"suffix","value":".sh"},{"field":"content","op":"contains","value":"set -euo pipefail","not":true}],"message":"Shell scripts start with set -euo pipefail."}]}]}

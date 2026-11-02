@@ -22,6 +22,8 @@ var envFixtures = []Fixture{
 
 const envRule = `{"rules":[{"when":[{"field":"path","op":"suffix","value":".env"}],"message":"Do not commit .env files."}]}`
 
+var wrongRule = strings.Replace(envRule, `".env"`, `".go"`, 1)
+
 // answer is a model answer that holds these candidate rules.
 func answer(candidates ...string) string {
 	return `{"difference":"The edit to deny writes a .env file.","candidates":[` + strings.Join(candidates, ",") + `]}`
@@ -68,7 +70,7 @@ func TestDraftCheckProposesARuleThatPassesItsFixtures(t *testing.T) {
 func TestDraftCheckProposesTheFirstCandidateThatPasses(t *testing.T) {
 	wrong := strings.Replace(envRule, `".env"`, `".go"`, 1)
 	broad := strings.Replace(envRule, `"suffix","value":".env"`, `"contains","value":"e"`, 1)
-	llm := &scriptedLLM{answers: []string{answer(wrong, `{"rules":[]}`, envRule)}}
+	llm := &scriptedLLM{answers: []string{answer(wrong, `"rules"`, envRule)}}
 	check, stats, err := DraftCheck(t.Context(), llm.complete, checkRequest(envFixtures))
 	if err != nil || stats.Calls != 1 {
 		t.Fatalf("err %v stats %+v", err, stats)
@@ -148,8 +150,9 @@ func TestDraftCheckGivesUpAfterOneRepair(t *testing.T) {
 		{"two values", answer(envRule) + answer(envRule), "more than one JSON value"},
 		{"bare rule", envRule, `unknown field "rules"`},
 		{"no candidates", answer(), "one to 3 candidates"},
-		{"four candidates", answer(envRule, envRule, envRule, envRule), "one to 3 candidates"},
-		{"unknown field", answer(strings.Replace(envRule, `"message"`, `"allow":true,"message"`, 1)), "not one JSON object"},
+		{"four candidates", answer(wrongRule, wrongRule, wrongRule, envRule), "only the first 3 candidates are tried"},
+		{"not a candidate", answer(`"rules"`), `candidate 1: it is not an object with "rules"`},
+		{"unknown field", answer(strings.Replace(envRule, `"message"`, `"allow":true,"message"`, 1)), `candidate 1: it is not an object with "rules" as in the example (json: unknown field "allow")`},
 		{"unknown op", answer(strings.Replace(envRule, `"suffix"`, `"endswith"`, 1)), "candidate 1: rule 1: condition 1: op must be"},
 		{"unknown field name", answer(strings.Replace(envRule, `"field":"path"`, `"field":"file"`, 1)), "field must be"},
 		{"bad regex", answer(strings.Replace(envRule, `"op":"suffix","value":".env"`, `"op":"regex","value":"(.env"`, 1)), "regex does not compile"},
@@ -253,5 +256,33 @@ func TestPromptsAskForJSON(t *testing.T) {
 		if !strings.Contains(prompt, "JSON object") {
 			t.Errorf("the %s prompt does not ask for a JSON object", name)
 		}
+	}
+}
+
+// TestPromptExamplesAreValidAnswers keeps each example answer of the check prompt one the pipeline
+// accepts: every candidate decodes, is valid, and compiles.
+func TestPromptExamplesAreValidAnswers(t *testing.T) {
+	examples := 0
+	for _, line := range strings.Split(checkPrompt, "\n") {
+		if !strings.HasPrefix(line, `{"difference"`) {
+			continue
+		}
+		examples++
+		candidates, err := parseCandidates(line)
+		if err != nil {
+			t.Fatalf("%s: %v", line, err)
+		}
+		for _, raw := range candidates {
+			var spec RuleSpec
+			if err := json.Unmarshal(raw, &spec); err != nil || spec.validate() != nil {
+				t.Fatalf("%s: %v %v", raw, err, spec.validate())
+			}
+			if _, err := rulecheck.Compile([]byte(render(spec))); err != nil {
+				t.Fatalf("%s: %v", raw, err)
+			}
+		}
+	}
+	if examples < 3 {
+		t.Fatalf("%d examples", examples)
 	}
 }

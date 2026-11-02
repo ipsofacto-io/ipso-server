@@ -221,20 +221,23 @@ func repairPrompt(user, previous string, problems []string) string {
 		problems = append(problems[:maxProblems], fmt.Sprintf("and %d more", len(problems)-maxProblems))
 	}
 	return user + "\nYour previous answer:\n" + truncate(previous, maxPreviousRunes) + "\n\nIt fails:\n- " + strings.Join(problems, "\n- ") +
-		"\n\nAnswer again with one JSON object. Write three new candidates that fix each failure, and do not repeat a candidate that failed."
+		"\n\nAnswer again with one JSON object. Write two new candidates that fix each failure, and do not repeat a candidate that failed."
 }
 
-// draft parses an answer and tries its candidates in order: each is validated, its Rego written
-// and compiled, and every fixture run. It returns the first candidate that passes, or what failed
-// for each, in words the model can act on.
+// draft parses an answer and tries its first maxDrafts candidates in order: each is decoded,
+// validated, its Rego written and compiled, and every fixture run. It returns the first candidate
+// that passes, or what failed for each, in words the model can act on.
 func draft(text string, fixtures []Fixture) (RuleSpec, []string) {
 	candidates, err := parseCandidates(text)
 	if err != nil {
 		return RuleSpec{}, []string{err.Error()}
 	}
 	var problems []string
-	for i, spec := range candidates {
-		failed := tryCandidate(spec, fixtures)
+	if len(candidates) > maxDrafts {
+		problems = append(problems, fmt.Sprintf("only the first %d candidates are tried", maxDrafts))
+	}
+	for i, raw := range candidates[:min(len(candidates), maxDrafts)] {
+		spec, failed := tryCandidate(raw, fixtures)
 		if len(failed) == 0 {
 			return spec, nil
 		}
@@ -245,7 +248,18 @@ func draft(text string, fixtures []Fixture) (RuleSpec, []string) {
 	return RuleSpec{}, problems
 }
 
-func tryCandidate(spec RuleSpec, fixtures []Fixture) []string {
+// tryCandidate decodes one candidate on its own, so a malformed one does not hide the others.
+func tryCandidate(raw json.RawMessage, fixtures []Fixture) (RuleSpec, []string) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var spec RuleSpec
+	if err := decoder.Decode(&spec); err != nil {
+		return RuleSpec{}, []string{fmt.Sprintf(`it is not an object with "rules" as in the example (%s)`, err)}
+	}
+	return spec, checkCandidate(spec, fixtures)
+}
+
+func checkCandidate(spec RuleSpec, fixtures []Fixture) []string {
 	if err := spec.validate(); err != nil {
 		return []string{err.Error()}
 	}
@@ -353,9 +367,9 @@ func patternHint(c Condition) string {
 	return " (" + c.Op + " compares plain text; for a pattern, use regex)"
 }
 
-// parseCandidates refuses anything but the one object the prompt asks for. A candidate is checked
-// on its own afterwards, so one bad candidate does not hide a good one.
-func parseCandidates(text string) ([]RuleSpec, error) {
+// parseCandidates refuses anything but the one object the prompt asks for. Each candidate is
+// decoded on its own afterwards, so one bad candidate does not hide a good one.
+func parseCandidates(text string) ([]json.RawMessage, error) {
 	if len(text) > maxOutputBytes {
 		return nil, errors.New("the answer is too large")
 	}
@@ -364,8 +378,8 @@ func parseCandidates(text string) ([]RuleSpec, error) {
 	decoder.DisallowUnknownFields()
 	// The model writes what tells the edits apart before the candidates, and only these are kept.
 	var answer struct {
-		Difference string     `json:"difference"`
-		Candidates []RuleSpec `json:"candidates"`
+		Difference string            `json:"difference"`
+		Candidates []json.RawMessage `json:"candidates"`
 	}
 	if err := decoder.Decode(&answer); err != nil {
 		return nil, fmt.Errorf("the answer is not one JSON object with the fields of the example (%s)", decodeProblem(body, err))
@@ -373,7 +387,7 @@ func parseCandidates(text string) ([]RuleSpec, error) {
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return nil, errors.New("the answer holds more than one JSON value")
 	}
-	if len(answer.Candidates) == 0 || len(answer.Candidates) > maxDrafts {
+	if len(answer.Candidates) == 0 {
 		return nil, fmt.Errorf("the answer needs one to %d candidates", maxDrafts)
 	}
 	return answer.Candidates, nil
