@@ -1,0 +1,14 @@
+{
+  "routes": [
+    {"name": "mistral", "provider": "mistral", "model": "mistral-medium-latest", "key_env": "IPSO_LLM_MISTRAL"}
+  ],
+  "default": ["mistral"],
+  "monthly_tokens": 2000000,
+  "tenants": {
+    "00000000-0000-4000-8000-000000000e09": {
+      "byok": [
+        {"name": "github-models", "provider": "openai", "endpoint": "https://models.github.ai/inference", "model": "openai/gpt-4.1-mini", "key_env": "IPSO_LLM_GITHUB_MODELS", "allow_non_eu": true}
+      ]
+    }
+  }
+}

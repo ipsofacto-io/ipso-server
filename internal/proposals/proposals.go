@@ -79,32 +79,7 @@ type selected struct {
 // gates before any egress: a trusted author, a provenance link for this pull request, no
 // injection marker, and decision-like text. Redacted text is sent, and only for those comments.
 func Extract(ctx context.Context, complete CompleteFunc, repo string, number int, comments []integrations.Comment, seen func(externalID string, digest [32]byte) bool) ([]Proposal, Stats, error) {
-	stats := Stats{Comments: len(comments)}
-	var picks []selected
-	for _, comment := range comments {
-		if strings.TrimSpace(comment.Body) == "" {
-			continue
-		}
-		if !trusted(comment) {
-			stats.Untrusted++
-			continue
-		}
-		if !provenance(repo, number, comment.URL) || !decisionLike.MatchString(comment.Body) {
-			continue
-		}
-		if suspicious(comment.Body) {
-			stats.Flagged++
-			continue
-		}
-		digest := sha256.Sum256([]byte(comment.Body))
-		if seen != nil && seen(comment.ExternalID, digest) {
-			continue
-		}
-		if len(picks) == maxSent {
-			break
-		}
-		picks = append(picks, selected{comment: comment, text: truncate(Redact(comment.Body), maxBodyRunes), digest: digest})
-	}
+	picks, stats := screen(repo, number, comments, seen)
 	if len(picks) == 0 {
 		return nil, stats, nil
 	}
@@ -146,6 +121,47 @@ func Extract(ctx context.Context, complete CompleteFunc, repo string, number int
 		})
 	}
 	return proposals, stats, nil
+}
+
+// Screen returns the external ids of the comments the four gates would send to the LLM, in order.
+// The eval harness measures the gates with it (IPSO-59).
+func Screen(repo string, number int, comments []integrations.Comment) []string {
+	picks, _ := screen(repo, number, comments, nil)
+	ids := make([]string, 0, len(picks))
+	for _, pick := range picks {
+		ids = append(ids, pick.comment.ExternalID)
+	}
+	return ids
+}
+
+func screen(repo string, number int, comments []integrations.Comment, seen func(externalID string, digest [32]byte) bool) ([]selected, Stats) {
+	stats := Stats{Comments: len(comments)}
+	var picks []selected
+	for _, comment := range comments {
+		if strings.TrimSpace(comment.Body) == "" {
+			continue
+		}
+		if !trusted(comment) {
+			stats.Untrusted++
+			continue
+		}
+		if !provenance(repo, number, comment.URL) || !decisionLike.MatchString(comment.Body) {
+			continue
+		}
+		if suspicious(comment.Body) {
+			stats.Flagged++
+			continue
+		}
+		digest := sha256.Sum256([]byte(comment.Body))
+		if seen != nil && seen(comment.ExternalID, digest) {
+			continue
+		}
+		if len(picks) == maxSent {
+			break
+		}
+		picks = append(picks, selected{comment: comment, text: truncate(Redact(comment.Body), maxBodyRunes), digest: digest})
+	}
+	return picks, stats
 }
 
 // provenance reports whether the link is a github.com link to this pull request. The link comes

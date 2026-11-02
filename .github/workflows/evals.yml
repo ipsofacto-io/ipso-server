@@ -1,0 +1,65 @@
+name: evals
+
+# Records fresh model answers for the golden datasets and gates them against the baseline
+# (ADR-0082). `ci / test` replays the committed answers on every pull request; this workflow is
+# the live side. It calls GitHub Models with this job's token as a tenant's own route, which is
+# outside the EU, so it only ever sends the synthetic datasets in internal/evals/testdata.
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: GitHub Models model id
+        required: false
+        default: openai/gpt-4.1-mini
+  schedule:
+    - cron: "23 5 * * 1"
+  pull_request:
+    paths:
+      - "internal/evals/**"
+      - "internal/proposals/**"
+      - "internal/llmgw/**"
+      - ".github/workflows/evals.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live:
+    name: evals / live
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      models: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Record answers and gate them
+        env:
+          IPSO_EVALS_GATEWAY: internal/evals/testdata/github-models.json
+          IPSO_EVALS_TENANT: 00000000-0000-4000-8000-000000000e09
+          IPSO_EVALS_MODEL: ${{ inputs.model || 'openai/gpt-4.1-mini' }}
+          IPSO_EVALS_PACE_SECONDS: "5"
+          IPSO_LLM_GITHUB_MODELS: ${{ github.token }}
+          # The gateway needs an EU default route to start. The eval tenant never uses it.
+          IPSO_LLM_MISTRAL: not-used-by-the-eval-tenant
+        run: go test ./internal/evals -run '^TestEvals$' -count=1 -v -record -report "${RUNNER_TEMP}/scores.json"
+      - name: Keep the answers and scores
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evals-${{ github.run_id }}
+          path: |
+            internal/evals/testdata/cassette.json
+            ${{ runner.temp }}/scores.json
+          if-no-files-found: ignore
+          retention-days: 14

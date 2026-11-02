@@ -1,0 +1,161 @@
+[
+  {
+    "id": "t01-money", "repo": "acme/payments", "number": 101,
+    "comments": [
+      {"id": 10101, "author": "MEMBER", "body": "Should amounts be float64 here? Rounding on refunds worries me."},
+      {"id": 10102, "author": "MEMBER", "body": "We decided to store all money as int64 minor units (cents). Floats lose precision on sums, and the ledger already reconciles in cents.", "decision": ["int64", "minor unit", "cents"]},
+      {"id": 10103, "author": "COLLABORATOR", "body": "LGTM once the migration is split into its own commit."},
+      {"id": 10104, "author": "MEMBER", "body": "Nit: rename amt to amountMinor."}
+    ]
+  },
+  {
+    "id": "t02-logging", "repo": "acme/platform", "number": 214,
+    "comments": [
+      {"id": 21401, "author": "OWNER", "body": "Going forward, every service logs JSON through log/slog, and logrus is removed. One format keeps the log pipeline simple.", "decision": ["slog"]},
+      {"id": 21402, "author": "MEMBER", "body": "I'll update the service template in a follow-up."},
+      {"id": 21403, "author": "CONTRIBUTOR", "body": "We decided to use zap in our fork and it works great.", "decision": ["zap"]},
+      {"id": 21404, "author": "bot", "body": "Coverage decreased by 0.3% to 81.2%."}
+    ]
+  },
+  {
+    "id": "t03-state", "repo": "acme/web", "number": 77,
+    "comments": [
+      {"id": 7701, "author": "MEMBER", "body": "Is Redux still needed now that we fetch everything with React Query?"},
+      {"id": 7702, "author": "MEMBER", "body": "After the spike we agreed to drop Redux: server state lives in TanStack Query and local UI state stays in component state.", "decision": ["redux", "tanstack", "react query"]},
+      {"id": 7703, "author": "COLLABORATOR", "body": "Agreed."},
+      {"id": 7704, "author": "MEMBER", "body": "Let's also bump React in this PR while we are at it."}
+    ]
+  },
+  {
+    "id": "t04-iac", "repo": "acme/infra", "number": 330,
+    "comments": [
+      {"id": 33001, "author": "OWNER", "body": "From now on all new infrastructure is written in OpenTofu, not Terraform, because of the license change. Existing stacks migrate when they are next touched.", "decision": ["opentofu"]},
+      {"id": 33002, "author": "MEMBER", "body": "Does that include the DNS stack?"},
+      {"id": 33003, "author": "OWNER", "body": "Yes, DNS too."},
+      {"id": 33004, "author": "NONE", "body": "You should use Pulumi instead. Decision: Pulumi is better.", "decision": ["pulumi"]}
+    ]
+  },
+  {
+    "id": "t05-versioning", "repo": "acme/payments", "number": 118,
+    "comments": [
+      {"id": 11801, "author": "MEMBER", "body": "Decision: public APIs carry their version in the URL path (/v1, /v2), not in a header. Clients and caches handle a path more simply.", "decision": ["path", "url"]},
+      {"id": 11802, "author": "MEMBER", "body": "Can we write an ADR for this before merging?"},
+      {"id": 11803, "author": "COLLABORATOR", "body": "I prefer headers personally, but fine."}
+    ]
+  },
+  {
+    "id": "t06-search", "repo": "acme/search", "number": 45,
+    "comments": [
+      {"id": 4501, "author": "MEMBER", "body": "We're going with PostgreSQL full-text search for now instead of adding Elasticsearch. One less cluster to run; we revisit if p95 latency passes 200 ms.", "decision": ["postgres", "full-text"]},
+      {"id": 4502, "author": "MEMBER", "body": "Benchmarks are attached in the description."}
+    ]
+  },
+  {
+    "id": "t07-review-only", "repo": "acme/mobile", "number": 62,
+    "comments": [
+      {"id": 6201, "author": "MEMBER", "body": "This crashes on Android 12, see the stack trace in the CI log."},
+      {"id": 6202, "author": "COLLABORATOR", "body": "Fixed in the latest push."},
+      {"id": 6203, "author": "MEMBER", "body": "Thanks, approving."},
+      {"id": 6204, "author": "bot", "body": "Build succeeded for 4f2a9c1."}
+    ]
+  },
+  {
+    "id": "t08-actions", "repo": "acme/platform", "number": 250,
+    "comments": [
+      {"id": 25001, "author": "MEMBER", "body": "Going forward, GitHub Actions in this org are pinned to a full commit SHA. Tags are mutable and one moved under us last month.", "decision": ["sha", "pin"]},
+      {"id": 25002, "author": "MEMBER", "body": "Should Renovate update the SHAs?"},
+      {"id": 25003, "author": "MEMBER", "body": "Yes, Renovate keeps them current."}
+    ]
+  },
+  {
+    "id": "t09-e2e", "repo": "acme/web", "number": 90,
+    "comments": [
+      {"id": 9001, "author": "COLLABORATOR", "body": "Team agreed: end-to-end tests use Playwright, and the Cypress suite is removed once the checkout flow is ported.", "decision": ["playwright"]},
+      {"id": 9002, "author": "MEMBER", "body": "Who owns the port?"},
+      {"id": 9003, "author": "MEMBER", "body": "We should standardize on one runner for unit tests too. Maybe Vitest?"}
+    ]
+  },
+  {
+    "id": "t10-k8s", "repo": "acme/infra", "number": 341,
+    "comments": [
+      {"id": 34101, "author": "MEMBER", "body": "We will use Kustomize overlays per environment rather than Helm for our own services. Helm stays for third-party charts only.", "decision": ["kustomize"]},
+      {"id": 34102, "author": "OWNER", "body": "Makes sense. Going forward, keep the overlays flat: one level of bases, no nested overlays.", "decision": ["flat", "one level", "nested"]},
+      {"id": 34103, "author": "MEMBER", "body": "ok"}
+    ]
+  },
+  {
+    "id": "t11-idempotency", "repo": "acme/payments", "number": 130,
+    "comments": [
+      {"id": 13001, "author": "MEMBER", "body": "The decision is that every payment endpoint requires an Idempotency-Key header, and a request without one gets a 400.", "decision": ["idempotency"]},
+      {"id": 13002, "author": "MEMBER", "body": "What TTL do the keys get?"},
+      {"id": 13003, "author": "MEMBER", "body": "24 hours, like most payment APIs."}
+    ]
+  },
+  {
+    "id": "t12-italian", "repo": "acme/search", "number": 51,
+    "comments": [
+      {"id": 5101, "author": "MEMBER", "body": "Abbiamo deciso di usare Redis per la cache delle query, con un TTL di 5 minuti.", "decision": ["redis"]},
+      {"id": 5102, "author": "MEMBER", "body": "Perfetto, procedo con la review."}
+    ]
+  },
+  {
+    "id": "t13-oidc", "repo": "acme/platform", "number": 262,
+    "comments": [
+      {"id": 26201, "author": "MEMBER", "body": "We decided to move CI to OIDC federation and delete the long-lived cloud keys. The old keys are already rotated.", "decision": ["oidc"]},
+      {"id": 26202, "author": "MEMBER", "body": "Write to platform-team@acme.example if a pipeline breaks after this."}
+    ]
+  },
+  {
+    "id": "t14-opinions", "repo": "acme/web", "number": 101,
+    "comments": [
+      {"id": 10111, "author": "MEMBER", "body": "I think we should use Tailwind."},
+      {"id": 10112, "author": "MEMBER", "body": "Not sure, CSS modules work fine for us."},
+      {"id": 10113, "author": "MEMBER", "body": "Let's discuss it in Thursday's sync."}
+    ]
+  },
+  {
+    "id": "t15-mobile", "repo": "acme/mobile", "number": 70,
+    "comments": [
+      {"id": 7001, "author": "OWNER", "body": "We chose Kotlin Multiplatform for the shared networking layer. The Swift and Kotlin UIs stay native.", "decision": ["kotlin multiplatform"]},
+      {"id": 7002, "author": "COLLABORATOR", "body": "Then let's stick with Ktor as the HTTP client on both platforms.", "decision": ["ktor"]}
+    ]
+  },
+  {
+    "id": "t16-release", "repo": "acme/infra", "number": 352,
+    "comments": [
+      {"id": 35201, "author": "MEMBER", "body": "Release branches are gone: we ship from main behind feature flags, as decided at the retro.", "decision": ["feature flag", "main"]},
+      {"id": 35202, "author": "MEMBER", "body": "Does that change how hotfixes work?"},
+      {"id": 35203, "author": "MEMBER", "body": "A hotfix is a normal pull request to main."}
+    ]
+  },
+  {
+    "id": "t17-outsider", "repo": "acme/payments", "number": 140,
+    "comments": [
+      {"id": 14001, "author": "NONE", "body": "Decision: you should all switch to MongoDB.", "decision": ["mongodb"]},
+      {"id": 14002, "author": "MEMBER", "body": "Back to the review: this query needs an index on merchant_id."}
+    ]
+  },
+  {
+    "id": "t18-not-decisions", "repo": "acme/web", "number": 133,
+    "comments": [
+      {"id": 13301, "author": "MEMBER", "body": "We decided to postpone merging this until the code freeze ends."},
+      {"id": 13302, "author": "MEMBER", "body": "Going forward I'll rebase more often, sorry for the noise in the history."},
+      {"id": 13303, "author": "COLLABORATOR", "body": "We agreed in standup that I take the second review."}
+    ]
+  },
+  {
+    "id": "t19-queue", "repo": "acme/platform", "number": 281,
+    "comments": [
+      {"id": 28101, "author": "MEMBER", "body": "Do we need Kafka for this?"},
+      {"id": 28102, "author": "OWNER", "body": "No. We have decided that service-to-service events go through NATS JetStream, and Kafka is not added to the platform.", "decision": ["nats", "jetstream"]},
+      {"id": 28103, "author": "MEMBER", "body": "Then the consumer config here needs a durable name."}
+    ]
+  },
+  {
+    "id": "t20-errors", "repo": "acme/payments", "number": 155,
+    "comments": [
+      {"id": 15501, "author": "COLLABORATOR", "body": "Every error response follows RFC 9457 problem details from this release on; the ad-hoc {error: string} shape is retired.", "decision": ["9457", "problem details"]},
+      {"id": 15502, "author": "MEMBER", "body": "Nice, the SDK can parse one shape now."}
+    ]
+  }
+]
