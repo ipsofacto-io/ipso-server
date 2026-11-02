@@ -2,16 +2,11 @@ name: evals
 
 # Records fresh model answers for the golden datasets and gates them against the baseline
 # (ADR-0082). `ci / test` replays the committed answers on every pull request; this workflow is
-# the live side. It calls GitHub Models with this job's token as a tenant's own route, which is
-# outside the EU, so it only ever sends the synthetic datasets in internal/evals/testdata.
+# the live side. It runs a pinned open-weight model on the runner with llama.cpp and reaches it
+# through the gateway as a tenant's own loopback route, so no prompt leaves the runner.
 
 on:
   workflow_dispatch:
-    inputs:
-      model:
-        description: GitHub Models model id
-        required: false
-        default: openai/gpt-4.1-mini
   schedule:
     - cron: "23 5 * * 1"
   pull_request:
@@ -32,10 +27,14 @@ jobs:
   live:
     name: evals / live
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
-      models: read
+    env:
+      LLAMA_BUILD: b11569
+      LLAMA_SHA256: ad8acc130fa5337b7c044c8d4fef4ce0a6efb3543b8495b272b0a7f6848b6224
+      MODEL_URL: https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf
+      MODEL_SHA256: 7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,27 +42,28 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Probe GitHub Models (temporary)
-        env:
-          TOKEN: ${{ github.token }}
+      - name: Start the local model
         run: |
-          body='{"model":"openai/gpt-4.1-mini","messages":[{"role":"user","content":"Say hi"}],"max_tokens":5}'
-          for url in https://models.github.ai/inference/chat/completions https://models.github.ai/orgs/ipsofacto-io/inference/chat/completions; do
-            echo "== $url"
-            curl -sS -m 30 -D - -o /tmp/out -X POST "$url" \
-              -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -H 'Accept: application/vnd.github+json' \
-              -H 'X-GitHub-Api-Version: 2022-11-28' -d "$body" || true
-            head -c 600 /tmp/out; echo
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o llama.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_BUILD}/llama-${LLAMA_BUILD}-bin-ubuntu-x64.tar.gz"
+          curl -fsSL -o model.gguf "$MODEL_URL"
+          printf '%s  llama.tar.gz\n%s  model.gguf\n' "$LLAMA_SHA256" "$MODEL_SHA256" | sha256sum -c -
+          tar xzf llama.tar.gz
+          key=$(openssl rand -hex 24)
+          echo "::add-mask::$key"
+          echo "IPSO_LLM_LOCAL=$key" >> "$GITHUB_ENV"
+          LLAMA_API_KEY="$key" nohup "llama-${LLAMA_BUILD}/llama-server" -m model.gguf --host 127.0.0.1 --port 8080 \
+            --ctx-size 8192 --parallel 1 --seed 0 --reasoning-budget 0 --threads "$(nproc)" > llama.log 2>&1 &
+          for _ in $(seq 120); do
+            curl -fs http://127.0.0.1:8080/health >/dev/null && exit 0
+            sleep 2
           done
-          getent hosts models.github.ai || true
-          env | grep -i -E '^(https?|no)_proxy' || true
+          cat llama.log
+          exit 1
       - name: Record answers and gate them
         env:
-          IPSO_EVALS_GATEWAY: ${{ github.workspace }}/internal/evals/testdata/github-models.json
+          IPSO_EVALS_GATEWAY: ${{ github.workspace }}/internal/evals/testdata/local-model.json
           IPSO_EVALS_TENANT: 00000000-0000-4000-8000-000000000e09
-          IPSO_EVALS_MODEL: ${{ inputs.model || 'openai/gpt-4.1-mini' }}
-          IPSO_EVALS_PACE_SECONDS: "5"
-          IPSO_LLM_GITHUB_MODELS: ${{ github.token }}
           # The gateway needs an EU default route to start. The eval tenant never uses it.
           IPSO_LLM_MISTRAL: not-used-by-the-eval-tenant
         run: go test ./internal/evals -run '^TestEvals$' -count=1 -v -record -report "${RUNNER_TEMP}/scores.json"
@@ -75,5 +75,6 @@ jobs:
           path: |
             internal/evals/testdata/cassette.json
             ${{ runner.temp }}/scores.json
+            ${{ runner.temp }}/llama.log
           if-no-files-found: ignore
           retention-days: 14

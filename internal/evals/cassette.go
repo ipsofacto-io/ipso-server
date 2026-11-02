@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"slices"
 	"sync"
-	"time"
 
 	"github.com/ipsofacto-io/ipso-server/internal/llmgw"
 )
@@ -38,8 +37,6 @@ type Cassette struct {
 	recorded map[string]Recording
 	used     map[string]Recording
 	live     CompleteFunc
-	pace     time.Duration
-	last     time.Time
 }
 
 // LoadCassette reads recordings. A missing file is an empty cassette.
@@ -62,9 +59,9 @@ func LoadCassette(path string) (*Cassette, error) {
 	return c, nil
 }
 
-// Record makes the cassette call live for every prompt, at most one call per pace.
-func (c *Cassette) Record(live CompleteFunc, pace time.Duration) {
-	c.live, c.pace = live, pace
+// Record makes the cassette call live for every prompt.
+func (c *Cassette) Record(live CompleteFunc) {
+	c.live = live
 }
 
 // Complete answers one prompt.
@@ -83,11 +80,7 @@ func (c *Cassette) Complete(ctx context.Context, system, user string) (llmgw.Com
 		c.used[key] = r
 		return llmgw.Completion{Text: r.Text, Model: r.Model}, nil
 	}
-	if wait := c.pace - time.Since(c.last); wait > 0 {
-		time.Sleep(wait)
-	}
 	answer, err := c.live(ctx, system, user)
-	c.last = time.Now()
 	if err != nil {
 		return llmgw.Completion{}, err
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
@@ -200,12 +201,11 @@ func resolve(r Route, byok bool) (endpoint, error) {
 		if !byok {
 			return fail("an openai route is only a tenant's own route")
 		}
-		host, err := httpsHost(r.Endpoint)
+		base, err := openAIBase(r.Endpoint)
 		if err != nil {
 			return fail("%v", err)
 		}
-		parsed, _ := url.Parse(r.Endpoint)
-		e.url = "https://" + host + strings.TrimSuffix(parsed.EscapedPath(), "/") + "/chat/completions"
+		e.url = base + "/chat/completions"
 	default:
 		return fail("provider %q is not mistral, bedrock, azure, or openai", r.Provider)
 	}
@@ -227,6 +227,26 @@ func bedrockModelInEU(model string) bool {
 	}
 	inEU, known := bedrockGeoPrefixes[prefix]
 	return !known || inEU
+}
+
+// openAIBase returns the base URL of an OpenAI-compatible endpoint: a plain https URL, or plain
+// http to a loopback address for an open-weight server on the same machine, the only http a route
+// may use.
+func openAIBase(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err == nil && parsed.Scheme == "http" {
+		ip := net.ParseIP(parsed.Hostname())
+		loopback := parsed.Hostname() == "localhost" || ip != nil && ip.IsLoopback()
+		if !loopback || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return "", fmt.Errorf("endpoint %q uses http to a host that is not loopback", raw)
+		}
+		return "http://" + parsed.Host + strings.TrimSuffix(parsed.EscapedPath(), "/"), nil
+	}
+	host, err := httpsHost(raw)
+	if err != nil {
+		return "", err
+	}
+	return "https://" + host + strings.TrimSuffix(parsed.EscapedPath(), "/"), nil
 }
 
 // httpsHost returns the host of a plain https URL with no user, query, or fragment.

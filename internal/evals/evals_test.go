@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"os"
-	"strconv"
 	"testing"
 	"time"
 
@@ -29,16 +28,15 @@ const (
 
 // TestEvals runs every suite. By default it replays the recorded answers and fails on a drop of
 // more than three points below the baseline. -record calls the gateway that IPSO_EVALS_GATEWAY
-// configures, as the tenant IPSO_EVALS_TENANT, and IPSO_EVALS_MODEL can replace the model of
-// that tenant's routes. The datasets are synthetic, so a route outside the EU may record them.
+// configures, as the tenant IPSO_EVALS_TENANT. The datasets are synthetic, so a route the gateway
+// cannot place in the EU may record them.
 func TestEvals(t *testing.T) {
 	cassette, err := LoadCassette(cassettePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if *record {
-		live, pace := liveGateway(t)
-		cassette.Record(retrying(live), pace)
+		cassette.Record(liveGateway(t))
 	}
 
 	scores := Scores{}
@@ -84,7 +82,7 @@ func TestEvals(t *testing.T) {
 }
 
 // liveGateway builds the LLM gateway from the environment, with a budget held in memory.
-func liveGateway(t *testing.T) (CompleteFunc, time.Duration) {
+func liveGateway(t *testing.T) CompleteFunc {
 	t.Helper()
 	path, tenantID := os.Getenv("IPSO_EVALS_GATEWAY"), os.Getenv("IPSO_EVALS_TENANT")
 	if path == "" || tenantID == "" {
@@ -103,43 +101,11 @@ func liveGateway(t *testing.T) (CompleteFunc, time.Duration) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model := os.Getenv("IPSO_EVALS_MODEL"); model != "" {
-		own := cfg.Tenants[tenant.String()]
-		for i := range own.BYOK {
-			own.BYOK[i].Model = model
-		}
-		cfg.Tenants[tenant.String()] = own
-	}
 	gateway, err := llmgw.New(cfg, &memoryLedger{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pace := time.Duration(0)
-	if raw := os.Getenv("IPSO_EVALS_PACE_SECONDS"); raw != "" {
-		seconds, err := strconv.Atoi(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pace = time.Duration(seconds) * time.Second
-	}
-	return gateway.For(tenant), pace
-}
-
-// retrying waits out a rate limit: three more tries, 30 seconds apart.
-func retrying(live CompleteFunc) CompleteFunc {
-	return func(ctx context.Context, system, user string) (llmgw.Completion, error) {
-		for attempt := 0; ; attempt++ {
-			answer, err := live(ctx, system, user)
-			if err == nil || !errors.Is(err, llmgw.ErrUnavailable) || attempt == 3 {
-				return answer, err
-			}
-			select {
-			case <-ctx.Done():
-				return llmgw.Completion{}, ctx.Err()
-			case <-time.After(30 * time.Second):
-			}
-		}
-	}
+	return gateway.For(tenant)
 }
 
 // memoryLedger never refuses: the eval run is bounded by its datasets.
@@ -180,7 +146,7 @@ func TestCassetteReplaysAndRecords(t *testing.T) {
 	recorder.Record(func(context.Context, string, string) (llmgw.Completion, error) {
 		calls++
 		return llmgw.Completion{Text: "answer", Model: "m"}, nil
-	}, 0)
+	})
 	first := "DATA-" + "0123456789abcdef0123456789abcdef" + "\n{}"
 	second := "DATA-" + "fedcba9876543210fedcba9876543210" + "\n{}"
 	if _, err := recorder.Complete(t.Context(), "sys", first); err != nil {
