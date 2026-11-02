@@ -512,7 +512,7 @@ func TestRunTaskReportsWhenThePlanNeverArrives(t *testing.T) {
 }
 
 func TestRunTaskStagesWithNoPlanToJudge(t *testing.T) {
-	for _, stage := range []string{stagePrePlan, stagePostApply, "test"} {
+	for _, stage := range []string{stagePrePlan, stagePostApply} {
 		t.Run(stage, func(t *testing.T) {
 			h := newRunTaskHarness(t, plancheck.Report{})
 			h.postSigned(t, func(values map[string]any) { values["stage"] = stage })
@@ -607,9 +607,21 @@ func TestRunTaskNeverSendsTheTokenElsewhere(t *testing.T) {
 		"another version":      func(v map[string]any) { v["payload_version"] = 2 },
 		"no token":             func(v map[string]any) { v["access_token"] = "" },
 		"a huge token":         func(v map[string]any) { v["access_token"] = strings.Repeat("x", maxTokenBytes+1) },
-		"the test request": func(v map[string]any) {
-			delete(v, "task_result_callback_url")
+		// The request HCP Terraform sends when a task is saved, as a published integration records it: ids
+		// of the expected form, a plan and a callback on the API host, and no stage. HCP Terraform sent the
+		// same task result id on 2026-11-02.
+		"the request sent when a task is saved": func(v map[string]any) {
+			delete(v, "stage")
 			v["access_token"] = "test-token"
+			v["task_result_enforcement_level"] = "test"
+			v["task_result_id"] = "taskrs-xxxxxxxxxxxxxxxx"
+			v["run_id"] = "run-xxxxxxxxxxxxxxxx"
+			v["plan_json_api_url"] = "https://" + h.hcp.host() + "/api/v2/plans/plan-xxxxxxxxxxxxxxxx/json-output"
+			v["task_result_callback_url"] = "https://" + h.hcp.host() + "/api/v2/task-results/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/callback"
+		},
+		"a stage HCP Terraform does not document": func(v map[string]any) {
+			v["stage"] = "post_destroy"
+			v["task_result_id"] = "taskrs-unknownstage"
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

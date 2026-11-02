@@ -46,7 +46,7 @@ In the organization's **Settings > Run tasks**, create a task:
 | Endpoint URL | `https://<host>/runtasks/hcp-terraform` |
 | HMAC key | The value of `IPSO_RUNTASK_HMAC_KEY` |
 
-HCP Terraform sends a test request when you save, and the service answers 200 to it. Then attach the task to a workspace:
+When you save, HCP Terraform sends a signed request that belongs to no run. The service answers it 200 and does nothing else, and the save succeeds. Then attach the task to a workspace:
 
 | Setting | Value |
 | --- | --- |
@@ -76,11 +76,22 @@ If the service cannot reach the callback, it tries three times. After that it re
 - The HMAC key and the access token are not logged. Neither are plan URLs, because a download URL is a credential.
 - A request without a valid signature is answered 401 before anything reads it.
 
-## Validate it on a real workspace
+## Validation on HCP Terraform
 
-The tests run against a fake API that follows the published contract. They have not run against HCP Terraform, because that needs an organization and a public host. To validate the service:
+The tests run against a fake API that follows the published contract. On 2026-11-02 the service also ran against HCP Terraform, with Terraform 1.16.4, a mandatory post-plan task, a public HTTPS tunnel in front of the listener, and the decisions of the `ipsofacto-io/examples` Atlantis sample in a signed bundle:
 
-1. Run it on a public host and create the task. The save only succeeds if the test request gets a 200.
+| Case | What HCP Terraform did |
+| --- | --- |
+| A plan that breaks a blocking decision | The task reported `failed` with "1 blocking, 0 could not be evaluated, 1 warnings, 0 waived, 0 passed". The run ended with `Task Stage failed`, and no apply was offered |
+| A plan that breaks only a warning decision | The task reported `passed` with "0 blocking, 0 could not be evaluated, 1 warnings, 0 waived, 1 passed", and the apply was offered |
+| A request with a wrong `X-TFC-Task-Signature` | The service answered 401 |
+| Saving the task | HCP Terraform sent a signed request that belongs to no run, and the save succeeded on the 200. The service then also reported a result for it, which HCP Terraform refused with 401. A request outside the four run stages now does no work ([ADR-0080](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0080-run-task-requests-outside-a-run.md)) |
+
+The service logged the plan hash and the check counts of each run, and nothing from the plan.
+
+To validate your own deployment:
+
+1. Run it on a public host and create the task. The save succeeds once the service answers HCP Terraform's request with 200.
 2. Attach it to a workspace at post-plan with mandatory enforcement.
 3. Start a run with a plan that breaks a blocking decision. The task should show `failed`, the outcome should list the resource, and the apply should not be available.
 4. Start a run that breaks only a warning decision. The task should show `passed`, the outcome should show the warning, and the apply should be available.
