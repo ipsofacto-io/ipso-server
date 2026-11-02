@@ -43,6 +43,18 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: Probe GitHub Models (temporary)
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          for url in https://models.github.ai/inference/chat/completions https://models.inference.ai.azure.com/chat/completions; do
+            echo "== $url"
+            curl -sS -m 30 -o /tmp/out -w '%{http_code} %{content_type}\n' -X POST "$url" \
+              -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -H 'Accept: application/json' \
+              -d '{"model":"openai/gpt-4.1-mini","messages":[{"role":"user","content":"Say hi"}],"max_tokens":5}' || true
+            head -c 400 /tmp/out; echo
+          done
+          curl -sS -m 30 -H "Authorization: Bearer $TOKEN" https://models.github.ai/catalog/models | head -c 1500; echo
       - name: Record answers and gate them
         env:
           IPSO_EVALS_GATEWAY: ${{ github.workspace }}/internal/evals/testdata/github-models.json
