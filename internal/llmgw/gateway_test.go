@@ -203,7 +203,8 @@ func TestRedactionHappensBeforeAnyProviderCall(t *testing.T) {
 	cfg := only("mistral")
 	cfg.Redact = []string{`\bACME-[0-9]{6}\b`}
 	g, _ := newGateway(t, cfg, p)
-	secrets := []string{"AKIAABCDEFGHIJKLMNOP", "ghp_abcdefghijklmnopqrstuvwxyz0123", "jane.doe@example.com", "ACME-123456", "password=hunter22"}
+	// Split, so that a secret scanner does not read these fakes as credentials.
+	secrets := []string{"AKIA" + "ABCDEFGHIJKLMNOP", "ghp_" + "abcdefghijklmnopqrstuvwxyz0123", "jane.doe@example.com", "ACME-123456", "password=" + "hunter22"}
 	_, err := g.Complete(t.Context(), Request{Tenant: tenantA, System: "keep " + secrets[3], User: "text " + strings.Join(secrets, " ")})
 	if err != nil {
 		t.Fatal(err)
