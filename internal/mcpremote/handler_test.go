@@ -21,7 +21,7 @@ import (
 
 const (
 	testResource = "https://mcp.example.test/mcp"
-	metaLatest   = `"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}`
+	metaLatest   = `"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}`
 )
 
 var (
@@ -325,6 +325,69 @@ func TestTransportRules(t *testing.T) {
 		if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodPost {
 			t.Errorf("%s: %d", method, rec.Code)
 		}
+	}
+}
+
+func TestStatelessFailuresCarryTheirHTTPStatus(t *testing.T) {
+	r := newRig(t)
+	token := r.auth.token(testResource, []string{ScopeRead})
+	latest := map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list"}
+	for name, tc := range map[string]struct {
+		body    string
+		headers map[string]string
+		status  int
+		code    float64
+	}{
+		"no _meta":        {`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, latest, 400, codeInvalidParams},
+		"no capabilities": {`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`, latest, 400, codeInvalidParams},
+		"no version":      {`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/clientCapabilities":{}}}}`, latest, 400, codeInvalidParams},
+		"removed method":  {`{"jsonrpc":"2.0","id":1,"method":"ping","params":{` + metaLatest + `}}`, map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "ping"}, 404, codeMethodNotFound},
+		"unknown method":  {`{"jsonrpc":"2.0","id":1,"method":"nope","params":{` + metaLatest + `}}`, map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "nope"}, 404, codeMethodNotFound},
+		"older client":    {`{"jsonrpc":"2.0","id":1,"method":"nope"}`, nil, 200, codeMethodNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := r.post(token, tc.body, tc.headers)
+			if rec.Code != tc.status {
+				t.Fatalf("status %d: %s", rec.Code, rec.Body)
+			}
+			var reply struct {
+				ID    int `json:"id"`
+				Error struct {
+					Code float64 `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
+				t.Fatal(err)
+			}
+			if reply.Error.Code != tc.code || reply.ID != 1 {
+				t.Fatalf("%s", rec.Body)
+			}
+		})
+	}
+}
+
+func TestUnsupportedVersionNamesWhatIsSupported(t *testing.T) {
+	r := newRig(t)
+	token := r.auth.token(testResource, []string{ScopeRead})
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01","io.modelcontextprotocol/clientCapabilities":{}}}}`
+	rec := r.post(token, body, map[string]string{"MCP-Protocol-Version": "2099-01-01", "Mcp-Method": "tools/list"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	var reply struct {
+		Error struct {
+			Code float64 `json:"code"`
+			Data struct {
+				Supported []string `json:"supported"`
+				Requested string   `json:"requested"`
+			} `json:"data"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.Error.Code != codeUnsupportedVersion || reply.Error.Data.Requested != "2099-01-01" || reply.Error.Data.Supported[0] != mcptools.LatestVersion {
+		t.Fatalf("%s", rec.Body)
 	}
 }
 

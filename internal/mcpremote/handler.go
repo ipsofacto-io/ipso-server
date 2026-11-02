@@ -36,6 +36,8 @@ const (
 
 	codeParse              = -32700
 	codeInvalidRequest     = -32600
+	codeMethodNotFound     = -32601
+	codeInvalidParams      = -32602
 	codeHeaderMismatch     = -32020
 	codeUnsupportedVersion = -32022
 )
@@ -178,11 +180,11 @@ func (h *handler) post(w http.ResponseWriter, r *http.Request) {
 	}
 	var req rpcRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeRPCError(w, http.StatusBadRequest, nil, codeParse, "parse error")
+		writeRPCError(w, http.StatusBadRequest, nil, &rpcFailure{code: codeParse, message: "parse error"})
 		return
 	}
-	if code, message := checkHeaders(r, req); code != 0 {
-		writeRPCError(w, http.StatusBadRequest, req.ID, code, message)
+	if failure := checkHeaders(r, req); failure != nil {
+		writeRPCError(w, http.StatusBadRequest, req.ID, failure)
 		return
 	}
 	if scope := requiredScope(req); scope != "" && !slices.Contains(claims.Scopes, scope) {
@@ -197,22 +199,40 @@ func (h *handler) post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if rpcErrorCode(reply) == codeUnsupportedVersion || rpcErrorCode(reply) == codeInvalidRequest {
-		w.WriteHeader(http.StatusBadRequest)
+	if status := statusOf(r, req, reply); status != http.StatusOK {
+		w.WriteHeader(status)
 	}
-	_, _ = w.Write(reply)
+	_ = json.NewEncoder(w).Encode(json.RawMessage(reply))
 }
 
-func rpcErrorCode(reply []byte) int {
+// statusOf gives a JSON-RPC failure its HTTP status on 2026-07-28. A client on an older revision
+// reads the failure from a 200, which is what those revisions describe.
+func statusOf(r *http.Request, req rpcRequest, reply []byte) int {
 	var parsed struct {
 		Error struct {
 			Code int `json:"code"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(reply, &parsed); err != nil {
-		return 0
+		return http.StatusOK
 	}
-	return parsed.Error.Code
+	switch parsed.Error.Code {
+	case codeUnsupportedVersion, codeInvalidRequest:
+		return http.StatusBadRequest
+	case codeMethodNotFound:
+		if isLatest(r, req) {
+			return http.StatusNotFound
+		}
+	case codeInvalidParams:
+		if isLatest(r, req) {
+			return http.StatusBadRequest
+		}
+	}
+	return http.StatusOK
+}
+
+func isLatest(r *http.Request, req rpcRequest) bool {
+	return r.Header.Get("MCP-Protocol-Version") == mcptools.LatestVersion || req.Params.Meta.ProtocolVersion == mcptools.LatestVersion
 }
 
 // originAllowed is the DNS rebinding guard. The Host must be this resource's host, and an Origin, when
@@ -246,30 +266,41 @@ func (h *handler) authenticate(w http.ResponseWriter, r *http.Request) (Claims, 
 	return claims, true
 }
 
+type rpcFailure struct {
+	code    int
+	message string
+	data    any
+}
+
 // checkHeaders applies the 2026-07-28 transport rules. A client on an older revision sends none of
-// these headers, so it is left alone.
-func checkHeaders(r *http.Request, req rpcRequest) (int, string) {
+// these headers, so it is left alone. The missing capabilities case is the protocol layer's.
+func checkHeaders(r *http.Request, req rpcRequest) *rpcFailure {
 	version := r.Header.Get("MCP-Protocol-Version")
 	meta := req.Params.Meta.ProtocolVersion
-	if version != "" && !slices.Contains(mcptools.SupportedVersions(), version) {
-		return codeUnsupportedVersion, "unsupported protocol version"
+	for _, named := range []string{meta, version} {
+		if named != "" && !slices.Contains(mcptools.SupportedVersions(), named) {
+			return &rpcFailure{codeUnsupportedVersion, "unsupported protocol version", map[string]any{"supported": mcptools.SupportedVersions(), "requested": named}}
+		}
 	}
 	if version != "" && meta != "" && version != meta {
-		return codeHeaderMismatch, "MCP-Protocol-Version does not match the request"
+		return &rpcFailure{codeHeaderMismatch, "MCP-Protocol-Version does not match the request", nil}
 	}
-	if version != mcptools.LatestVersion && meta != mcptools.LatestVersion {
-		return 0, ""
+	if !isLatest(r, req) {
+		return nil
 	}
 	if version == "" {
-		return codeHeaderMismatch, "MCP-Protocol-Version is required"
+		return &rpcFailure{codeHeaderMismatch, "MCP-Protocol-Version is required", nil}
+	}
+	if meta == "" && req.Method != "server/discover" {
+		return &rpcFailure{codeInvalidParams, "_meta must state the protocol version", nil}
 	}
 	if trimOWS(r.Header.Get("Mcp-Method")) != req.Method {
-		return codeHeaderMismatch, "Mcp-Method does not match the request"
+		return &rpcFailure{codeHeaderMismatch, "Mcp-Method does not match the request", nil}
 	}
 	if req.Method == "tools/call" && trimOWS(r.Header.Get("Mcp-Name")) != req.Params.Name {
-		return codeHeaderMismatch, "Mcp-Name does not match the request"
+		return &rpcFailure{codeHeaderMismatch, "Mcp-Name does not match the request", nil}
 	}
-	return 0, ""
+	return nil
 }
 
 func trimOWS(value string) string {
@@ -297,11 +328,15 @@ func writeFailure(w http.ResponseWriter, status int, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
-func writeRPCError(w http.ResponseWriter, status int, id json.RawMessage, code int, message string) {
+func writeRPCError(w http.ResponseWriter, status int, id json.RawMessage, failure *rpcFailure) {
 	if len(bytes.TrimSpace(id)) == 0 {
 		id = json.RawMessage("null")
 	}
+	body := map[string]any{"code": failure.code, "message": failure.message}
+	if failure.data != nil {
+		body["data"] = failure.data
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": message}})
+	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": body})
 }
