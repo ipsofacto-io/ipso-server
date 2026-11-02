@@ -21,7 +21,7 @@ import (
 // with a rule as data, the server writes the Rego from it, and the rule reaches review only when
 // it compiles as `ipso compile` compiles it and passes every fixture a person wrote.
 const (
-	checkPromptVersion = "check-rule-v2"
+	checkPromptVersion = "check-rule-v3"
 	maxFixtures        = 50
 	maxFixtureRunes    = 8 << 10
 	maxFixturesBytes   = 1 << 20
@@ -37,7 +37,7 @@ const (
 	maxProblems        = 10
 )
 
-//go:embed prompts/check-rule-v2.txt
+//go:embed prompts/check-rule-v3.txt
 var checkPrompt string
 
 // ErrCheckFailed means no drafted rule passed every fixture, after one repair. Nothing is proposed.
@@ -71,7 +71,8 @@ type CheckRequest struct {
 	Fixtures   []Fixture
 }
 
-// RuleSpec is the model's answer: rules that each deny an edit meeting all of their conditions.
+// RuleSpec is the rule the model drafts: rules that each deny an edit meeting all of their
+// conditions.
 type RuleSpec struct {
 	Rules []Rule `json:"rules"`
 }
@@ -224,6 +225,7 @@ func draft(text string, fixtures []Fixture) (RuleSpec, []string) {
 func failingFixtures(spec RuleSpec, rule *rulecheck.Rule, fixtures []Fixture) []string {
 	var problems []string
 	var probe *rulecheck.Rule
+	probed := false
 	for i, f := range fixtures {
 		denials, err := rule.Deny(f.edit())
 		if err != nil {
@@ -233,10 +235,11 @@ func failingFixtures(spec RuleSpec, rule *rulecheck.Rule, fixtures []Fixture) []
 		if f.Deny == (len(denials) > 0) {
 			continue
 		}
-		if probe == nil {
-			if probe, err = rulecheck.Compile([]byte(renderConditions(spec))); err != nil {
-				return append(problems, fmt.Sprintf("edit %d: the rule gets it wrong, and its conditions do not evaluate alone (%s)", i+1, rulecheck.Code(err)))
-			}
+		if !probed {
+			// Each condition compiled inside the rule. Should one fail alone, the problem names the
+			// edit without the conditions.
+			probe, _ = rulecheck.Compile([]byte(renderConditions(spec)))
+			probed = true
 		}
 		problems = append(problems, explain(spec, probe, i+1, f))
 	}
@@ -260,13 +263,20 @@ func place(rule, condition int) string {
 	return fmt.Sprintf("%d.%d", rule+1, condition+1)
 }
 
-// explain says why the rule gets one edit wrong: for an edit to deny, which condition of each rule
-// does not hold, and for an edit to allow, which rules hold.
+// explain says why the rule gets one edit wrong: for an edit to deny, which conditions of each rule
+// do not hold, and for an edit to allow, which rules hold.
 func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture) string {
+	verdict := fmt.Sprintf("edit %d must be allowed, and the rule denies it", number)
+	if f.Deny {
+		verdict = fmt.Sprintf("edit %d must be denied, and the rule allows it", number)
+	}
 	edit := fmt.Sprintf(" Edit %d is %s", number, f.shown(maxQuotedRunes))
+	if probe == nil {
+		return verdict + "." + edit
+	}
 	held, err := probe.Deny(f.edit())
 	if err != nil {
-		return fmt.Sprintf("edit %d: its conditions do not evaluate alone (%s).", number, rulecheck.Code(err)) + edit
+		return verdict + "." + edit
 	}
 	holds := map[string]bool{}
 	for _, id := range held {
@@ -277,20 +287,34 @@ func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture) string
 		var unmet []string
 		for c, cond := range rule.When {
 			if !holds[place(r, c)] {
-				unmet = append(unmet, jsonText(cond))
+				unmet = append(unmet, jsonText(cond)+patternHint(cond))
 			}
 		}
 		switch {
-		case f.Deny:
+		case f.Deny && len(unmet) > 0:
 			reasons = append(reasons, fmt.Sprintf("in rule %d, %s does not hold", r+1, strings.Join(unmet, " and ")))
-		case len(unmet) == 0:
+		case !f.Deny && len(unmet) == 0:
 			reasons = append(reasons, fmt.Sprintf("rule %d", r+1))
 		}
 	}
-	if f.Deny {
-		return fmt.Sprintf("edit %d must be denied, and the rule allows it: %s.", number, strings.Join(reasons, "; ")) + edit
+	switch {
+	case len(reasons) == 0:
+		return verdict + "." + edit
+	case f.Deny:
+		return verdict + ": " + strings.Join(reasons, "; ") + "." + edit
+	default:
+		return verdict + ": every condition of " + strings.Join(reasons, " and ") + " holds for it." + edit
 	}
-	return fmt.Sprintf("edit %d must be allowed, and the rule denies it: every condition of %s holds for it.", number, strings.Join(reasons, " and ")) + edit
+}
+
+// patternHint flags a plain-text value written as a pattern, the most common reason a condition
+// the model meant to hold does not.
+func patternHint(c Condition) string {
+	pattern := strings.Contains(c.Value, `\`) || strings.Contains(c.Value, ".*")
+	if !pattern || c.Op == "regex" || c.Op == "glob" {
+		return ""
+	}
+	return " (" + c.Op + " compares plain text; for a pattern, use regex)"
 }
 
 func parseSpec(text string) (RuleSpec, error) {
@@ -300,10 +324,15 @@ func parseSpec(text string) (RuleSpec, error) {
 	body := unfence(text)
 	decoder := json.NewDecoder(strings.NewReader(body))
 	decoder.DisallowUnknownFields()
-	var spec RuleSpec
-	if err := decoder.Decode(&spec); err != nil {
+	// The model writes what tells the edits apart before the rules, and only the rules are kept.
+	var answer struct {
+		Difference string `json:"difference"`
+		Rules      []Rule `json:"rules"`
+	}
+	if err := decoder.Decode(&answer); err != nil {
 		return RuleSpec{}, fmt.Errorf("the answer is not one JSON object with the fields of the example (%s)", decodeProblem(body, err))
 	}
+	spec := RuleSpec{Rules: answer.Rules}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return RuleSpec{}, errors.New("the answer holds more than one JSON value")
 	}

@@ -60,6 +60,17 @@ func TestDraftCheckProposesARuleThatPassesItsFixtures(t *testing.T) {
 	}
 }
 
+func TestDraftCheckKeepsOnlyTheRules(t *testing.T) {
+	answer := strings.Replace(envRule, `{"rules"`, `{"difference":"The edit to deny writes a .env file.","rules"`, 1)
+	check, _, err := DraftCheck(t.Context(), (&scriptedLLM{answers: []string{answer}}).complete, checkRequest(envFixtures))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec, _ := json.Marshal(check.Spec); string(spec) != envRule {
+		t.Fatalf("spec %s", spec)
+	}
+}
+
 func TestDraftCheckRepairsOnceWithWhatFailed(t *testing.T) {
 	wrong := strings.Replace(envRule, `".env"`, `".go"`, 1)
 	llm := &scriptedLLM{answers: []string{wrong, envRule}}
@@ -92,6 +103,11 @@ func TestRepairNamesTheConditionsThatDecide(t *testing.T) {
 			}}}},
 			want:   `edit 1 must be denied, and the rule allows it: in rule 1, {"field":"content","op":"contains","value":"SECRET"} does not hold. Edit 1 is {"tool":"write","path":"service/.env","content":"PORT=1\n","added":"PORT=1\n","deny":true}`,
 			absent: `"value":".env"} does not hold`,
+		},
+		{
+			name: "pattern in plain text",
+			spec: RuleSpec{Rules: []Rule{{Message: "m", When: []Condition{{Field: "path", Op: "contains", Value: `\.env`}}}}},
+			want: `in rule 1, {"field":"path","op":"contains","value":"\\.env"} (contains compares plain text; for a pattern, use regex) does not hold.`,
 		},
 		{
 			name: "edit to allow",

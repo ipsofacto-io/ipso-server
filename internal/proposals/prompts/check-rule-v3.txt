@@ -1,7 +1,9 @@
 You draft one automated check for an architecture decision. The check runs when an AI coding agent proposes an edit, and denies the edit when it breaks the decision. A person reviews the check before it is used.
 
 Answer with one JSON object and nothing else, in this shape:
-{"rules":[{"when":[{"field":"path","op":"suffix","value":".go"}],"message":"One sentence that says what the decision forbids."}]}
+{"difference":"What every edit to deny has and no edit to allow has, in one sentence.","rules":[{"when":[{"field":"path","op":"suffix","value":".go"}],"message":"One sentence that says what the decision forbids."}]}
+
+Write "difference" first: compare the edits to deny with the edits to allow, field by field, and name exactly what tells them apart. Then write rules that test that difference.
 
 An edit has these fields:
 - tool: what makes the change, one of write, edit, patch, delete, shell, working-tree.
@@ -20,14 +22,16 @@ Each condition has a field, an op, a value, and an optional "not": true that inv
 - glob: the whole field matches a glob, where * stays inside one directory and ** crosses directories.
 - regex: an RE2 regular expression matches anywhere in the field. (?i) at the start ignores letter case.
 
+prefix and suffix test the start and the end of the whole field, which suits path: match a kind of file by its name or extension with suffix, such as "Makefile" or ".py", and a directory with prefix, such as "docs/". For text inside content, added, or command, use contains or regex.
+
 equals, prefix, suffix, and contains compare plain text, character for character, including quotes, * and parentheses, with no backslash. Only regex reads its value as a pattern. In JSON, write each backslash of a regex twice, as in "\\s+".
 
-A missing field is the empty string. Test the text an edit introduces with "added" and what the whole file must hold with "content". Match a kind of file by its name or extension with suffix, such as "Makefile" or ".py", and a directory with prefix, such as "docs/". Keep the check as general as the decision: match file kinds and directories, not the exact paths of the examples. The edits below show what must be denied and allowed; the check is also run on edits you do not see.
+A missing field is the empty string. Test the text an edit introduces with "added" and what the whole file must hold with "content". Keep the check as general as the decision: match file kinds and directories, not the exact paths of the examples. The edits below show what must be denied and allowed; the check is also run on edits you do not see.
 
 Examples.
 Decision: "Shell scripts start with set -euo pipefail."
-{"rules":[{"when":[{"field":"path","op":"suffix","value":".sh"},{"field":"content","op":"contains","value":"set -euo pipefail","not":true}],"message":"Shell scripts start with set -euo pipefail."}]}
+{"difference":"The edits to deny are .sh files whose content lacks set -euo pipefail.","rules":[{"when":[{"field":"path","op":"suffix","value":".sh"},{"field":"content","op":"contains","value":"set -euo pipefail","not":true}],"message":"Shell scripts start with set -euo pipefail."}]}
 Decision: "Agents never run terraform destroy."
-{"rules":[{"when":[{"field":"command","op":"regex","value":"terraform\\s+destroy"}],"message":"Agents never run terraform destroy."}]}
+{"difference":"The commands to deny run terraform destroy; the others run other terraform commands.","rules":[{"when":[{"field":"command","op":"regex","value":"terraform\\s+destroy"}],"message":"Agents never run terraform destroy."}]}
 Decision: "Generated code under gen/ is not edited, except gen/README.md."
-{"rules":[{"when":[{"field":"path","op":"prefix","value":"gen/"},{"field":"path","op":"equals","value":"gen/README.md","not":true}],"message":"Generated code under gen/ is not edited."}]}
+{"difference":"The edits to deny change files under gen/ other than gen/README.md.","rules":[{"when":[{"field":"path","op":"prefix","value":"gen/"},{"field":"path","op":"equals","value":"gen/README.md","not":true}],"message":"Generated code under gen/ is not edited."}]}
