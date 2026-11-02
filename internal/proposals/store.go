@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
+	"github.com/ipsofacto-io/ipso-server/internal/registry"
 )
 
 const (
@@ -38,7 +39,7 @@ func Process(ctx context.Context, db *sql.DB, complete CompleteFunc, tenant uuid
 	if err != nil || len(found) == 0 {
 		return 0, stats, err
 	}
-	decided, err := knownDecisions(ctx, db, tenant)
+	decided, err := knownDecisions(ctx, db, tenant, repo)
 	if err != nil {
 		return 0, stats, err
 	}
@@ -47,18 +48,28 @@ func Process(ctx context.Context, db *sql.DB, complete CompleteFunc, tenant uuid
 	return created, stats, err
 }
 
-// knownDecisions returns the titles of the tenant's decisions in force and the text of its
-// pending proposals, newest first, for Dedupe.
-func knownDecisions(ctx context.Context, db *sql.DB, tenant uuid.UUID) ([]string, error) {
+// knownDecisions returns the titles of the decisions in force for the repository, as the registry
+// resolves them, and the text of the tenant's latest pending proposals, for Dedupe.
+func knownDecisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo string) ([]string, error) {
+	now := time.Now()
+	decisions, err := registry.Resolve(ctx, db, tenant, registry.Subject{Repo: repo}, now, now)
+	if err != nil {
+		return nil, err
+	}
 	var texts []string
-	err := tenantTx(ctx, db, tenant, true, func(tx *sql.Tx) error {
+	for _, decision := range decisions {
+		var body struct {
+			Title string `json:"title"`
+		}
+		if json.Unmarshal(decision.Body, &body) == nil && body.Title != "" {
+			texts = append(texts, body.Title)
+		}
+	}
+	err = tenantTx(ctx, db, tenant, true, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT body->>'title' FROM registry.decision_version
-			WHERE tenant_id = $1 AND valid_period @> clock_timestamp() AND body ? 'title'
-			UNION ALL
-			(SELECT concat_ws(' ', payload->>'title', payload->>'statement') FROM proposals.proposal
-			 WHERE tenant_id = $1 AND status = 'pending'
-			 ORDER BY id DESC LIMIT $2)`, tenant, maxKnownProposals)
+			SELECT concat_ws(' ', payload->>'title', payload->>'statement') FROM proposals.proposal
+			WHERE tenant_id = $1 AND status = 'pending'
+			ORDER BY id DESC LIMIT $2`, tenant, maxKnownProposals)
 		if err != nil {
 			return err
 		}

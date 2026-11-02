@@ -179,7 +179,8 @@ func TestRedTeamEndToEndLeavesOnlyPending(t *testing.T) {
 }
 
 // TestProcessDedupesAgainstTheRegistryAndPendingProposals proposes a decision once: not when a
-// decision in force has its title, and not when a pending proposal already states it (ADR-0085).
+// decision in force for the repository has its title, and not when a pending proposal already
+// states it (ADR-0085).
 func TestProcessDedupesAgainstTheRegistryAndPendingProposals(t *testing.T) {
 	db := newDB(t)
 	var scope uuid.UUID
@@ -211,6 +212,23 @@ func TestProcessDedupesAgainstTheRegistryAndPendingProposals(t *testing.T) {
 	if err != nil || created != 0 || stats.Duplicates != 1 {
 		t.Fatalf("pending proposal: created %d stats %+v err %v", created, stats, err)
 	}
+	// A decision in force in another org of the tenant does not apply to this repository.
+	var globex uuid.UUID
+	if err := db.QueryRowContext(t.Context(), `
+		INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1, NULL, 'org', 'globex') RETURNING id`,
+		tenantA).Scan(&globex); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `
+		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
+		VALUES (gen_random_uuid(), 1, $1, '{"title": "Cache sessions in Redis"}', ARRAY[$2::uuid], '[2026-01-01,)')`,
+		tenantA, globex); err != nil {
+		t.Fatal(err)
+	}
+	redis := &fakeLLM{answer: `{"candidates":[{"source":0,"title":"Cache sessions in Redis","statement":"Sessions are cached in Redis.","rationale":"","confidence":0.8}]}`}
+	if created, _, err := Process(t.Context(), db, redis.complete, tenantA, testRepo, testNumber, []integrations.Comment{comment(4, "We decided to cache sessions in Redis.")}); err != nil || created != 1 {
+		t.Fatalf("decision of another org: created %d err %v", created, err)
+	}
 	// Another tenant has neither, so it gets the proposal.
 	other := &fakeLLM{answer: natsAnswer}
 	if created, _, err := Process(t.Context(), db, other.complete, tenantB, testRepo, testNumber, []integrations.Comment{comment(2, "We decided to use NATS for events.")}); err != nil || created != 1 {
@@ -220,10 +238,15 @@ func TestProcessDedupesAgainstTheRegistryAndPendingProposals(t *testing.T) {
 
 func TestInboxPages(t *testing.T) {
 	db := newDB(t)
-	llm := &fakeLLM{answer: oneCandidate}
-	for i := range 3 {
-		if _, _, err := Process(t.Context(), db, llm.complete, tenantA, testRepo, testNumber, []integrations.Comment{comment(i, "We decided to use Postgres.")}); err != nil {
-			t.Fatal(err)
+	// Three different decisions, since the pipeline proposes a decision once (ADR-0085).
+	for i, decision := range [][2]string{
+		{"Use Postgres", "The team uses Postgres for new services."},
+		{"Cache sessions in Redis", "Sessions are cached in Redis."},
+		{"Publish events on NATS", "Services publish events on NATS JetStream."},
+	} {
+		llm := &fakeLLM{answer: `{"candidates":[{"source":0,"title":"` + decision[0] + `","statement":"` + decision[1] + `","rationale":"","confidence":0.8}]}`}
+		if created, _, err := Process(t.Context(), db, llm.complete, tenantA, testRepo, testNumber, []integrations.Comment{comment(i, "We decided: "+decision[1])}); err != nil || created != 1 {
+			t.Fatalf("decision %d: created %d err %v", i, created, err)
 		}
 	}
 	first := readInbox(t, db, tenantA, "?limit=2")

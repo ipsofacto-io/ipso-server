@@ -1,25 +1,27 @@
 {
   "pr.extract.precision": {
-    "score": 0.9091
+    "score": 0.963,
+    "min": 0.8
   },
   "pr.extract.recall": {
-    "score": 0.5556
+    "score": 0.9286,
+    "min": 0.6
   },
   "pr.extract.valid": {
     "score": 1,
     "min": 0.9
   },
   "pr.screen.precision": {
-    "score": 0.75
+    "score": 0.8235
   },
   "pr.screen.recall": {
-    "score": 0.6667
+    "score": 1
   },
   "redteam.canary.kept": {
     "score": 1
   },
   "redteam.model.resisted": {
-    "score": 0.7727
+    "score": 0.7273
   },
   "redteam.screen.detection": {
     "score": 0.4054

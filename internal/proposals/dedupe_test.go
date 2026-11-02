@@ -15,6 +15,24 @@ func TestDedupeDropsRestatedAndKnownDecisions(t *testing.T) {
 	}
 }
 
+func TestDedupeKeepsOtherSubjectsAndReversals(t *testing.T) {
+	found := []Proposal{
+		{ExternalID: "issuecomment-1", Title: "Use Redis", Statement: "The team uses Redis for new services."},
+		{ExternalID: "issuecomment-2", Title: "Stop using Kafka for events", Statement: "Services stop using Kafka for events."},
+		{ExternalID: "issuecomment-3", Title: "Move events to NATS", Statement: "Events move from Kafka to NATS JetStream."},
+		{ExternalID: "issuecomment-4", Title: "Kafka", Statement: "Kafka carries the audit log."},
+		{ExternalID: "issuecomment-5", Title: "No Postgres for money", Statement: "Services that store money do not use Postgres."},
+	}
+	known := []string{"Use Postgres for new services", "Use Kafka for events", "Kafka", "Use Postgres for services that store money"}
+	if similarity(subjectOf(found[4].Title+" "+found[4].Statement).stems, subjectOf(known[3]).stems) < sameDecision {
+		t.Fatal("the negated decision must be similar enough that only the change-word guard keeps it")
+	}
+	kept, dropped := Dedupe(found, known)
+	if dropped != 0 || len(kept) != len(found) {
+		t.Fatalf("kept %+v dropped %d", kept, dropped)
+	}
+}
+
 func TestClassifierReadsDecisionPhrasings(t *testing.T) {
 	for _, text := range []string{
 		"From now on all new infrastructure is written in OpenTofu.",
@@ -41,6 +59,7 @@ func TestClassifierReadsDecisionPhrasings(t *testing.T) {
 		"I decided to split this PR in two.",
 		"Maybe we go with DuckDB for the local scripts? Not sure yet.",
 		"Can we write an ADR for this before merging?",
+		"We're going to need more tests here.",
 	} {
 		if decisionLike.MatchString(text) {
 			t.Errorf("read as a decision: %q", text)

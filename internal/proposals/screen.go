@@ -18,7 +18,8 @@ import (
 // its precision and recall (ADR-0085).
 var decisionLike = regexp.MustCompile(`(?i)` +
 	`\b(we|team)\s+(have\s+|'ve\s+)?(decided|agreed|chose|settled\s+on|standardi[sz]ed\s+on|will\s+use|are\s+going\s+with)\b` +
-	`|\bwe('re|\s+are)\s+(going|moving|switching|standardi[sz]ing)\s+(\S+\s+){0,3}?(with|to|on)\b|\bwe\s+should\s+standardi[sz]e\b` +
+	`|\bwe('re|\s+are)\s+(going\s+(\S+\s+){0,3}?with|(moving|switching)\s+(\S+\s+){0,3}?(to|on)|standardi[sz]ing\s+(\S+\s+){0,3}?on)\b` +
+	`|\bwe\s+should\s+standardi[sz]e\b` +
 	`|\boutcomes?\s+(from|of)\s+the\b|\b(is|are)\s+(now\s+)?(deprecated|retired)\b` +
 	`|\b(decision|settled|rule\s+from\s+today)\s*:|\bthe\s+decision\s+is\b|\bas\s+decided\b|\blet'?s\s+(go|stick)\s+with\b` +
 	`|\b(going\s+forward|from\s+now\s+on|from\s+(today|this\s+release)\s+on)\b` +
@@ -88,10 +89,18 @@ var fillerWords = map[string]bool{
 func grounded(title, statement string) bool {
 	stated := subjectWords(statement)
 	for _, word := range subjectWords(title) {
-		for _, other := range stated {
-			if word == other || sharedPrefix(word, other) >= 5 {
-				return true
-			}
+		if holds(stated, word) {
+			return true
+		}
+	}
+	return false
+}
+
+// holds reports whether words holds word, or a word that shares a five-letter stem with it.
+func holds(words []string, word string) bool {
+	for _, other := range words {
+		if word == other || sharedPrefix(word, other) >= 5 {
+			return true
 		}
 	}
 	return false
