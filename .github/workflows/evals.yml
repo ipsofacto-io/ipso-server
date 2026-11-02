@@ -49,7 +49,7 @@ jobs:
           curl -fsSL -o model.gguf "$MODEL_URL"
           printf '%s  llama.tar.gz\n%s  model.gguf\n' "$LLAMA_SHA256" "$MODEL_SHA256" | sha256sum -c -
           tar xzf llama.tar.gz
-          # One CPU kernel and a fixed batch on every runner, so a rerun reproduces the recording.
+          # One CPU kernel, four threads, and no prompt cache reduce the run-to-run variation (ADR-0084).
           find "llama-${LLAMA_BUILD}" -name 'libggml-cpu-*.so' ! -name 'libggml-cpu-haswell.so' -delete
           key=$(openssl rand -hex 24)
           echo "::add-mask::$key"
