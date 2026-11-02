@@ -146,7 +146,7 @@ func retrying(live CompleteFunc) CompleteFunc {
 type memoryLedger struct{}
 
 func (memoryLedger) Reserve(context.Context, uuid.UUID, time.Time, int64, int64) error { return nil }
-func (memoryLedger) Settle(context.Context, uuid.UUID, time.Time, int64) error          { return nil }
+func (memoryLedger) Settle(context.Context, uuid.UUID, time.Time, int64) error         { return nil }
 
 func TestGate(t *testing.T) {
 	floor := 0.8
