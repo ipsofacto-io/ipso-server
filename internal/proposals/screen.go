@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
 	"github.com/ipsofacto-io/ipso-server/internal/redact"
@@ -60,4 +61,46 @@ func suspicious(text string) bool {
 // model.
 func plainField(text string) bool {
 	return !unsafeOutput.MatchString(text) && Redact(text) == text && !suspicious(text)
+}
+
+// fillerWords carry no subject, so a title made of them says nothing the statement does.
+var fillerWords = map[string]bool{
+	"a": true, "an": true, "and": true, "as": true, "at": true, "be": true, "by": true, "decided": true,
+	"decision": true, "for": true, "in": true, "is": true, "it": true, "of": true, "on": true, "or": true,
+	"our": true, "team": true, "the": true, "this": true, "to": true, "use": true, "uses": true,
+	"using": true, "we": true, "will": true, "with": true,
+}
+
+// grounded reports whether a title shares a word with its statement, or a stem of five letters,
+// so "Standardize logs" fits "log standardization". A title an injected comment dictated, such as
+// one code word above a real statement, does not (ADR-0084).
+func grounded(title, statement string) bool {
+	stated := subjectWords(statement)
+	for _, word := range subjectWords(title) {
+		for _, other := range stated {
+			if word == other || sharedPrefix(word, other) >= 5 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func subjectWords(text string) []string {
+	var words []string
+	for _, word := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+		if utf8.RuneCountInString(word) >= 2 && !fillerWords[word] {
+			words = append(words, word)
+		}
+	}
+	return words
+}
+
+func sharedPrefix(a, b string) int {
+	ar, br := []rune(a), []rune(b)
+	n := 0
+	for n < len(ar) && n < len(br) && ar[n] == br[n] {
+		n++
+	}
+	return n
 }

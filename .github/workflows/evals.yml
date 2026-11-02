@@ -49,11 +49,13 @@ jobs:
           curl -fsSL -o model.gguf "$MODEL_URL"
           printf '%s  llama.tar.gz\n%s  model.gguf\n' "$LLAMA_SHA256" "$MODEL_SHA256" | sha256sum -c -
           tar xzf llama.tar.gz
+          # One CPU kernel, four threads, and no prompt cache reduce the run-to-run variation (ADR-0084).
+          find "llama-${LLAMA_BUILD}" -name 'libggml-cpu-*.so' ! -name 'libggml-cpu-haswell.so' -delete
           key=$(openssl rand -hex 24)
           echo "::add-mask::$key"
           echo "IPSO_LLM_LOCAL=$key" >> "$GITHUB_ENV"
           LLAMA_API_KEY="$key" nohup "llama-${LLAMA_BUILD}/llama-server" -m model.gguf --alias qwen3-4b-q4_k_m --host 127.0.0.1 --port 8080 \
-            --ctx-size 8192 --parallel 1 --seed 0 --chat-template-kwargs '{"enable_thinking":false}' --threads "$(nproc)" > llama.log 2>&1 &
+            --ctx-size 8192 --parallel 1 --no-cache-prompt --seed 0 --chat-template-kwargs '{"enable_thinking":false}' --threads 4 > llama.log 2>&1 &
           for _ in $(seq 120); do
             curl -fs http://127.0.0.1:8080/health >/dev/null && exit 0
             sleep 2
@@ -66,7 +68,7 @@ jobs:
           IPSO_EVALS_TENANT: 00000000-0000-4000-8000-000000000e09
           # The gateway needs an EU default route to start. The eval tenant never uses it.
           IPSO_LLM_MISTRAL: not-used-by-the-eval-tenant
-        run: go test ./internal/evals -run '^TestEvals$' -count=1 -v -record -report "${RUNNER_TEMP}/scores.json"
+        run: go test ./internal/evals -run '^TestEvals$' -count=1 -timeout 50m -v -record -report "${RUNNER_TEMP}/scores.json"
       - name: Keep the answers and scores
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

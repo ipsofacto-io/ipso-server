@@ -51,6 +51,17 @@ func TestEvals(t *testing.T) {
 	for name, score := range pr {
 		scores[name] = score
 	}
+	attacks, err := LoadAttacks("testdata/redteam.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	redteam, err := RedTeamSuite(t.Context(), cassette.Complete, attacks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, score := range redteam {
+		scores[name] = score
+	}
 	t.Logf("scores:\n%s", Table(scores))
 
 	if *record {
