@@ -51,6 +51,10 @@ var (
 	validPlanPath   = regexp.MustCompile(`^/api/v2/(plans/plan-[0-9A-Za-z]{1,64}|runs/run-[0-9A-Za-z]{1,64}/plan)/json-output$`)
 	validResultPath = regexp.MustCompile(`^/api/v2/task-results/[0-9A-Za-z-]{1,64}/callback$`)
 	validHost       = regexp.MustCompile(`^[0-9A-Za-z.-]+(:[0-9]+)?$`)
+
+	// runStages are the stages HCP Terraform documents for a run. A request with any other stage, or
+	// none, does no work. That covers the request sent when a task is saved (ADR-0080).
+	runStages = []string{stagePrePlan, stagePostPlan, stagePreApply, stagePostApply}
 )
 
 // PlanEvaluator is a verified policy bundle. *plancheck.Bundle is the implementation.
@@ -132,7 +136,7 @@ type runTaskRequest struct {
 
 // receive checks the signature over the raw bytes before anything parses them. HCP Terraform answers a
 // status other than 200 by triggering the task again, so a signed request that cannot become a job gets
-// 200 and does no work. That includes the test request sent when a run task is created. A real run in
+// 200 and does no work. That includes the request sent when a run task is saved. A real run in
 // that state is never reported, so HCP Terraform times it out, and a mandatory task blocks the apply.
 func (s *RunTaskService) receive(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRunTaskBody))
@@ -156,7 +160,7 @@ func (s *RunTaskService) receive(w http.ResponseWriter, r *http.Request) {
 	}
 	callback, ok := s.callbackURL(request)
 	if !ok {
-		s.cfg.Logger.Info("run task request needs no work")
+		s.cfg.Logger.Info("run task request needs no work", "stage", cleanText(request.Stage))
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -177,10 +181,13 @@ func (s *RunTaskService) receive(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// callbackURL reports whether the request can be answered: a supported version, ids of the expected
-// form, a token, and a callback on the API host. A token is never sent anywhere else.
+// callbackURL reports whether the request can be answered: a supported version, a stage of a run, ids of
+// the expected form, a token, and a callback on the API host. A token is never sent anywhere else.
 func (s *RunTaskService) callbackURL(request runTaskRequest) (string, bool) {
-	if request.PayloadVersion != 1 || !validTaskResult.MatchString(request.TaskResult) || !validRun.MatchString(request.Run) {
+	if request.PayloadVersion != 1 || !slices.Contains(runStages, request.Stage) {
+		return "", false
+	}
+	if !validTaskResult.MatchString(request.TaskResult) || !validRun.MatchString(request.Run) {
 		return "", false
 	}
 	if request.AccessToken == "" || len(request.AccessToken) > maxTokenBytes {
