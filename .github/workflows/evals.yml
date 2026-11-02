@@ -68,7 +68,7 @@ jobs:
           IPSO_EVALS_TENANT: 00000000-0000-4000-8000-000000000e09
           # The gateway needs an EU default route to start. The eval tenant never uses it.
           IPSO_LLM_MISTRAL: not-used-by-the-eval-tenant
-        run: go test ./internal/evals -run '^TestEvals$' -count=1 -v -record -report "${RUNNER_TEMP}/scores.json"
+        run: go test ./internal/evals -run '^TestEvals$' -count=1 -timeout 50m -v -record -report "${RUNNER_TEMP}/scores.json"
       - name: Keep the answers and scores
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
