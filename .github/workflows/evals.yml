@@ -45,7 +45,7 @@ jobs:
           go-version-file: go.mod
       - name: Record answers and gate them
         env:
-          IPSO_EVALS_GATEWAY: internal/evals/testdata/github-models.json
+          IPSO_EVALS_GATEWAY: ${{ github.workspace }}/internal/evals/testdata/github-models.json
           IPSO_EVALS_TENANT: 00000000-0000-4000-8000-000000000e09
           IPSO_EVALS_MODEL: ${{ inputs.model || 'openai/gpt-4.1-mini' }}
           IPSO_EVALS_PACE_SECONDS: "5"
