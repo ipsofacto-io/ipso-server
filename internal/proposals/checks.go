@@ -30,6 +30,7 @@ const (
 	maxDecisionRunes   = 4000
 	maxShownRunes      = 1000
 	maxPreviousRunes   = 3000
+	maxQuotedRunes     = 200
 	maxDrafts          = 3
 	maxRules           = 3
 	maxConditions      = 5
@@ -61,6 +62,21 @@ type Fixture struct {
 
 func (f Fixture) edit() rulecheck.Edit {
 	return rulecheck.Edit{Tool: f.Tool, Path: f.Path, Content: f.Content, Added: f.Added, Command: f.Command}
+}
+
+func (f Fixture) field(name string) string {
+	switch name {
+	case "tool":
+		return f.Tool
+	case "path":
+		return f.Path
+	case "content":
+		return f.Content
+	case "added":
+		return f.Added
+	default:
+		return f.Command
+	}
 }
 
 // CheckRequest is a decision in force and the fixtures a person wrote for it.
@@ -205,7 +221,7 @@ func repairPrompt(user, previous string, problems []string) string {
 		problems = append(problems[:maxProblems], fmt.Sprintf("and %d more", len(problems)-maxProblems))
 	}
 	return user + "\nYour previous answer:\n" + truncate(previous, maxPreviousRunes) + "\n\nIt fails:\n- " + strings.Join(problems, "\n- ") +
-		"\n\nAnswer again with one JSON object. Write candidates that fix each failure, and do not repeat a candidate that failed."
+		"\n\nAnswer again with one JSON object. Write three new candidates that fix each failure, and do not repeat a candidate that failed."
 }
 
 // draft parses an answer and tries its candidates in order: each is validated, its Rego written
@@ -284,8 +300,8 @@ func place(rule, condition int) string {
 }
 
 // explain says why the rule gets one edit wrong: for an edit to deny, which conditions of each rule
-// do not hold, and for an edit to allow, which rules hold. The edit itself is numbered in the
-// request, so it is not quoted again.
+// do not hold and the text each one tested, and for an edit to allow, which rules hold. The edit
+// itself is numbered in the request, so it is not quoted whole again.
 func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture) string {
 	verdict := fmt.Sprintf("edit %d must be allowed, and the rule denies it", number)
 	if f.Deny {
@@ -307,7 +323,7 @@ func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture) string
 		var unmet []string
 		for c, cond := range rule.When {
 			if !holds[place(r, c)] {
-				unmet = append(unmet, jsonText(cond)+patternHint(cond))
+				unmet = append(unmet, jsonText(cond)+patternHint(cond)+" (the "+cond.Field+" is "+jsonText(truncate(f.field(cond.Field), maxQuotedRunes))+")")
 			}
 		}
 		switch {

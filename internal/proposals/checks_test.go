@@ -112,13 +112,13 @@ func TestRepairNamesTheConditionsThatDecide(t *testing.T) {
 			spec: RuleSpec{Rules: []Rule{{Message: "m", When: []Condition{
 				{Field: "path", Op: "suffix", Value: ".env"}, {Field: "content", Op: "contains", Value: "SECRET"},
 			}}}},
-			want:   `edit 1 must be denied, and the rule allows it: in rule 1, {"field":"content","op":"contains","value":"SECRET"} does not hold.`,
+			want:   `edit 1 must be denied, and the rule allows it: in rule 1, {"field":"content","op":"contains","value":"SECRET"} (the content is "PORT=1\n") does not hold.`,
 			absent: `"value":".env"} does not hold`,
 		},
 		{
 			name: "pattern in plain text",
 			spec: RuleSpec{Rules: []Rule{{Message: "m", When: []Condition{{Field: "path", Op: "contains", Value: `\.env`}}}}},
-			want: `in rule 1, {"field":"path","op":"contains","value":"\\.env"} (contains compares plain text; for a pattern, use regex) does not hold.`,
+			want: `in rule 1, {"field":"path","op":"contains","value":"\\.env"} (contains compares plain text; for a pattern, use regex) (the path is "service/.env") does not hold.`,
 		},
 		{
 			name: "edit to allow",
