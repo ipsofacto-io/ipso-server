@@ -4,8 +4,9 @@ go 1.27.1
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/ipsofacto-io/ipso v0.3.1-0.20261101213309-5b24409be732
+	github.com/ipsofacto-io/ipso v0.3.1-0.20261101224923-2c3e9791857c
 	github.com/jackc/pgx/v5 v5.11.0
+	github.com/lestrrat-go/jwx/v3 v3.3.0
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
@@ -44,7 +45,6 @@ require (
 	github.com/lestrrat-go/dsig-secp256k1 v1.0.0 // indirect
 	github.com/lestrrat-go/httpcc v1.0.1 // indirect
 	github.com/lestrrat-go/httprc/v3 v3.0.6 // indirect
-	github.com/lestrrat-go/jwx/v3 v3.3.0 // indirect
 	github.com/lestrrat-go/option/v2 v2.0.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e // indirect
 	github.com/magiconair/properties v1.8.10 // indirect

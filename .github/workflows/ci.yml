@@ -40,6 +40,31 @@ jobs:
       # Testcontainers starts PostgreSQL 18 on the runner's Docker.
       - run: go test -tags integration -count=1 ./...
 
+  mcp-conformance:
+    name: ci / mcp-conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: internal/mcpremote/testdata/tool/package-lock.json
+      - name: Install the conformance suite
+        working-directory: internal/mcpremote/testdata/tool
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          echo "${GITHUB_WORKSPACE}/internal/mcpremote/testdata/tool/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Run the scenarios that apply to the remote handler
+        run: go test -tags conformance ./internal/mcpremote -run TestConformance -count=1 -v
+
   lint:
     name: ci / lint
     runs-on: ubuntu-latest

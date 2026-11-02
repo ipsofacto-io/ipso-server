@@ -1,0 +1,4 @@
+# Checks the conformance suite cannot pass against a tools-only product server. Each one waits for a
+# fixture that only an SDK test server offers. Listing a check that passes fails the run, so this
+# file cannot go stale.
+server: []
