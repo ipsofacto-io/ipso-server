@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/ipsofacto-io/ipso v0.3.1-0.20261101224923-2c3e9791857c
+	github.com/ipsofacto-io/ipso v0.3.1-0.20261102062619-2aee53c1b684
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/lestrrat-go/jwx/v3 v3.3.0
 	github.com/pressly/goose/v3 v3.29.0
