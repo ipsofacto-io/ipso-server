@@ -6,7 +6,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/ipsofacto-io/ipso v0.3.1-0.20261102062619-2aee53c1b684
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/lestrrat-go/jwx/v3 v3.3.0
+	github.com/lestrrat-go/jwx/v3 v3.4.0
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
@@ -35,7 +35,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/gobwas/glob v1.0.0 // indirect
-	github.com/goccy/go-json v0.10.6 // indirect
+	github.com/goccy/go-json v0.11.2 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.3 // indirect
