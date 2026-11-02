@@ -277,13 +277,14 @@ type rpcFailure struct {
 func checkHeaders(r *http.Request, req rpcRequest) *rpcFailure {
 	version := r.Header.Get("MCP-Protocol-Version")
 	meta := req.Params.Meta.ProtocolVersion
+	// A header that disagrees with the body is the first thing wrong, whichever of them is supported.
+	if version != "" && meta != "" && version != meta {
+		return &rpcFailure{codeHeaderMismatch, "MCP-Protocol-Version does not match the request", nil}
+	}
 	for _, named := range []string{meta, version} {
 		if named != "" && !slices.Contains(mcptools.SupportedVersions(), named) {
 			return &rpcFailure{codeUnsupportedVersion, "unsupported protocol version", map[string]any{"supported": mcptools.SupportedVersions(), "requested": named}}
 		}
-	}
-	if version != "" && meta != "" && version != meta {
-		return &rpcFailure{codeHeaderMismatch, "MCP-Protocol-Version does not match the request", nil}
 	}
 	if !isLatest(r, req) {
 		return nil
@@ -291,7 +292,8 @@ func checkHeaders(r *http.Request, req rpcRequest) *rpcFailure {
 	if version == "" {
 		return &rpcFailure{codeHeaderMismatch, "MCP-Protocol-Version is required", nil}
 	}
-	if meta == "" && req.Method != "server/discover" {
+	// Probing with no _meta is for stdio. Here the header has already declared this revision.
+	if meta == "" {
 		return &rpcFailure{codeInvalidParams, "_meta must state the protocol version", nil}
 	}
 	if trimOWS(r.Header.Get("Mcp-Method")) != req.Method {

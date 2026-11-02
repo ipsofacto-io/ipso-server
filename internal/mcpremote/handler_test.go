@@ -278,15 +278,15 @@ func TestTransportRules(t *testing.T) {
 		status  int
 		code    float64
 	}{
-		"method mismatch":    {with("Mcp-Method", "tools/list"), 400, codeHeaderMismatch},
-		"method case":        {with("Mcp-Method", "TOOLS/CALL"), 400, codeHeaderMismatch},
-		"method missing":     {with("Mcp-Method", ""), 400, codeHeaderMismatch},
-		"name mismatch":      {with("Mcp-Name", "decisions.propose"), 400, codeHeaderMismatch},
-		"name missing":       {with("Mcp-Name", ""), 400, codeHeaderMismatch},
-		"version mismatch":   {with("MCP-Protocol-Version", "2025-06-18"), 400, codeHeaderMismatch},
-		"version missing":    {with("MCP-Protocol-Version", ""), 400, codeHeaderMismatch},
-		"version unknown":    {with("MCP-Protocol-Version", "2099-01-01"), 400, codeUnsupportedVersion},
-		"whitespace is fine": {with("Mcp-Name", "  decisions.applicable  "), 200, 0},
+		"method mismatch":                     {with("Mcp-Method", "tools/list"), 400, codeHeaderMismatch},
+		"method case":                         {with("Mcp-Method", "TOOLS/CALL"), 400, codeHeaderMismatch},
+		"method missing":                      {with("Mcp-Method", ""), 400, codeHeaderMismatch},
+		"name mismatch":                       {with("Mcp-Name", "decisions.propose"), 400, codeHeaderMismatch},
+		"name missing":                        {with("Mcp-Name", ""), 400, codeHeaderMismatch},
+		"version mismatch":                    {with("MCP-Protocol-Version", "2025-06-18"), 400, codeHeaderMismatch},
+		"version missing":                     {with("MCP-Protocol-Version", ""), 400, codeHeaderMismatch},
+		"an unknown version against the body": {with("MCP-Protocol-Version", "2099-01-01"), 400, codeHeaderMismatch},
+		"whitespace is fine":                  {with("Mcp-Name", "  decisions.applicable  "), 200, 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := r.post(token, body, tc.headers)
@@ -338,12 +338,14 @@ func TestStatelessFailuresCarryTheirHTTPStatus(t *testing.T) {
 		status  int
 		code    float64
 	}{
-		"no _meta":        {`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, latest, 400, codeInvalidParams},
-		"no capabilities": {`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`, latest, 400, codeInvalidParams},
-		"no version":      {`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/clientCapabilities":{}}}}`, latest, 400, codeInvalidParams},
-		"removed method":  {`{"jsonrpc":"2.0","id":1,"method":"ping","params":{` + metaLatest + `}}`, map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "ping"}, 404, codeMethodNotFound},
-		"unknown method":  {`{"jsonrpc":"2.0","id":1,"method":"nope","params":{` + metaLatest + `}}`, map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "nope"}, 404, codeMethodNotFound},
-		"older client":    {`{"jsonrpc":"2.0","id":1,"method":"nope"}`, nil, 200, codeMethodNotFound},
+		"no _meta":                                 {`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, latest, 400, codeInvalidParams},
+		"a discover probe with no _meta":           {`{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}`, map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "server/discover"}, 400, codeInvalidParams},
+		"a body version the header disagrees with": {`{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"v999.0.0","io.modelcontextprotocol/clientCapabilities":{}}}}`, map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "server/discover"}, 400, codeHeaderMismatch},
+		"no capabilities":                          {`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`, latest, 400, codeInvalidParams},
+		"no version":                               {`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/clientCapabilities":{}}}}`, latest, 400, codeInvalidParams},
+		"removed method":                           {`{"jsonrpc":"2.0","id":1,"method":"ping","params":{` + metaLatest + `}}`, map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "ping"}, 404, codeMethodNotFound},
+		"unknown method":                           {`{"jsonrpc":"2.0","id":1,"method":"nope","params":{` + metaLatest + `}}`, map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "nope"}, 404, codeMethodNotFound},
+		"older client":                             {`{"jsonrpc":"2.0","id":1,"method":"nope"}`, nil, 200, codeMethodNotFound},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := r.post(token, tc.body, tc.headers)
