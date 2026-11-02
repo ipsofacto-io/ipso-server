@@ -39,6 +39,10 @@ var systemPrompt string
 // Completion is one answer from the LLM gateway.
 type Completion = llmgw.Completion
 
+// ErrAnswer means the model's answer is not the one object the prompt asks for. Nothing from it
+// is stored.
+var ErrAnswer = errors.New("the answer is not the expected JSON")
+
 // CompleteFunc calls the LLM gateway for one tenant, as llmgw.Gateway.For returns it. The gateway
 // owns routing, budgets, and its own redaction (ADR-0081).
 type CompleteFunc func(ctx context.Context, system, user string) (Completion, error)
@@ -79,32 +83,7 @@ type selected struct {
 // gates before any egress: a trusted author, a provenance link for this pull request, no
 // injection marker, and decision-like text. Redacted text is sent, and only for those comments.
 func Extract(ctx context.Context, complete CompleteFunc, repo string, number int, comments []integrations.Comment, seen func(externalID string, digest [32]byte) bool) ([]Proposal, Stats, error) {
-	stats := Stats{Comments: len(comments)}
-	var picks []selected
-	for _, comment := range comments {
-		if strings.TrimSpace(comment.Body) == "" {
-			continue
-		}
-		if !trusted(comment) {
-			stats.Untrusted++
-			continue
-		}
-		if !provenance(repo, number, comment.URL) || !decisionLike.MatchString(comment.Body) {
-			continue
-		}
-		if suspicious(comment.Body) {
-			stats.Flagged++
-			continue
-		}
-		digest := sha256.Sum256([]byte(comment.Body))
-		if seen != nil && seen(comment.ExternalID, digest) {
-			continue
-		}
-		if len(picks) == maxSent {
-			break
-		}
-		picks = append(picks, selected{comment: comment, text: truncate(Redact(comment.Body), maxBodyRunes), digest: digest})
-	}
+	picks, stats := screen(repo, number, comments, seen)
 	if len(picks) == 0 {
 		return nil, stats, nil
 	}
@@ -148,6 +127,47 @@ func Extract(ctx context.Context, complete CompleteFunc, repo string, number int
 	return proposals, stats, nil
 }
 
+// Screen returns the external ids of the comments the four gates would send to the LLM, in order.
+// The eval harness measures the gates with it (IPSO-59).
+func Screen(repo string, number int, comments []integrations.Comment) []string {
+	picks, _ := screen(repo, number, comments, nil)
+	ids := make([]string, 0, len(picks))
+	for _, pick := range picks {
+		ids = append(ids, pick.comment.ExternalID)
+	}
+	return ids
+}
+
+func screen(repo string, number int, comments []integrations.Comment, seen func(externalID string, digest [32]byte) bool) ([]selected, Stats) {
+	stats := Stats{Comments: len(comments)}
+	var picks []selected
+	for _, comment := range comments {
+		if strings.TrimSpace(comment.Body) == "" {
+			continue
+		}
+		if !trusted(comment) {
+			stats.Untrusted++
+			continue
+		}
+		if !provenance(repo, number, comment.URL) || !decisionLike.MatchString(comment.Body) {
+			continue
+		}
+		if suspicious(comment.Body) {
+			stats.Flagged++
+			continue
+		}
+		digest := sha256.Sum256([]byte(comment.Body))
+		if seen != nil && seen(comment.ExternalID, digest) {
+			continue
+		}
+		if len(picks) == maxSent {
+			break
+		}
+		picks = append(picks, selected{comment: comment, text: truncate(Redact(comment.Body), maxBodyRunes), digest: digest})
+	}
+	return picks, stats
+}
+
 // provenance reports whether the link is a github.com link to this pull request. The link comes
 // from the API, and it is checked again because it ends up in front of a reviewer.
 func provenance(repo string, number int, link string) bool {
@@ -189,27 +209,46 @@ type candidate struct {
 	Confidence *float64 `json:"confidence"`
 }
 
-// parseAnswer refuses anything but the one object the prompt asks for. An unknown field, such as
-// a status an injected comment asked for, refuses the whole answer.
+// parseAnswer refuses anything but the one object the prompt asks for, optionally inside one
+// Markdown code fence. An unknown field, such as a status an injected comment asked for, refuses
+// the whole answer.
 func parseAnswer(text string) ([]candidate, error) {
 	if len(text) > maxOutputBytes {
-		return nil, errors.New("the answer is too large")
+		return nil, fmt.Errorf("%w: it is too large", ErrAnswer)
 	}
-	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder := json.NewDecoder(strings.NewReader(unfence(text)))
 	decoder.DisallowUnknownFields()
 	var answer struct {
 		Candidates []candidate `json:"candidates"`
 	}
 	if err := decoder.Decode(&answer); err != nil {
-		return nil, errors.New("the answer is not the expected JSON")
+		return nil, ErrAnswer
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return nil, errors.New("the answer holds more than one value")
+		return nil, fmt.Errorf("%w: it holds more than one value", ErrAnswer)
 	}
 	if len(answer.Candidates) > maxCandidates {
-		return nil, errors.New("the answer holds too many candidates")
+		return nil, fmt.Errorf("%w: it holds too many candidates", ErrAnswer)
 	}
 	return answer.Candidates, nil
+}
+
+// unfence removes one Markdown code fence that wraps the whole answer, as ```json ... ```.
+func unfence(text string) string {
+	trimmed := strings.TrimSpace(text)
+	body, ok := strings.CutPrefix(trimmed, "```")
+	if !ok {
+		return text
+	}
+	body, ok = strings.CutSuffix(body, "```")
+	if !ok {
+		return text
+	}
+	info, rest, found := strings.Cut(body, "\n")
+	if !found || (info != "" && info != "json") {
+		return text
+	}
+	return rest
 }
 
 func (c candidate) valid(sources int) bool {

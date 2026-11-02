@@ -1,0 +1,80 @@
+name: evals
+
+# Records fresh model answers for the golden datasets and gates them against the baseline
+# (ADR-0082). `ci / test` replays the committed answers on every pull request; this workflow is
+# the live side. It runs a pinned open-weight model on the runner with llama.cpp and reaches it
+# through the gateway as a tenant's own loopback route, so no prompt leaves the runner.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 5 * * 1"
+  pull_request:
+    paths:
+      - "internal/evals/**"
+      - "internal/proposals/**"
+      - "internal/llmgw/**"
+      - ".github/workflows/evals.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live:
+    name: evals / live
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      LLAMA_BUILD: b11569
+      LLAMA_SHA256: ad8acc130fa5337b7c044c8d4fef4ce0a6efb3543b8495b272b0a7f6848b6224
+      MODEL_URL: https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf
+      MODEL_SHA256: 7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Start the local model
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o llama.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_BUILD}/llama-${LLAMA_BUILD}-bin-ubuntu-x64.tar.gz"
+          curl -fsSL -o model.gguf "$MODEL_URL"
+          printf '%s  llama.tar.gz\n%s  model.gguf\n' "$LLAMA_SHA256" "$MODEL_SHA256" | sha256sum -c -
+          tar xzf llama.tar.gz
+          key=$(openssl rand -hex 24)
+          echo "::add-mask::$key"
+          echo "IPSO_LLM_LOCAL=$key" >> "$GITHUB_ENV"
+          LLAMA_API_KEY="$key" nohup "llama-${LLAMA_BUILD}/llama-server" -m model.gguf --alias qwen3-4b-q4_k_m --host 127.0.0.1 --port 8080 \
+            --ctx-size 8192 --parallel 1 --seed 0 --chat-template-kwargs '{"enable_thinking":false}' --threads "$(nproc)" > llama.log 2>&1 &
+          for _ in $(seq 120); do
+            curl -fs http://127.0.0.1:8080/health >/dev/null && exit 0
+            sleep 2
+          done
+          cat llama.log
+          exit 1
+      - name: Record answers and gate them
+        env:
+          IPSO_EVALS_GATEWAY: ${{ github.workspace }}/internal/evals/testdata/local-model.json
+          IPSO_EVALS_TENANT: 00000000-0000-4000-8000-000000000e09
+          # The gateway needs an EU default route to start. The eval tenant never uses it.
+          IPSO_LLM_MISTRAL: not-used-by-the-eval-tenant
+        run: go test ./internal/evals -run '^TestEvals$' -count=1 -v -record -report "${RUNNER_TEMP}/scores.json"
+      - name: Keep the answers and scores
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evals-${{ github.run_id }}
+          path: |
+            internal/evals/testdata/cassette.json
+            ${{ runner.temp }}/scores.json
+            ${{ runner.temp }}/llama.log
+          if-no-files-found: ignore
+          retention-days: 14
