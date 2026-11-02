@@ -39,6 +39,10 @@ var systemPrompt string
 // Completion is one answer from the LLM gateway.
 type Completion = llmgw.Completion
 
+// ErrAnswer means the model's answer is not the one object the prompt asks for. Nothing from it
+// is stored.
+var ErrAnswer = errors.New("the answer is not the expected JSON")
+
 // CompleteFunc calls the LLM gateway for one tenant, as llmgw.Gateway.For returns it. The gateway
 // owns routing, budgets, and its own redaction (ADR-0081).
 type CompleteFunc func(ctx context.Context, system, user string) (Completion, error)
@@ -205,27 +209,46 @@ type candidate struct {
 	Confidence *float64 `json:"confidence"`
 }
 
-// parseAnswer refuses anything but the one object the prompt asks for. An unknown field, such as
-// a status an injected comment asked for, refuses the whole answer.
+// parseAnswer refuses anything but the one object the prompt asks for, optionally inside one
+// Markdown code fence. An unknown field, such as a status an injected comment asked for, refuses
+// the whole answer.
 func parseAnswer(text string) ([]candidate, error) {
 	if len(text) > maxOutputBytes {
-		return nil, errors.New("the answer is too large")
+		return nil, fmt.Errorf("%w: it is too large", ErrAnswer)
 	}
-	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder := json.NewDecoder(strings.NewReader(unfence(text)))
 	decoder.DisallowUnknownFields()
 	var answer struct {
 		Candidates []candidate `json:"candidates"`
 	}
 	if err := decoder.Decode(&answer); err != nil {
-		return nil, errors.New("the answer is not the expected JSON")
+		return nil, ErrAnswer
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return nil, errors.New("the answer holds more than one value")
+		return nil, fmt.Errorf("%w: it holds more than one value", ErrAnswer)
 	}
 	if len(answer.Candidates) > maxCandidates {
-		return nil, errors.New("the answer holds too many candidates")
+		return nil, fmt.Errorf("%w: it holds too many candidates", ErrAnswer)
 	}
 	return answer.Candidates, nil
+}
+
+// unfence removes one Markdown code fence that wraps the whole answer, as ```json ... ```.
+func unfence(text string) string {
+	trimmed := strings.TrimSpace(text)
+	body, ok := strings.CutPrefix(trimmed, "```")
+	if !ok {
+		return text
+	}
+	body, ok = strings.CutSuffix(body, "```")
+	if !ok {
+		return text
+	}
+	info, rest, found := strings.Cut(body, "\n")
+	if !found || (info != "" && info != "json") {
+		return text
+	}
+	return rest
 }
 
 func (c candidate) valid(sources int) bool {

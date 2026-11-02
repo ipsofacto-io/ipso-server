@@ -3,6 +3,7 @@ package evals
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -83,7 +84,7 @@ func LoadThreads(path string) ([]Thread, error) {
 // is the share of proposals that match an expected decision once, and its recall is the share of
 // expected decisions some proposal matches.
 func PRSuite(ctx context.Context, complete CompleteFunc, threads []Thread) (Scores, error) {
-	var expected, screened, screenedHits, proposed, matched int
+	var expected, screened, screenedHits, proposed, matched, asked, answered int
 	for _, thread := range threads {
 		byID := map[string]Comment{}
 		for _, c := range thread.Comments {
@@ -99,9 +100,16 @@ func PRSuite(ctx context.Context, complete CompleteFunc, threads []Thread) (Scor
 				screenedHits++
 			}
 		}
-		found, _, err := proposals.Extract(ctx, proposals.CompleteFunc(complete), thread.Repo, thread.Number, comments, nil)
-		if err != nil {
+		found, stats, err := proposals.Extract(ctx, proposals.CompleteFunc(complete), thread.Repo, thread.Number, comments, nil)
+		if stats.Sent > 0 {
+			asked++
+		}
+		// A malformed answer is a quality failure the scores show. Anything else stops the suite.
+		if err != nil && !errors.Is(err, proposals.ErrAnswer) {
 			return nil, fmt.Errorf("thread %s: %w", thread.ID, err)
+		}
+		if err == nil && stats.Sent > 0 {
+			answered++
 		}
 		seen := map[string]bool{}
 		for _, p := range found {
@@ -118,6 +126,7 @@ func PRSuite(ctx context.Context, complete CompleteFunc, threads []Thread) (Scor
 		"pr.screen.recall":     Ratio(screenedHits, expected),
 		"pr.extract.precision": Ratio(matched, proposed),
 		"pr.extract.recall":    Ratio(matched, expected),
+		"pr.extract.valid":     Ratio(answered, asked),
 	}, nil
 }
 

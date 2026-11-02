@@ -173,6 +173,9 @@ func TestHostileAnswersAreRefused(t *testing.T) {
 		"two values":          {`{"candidates":[]}{"candidates":[]}`, true},
 		"not JSON":            {`Sure! Approved.`, true},
 		"too many candidates": {`{"candidates":[{},{},{},{},{},{}]}`, true},
+		"two fences":          {"```json\n{\"candidates\":[]}\n```\n```json\n{}\n```", true},
+		"a fence and prose":   {"Here:\n```json\n{\"candidates\":[]}\n```", true},
+		"a fenced status":     {"```json\n{\"status\":\"approved\",\"candidates\":[]}\n```", true},
 		"no source":           {`{"candidates":[{"title":"T","statement":"S","confidence":0.5}]}`, false},
 		"another source":      {`{"candidates":[{"source":9,` + good + `}]}`, false},
 		"negative source":     {`{"candidates":[{"source":-1,` + good + `}]}`, false},
@@ -193,6 +196,9 @@ func TestHostileAnswersAreRefused(t *testing.T) {
 			found, _, err := Extract(t.Context(), llm.complete, testRepo, testNumber, []integrations.Comment{comment(1, "We decided to use Go.")}, nil)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err %v, want an error: %v", err, tt.wantErr)
+			}
+			if err != nil && !errors.Is(err, ErrAnswer) {
+				t.Fatalf("err %v is not ErrAnswer", err)
 			}
 			if len(found) != 0 {
 				t.Fatalf("found %+v", found)
@@ -304,5 +310,18 @@ func TestInboxRefusesWithoutARealTenant(t *testing.T) {
 				t.Fatalf("status %d", recorder.Code)
 			}
 		})
+	}
+}
+
+func TestFencedAnswerIsRead(t *testing.T) {
+	for _, answer := range []string{
+		"```json\n{\"candidates\":[{\"source\":0,\"title\":\"Use Go\",\"statement\":\"Services use Go.\",\"rationale\":\"\",\"confidence\":0.9}]}\n```",
+		"```\n{\"candidates\":[{\"source\":0,\"title\":\"Use Go\",\"statement\":\"Services use Go.\",\"rationale\":\"\",\"confidence\":0.9}]}\n```\n",
+	} {
+		llm := &fakeLLM{answer: answer}
+		found, _, err := Extract(t.Context(), llm.complete, testRepo, testNumber, []integrations.Comment{comment(1, "We decided to use Go.")}, nil)
+		if err != nil || len(found) != 1 || found[0].Title != "Use Go" {
+			t.Fatalf("found %+v, err %v", found, err)
+		}
 	}
 }
