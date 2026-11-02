@@ -1,5 +1,6 @@
-// Package proposals turns merged pull request discussion into decision proposals for a person to
-// review (ADR-0062). LLM output is advisory, so nothing here can approve a proposal (ADR-0005),
+// Package proposals turns merged pull request discussion into decision proposals, and decisions
+// in force into drafted checks, for a person to review (ADR-0062, ADR-0086). LLM output is
+// advisory, so nothing here can approve a proposal (ADR-0005),
 // and the database refuses any status but pending. The binary does not call this package yet:
 // the control plane wires it to the LLM gateway once row-level security exists.
 package proposals
