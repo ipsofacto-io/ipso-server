@@ -7,7 +7,7 @@
   "tenants": {
     "00000000-0000-4000-8000-000000000e09": {
       "byok": [
-        {"name": "local", "provider": "openai", "endpoint": "http://127.0.0.1:8080/v1", "model": "qwen3-4b", "key_env": "IPSO_LLM_LOCAL", "allow_non_eu": true}
+        {"name": "local", "provider": "openai", "endpoint": "http://127.0.0.1:8080/v1", "model": "qwen3-4b-q4_k_m", "key_env": "IPSO_LLM_LOCAL", "allow_non_eu": true}
       ]
     }
   }

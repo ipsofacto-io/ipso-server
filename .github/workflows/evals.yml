@@ -52,7 +52,7 @@ jobs:
           key=$(openssl rand -hex 24)
           echo "::add-mask::$key"
           echo "IPSO_LLM_LOCAL=$key" >> "$GITHUB_ENV"
-          LLAMA_API_KEY="$key" nohup "llama-${LLAMA_BUILD}/llama-server" -m model.gguf --host 127.0.0.1 --port 8080 \
+          LLAMA_API_KEY="$key" nohup "llama-${LLAMA_BUILD}/llama-server" -m model.gguf --alias qwen3-4b-q4_k_m --host 127.0.0.1 --port 8080 \
             --ctx-size 8192 --parallel 1 --seed 0 --chat-template-kwargs '{"enable_thinking":false}' --threads "$(nproc)" > llama.log 2>&1 &
           for _ in $(seq 120); do
             curl -fs http://127.0.0.1:8080/health >/dev/null && exit 0

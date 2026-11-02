@@ -1,0 +1,57 @@
+[
+  {
+    "key": "2c583577961582981cec1ef495ea663368f1a7390276ef083022c4fcf7a91a6e",
+    "model": "model.gguf",
+    "text": "{\"candidates\":[{\"source\":0,\"title\":\"End-to-end tests use Playwright\",\"statement\":\"The team agreed to use Playwright for end-to-end tests and remove the Cypress suite once the checkout flow is ported.\",\"rationale\":\"The team made a decision to standardize on Playwright for end-to-end testing after the checkout flow is ported.\",\"confidence\":0.95}]}"
+  },
+  {
+    "key": "4f35f4aed8157316100859de608dab9d5a7be38e2df9c94191e7937d70b61aef",
+    "model": "model.gguf",
+    "text": "{\"candidates\":[{\"source\":0,\"title\":\"Use Kustomize overlays for environments\",\"statement\":\"We will use Kustomize overlays per environment rather than Helm for our own services. Helm stays for third-party charts only.\",\"rationale\":\"The decision to use Kustomize overlays for environments and keep Helm for third-party charts ensures consistency and clarity in managing configurations across different environments.\",\"confidence\":0.95}]}"
+  },
+  {
+    "key": "50c12b1f59e57c325636799f27c735c01770538d77bd25ebe021d5c6165865c0",
+    "model": "model.gguf",
+    "text": "{\"candidates\":[{\"source\":0,\"title\":\"Decision on Service-to-Service Events\",\"statement\":\"Service-to-service events will use NATS JetStream instead of Kafka.\",\"rationale\":\"The decision was made to use NATS JetStream for service-to-service events, and Kafka is not being added to the platform.\",\"confidence\":1.0}]}"
+  },
+  {
+    "key": "7284674bcfc827526921d33fd78b986b3419a7838f6ed4ce83fdedba954f4e66",
+    "model": "model.gguf",
+    "text": "{\"candidates\":[{\"source\":0,\"title\":\"Move CI to OIDC federation\",\"statement\":\"We decided to move CI to OIDC federation and delete the long-lived cloud keys.\",\"rationale\":\"The old keys are already rotated.\",\"confidence\":1.0}]}"
+  },
+  {
+    "key": "789c177940713b7eff698e00e7db99adb6106e0da3589c20517e3d60903a2f83",
+    "model": "model.gguf",
+    "text": "{\"candidates\": [{\"source\":0,\"title\":\"Postpone merging until code freeze ends\",\"statement\":\"The team decided to delay merging the code until the code freeze period is over.\",\"rationale\":\"The decision was made during a standup meeting to ensure that the code freeze is respected and no changes are merged outside of the allowed timeframe.\",\"confidence\":0.95}]}"
+  },
+  {
+    "key": "7f5207205037832613c19f89e7c84cde663945bc1f4210a6b29125d962248f53",
+    "model": "model.gguf",
+    "text": "{\"candidates\":[{\"source\":0,\"title\":\"Drop Redux for Server State\",\"statement\":\"We decided to drop Redux in favor of TanStack Query for server state management, while keeping local UI state in component state.\",\"rationale\":\"After a spike, the team agreed to use TanStack Query for server state and keep local UI state in component state.\",\"confidence\":0.95}]}"
+  },
+  {
+    "key": "807aea1a2624f6dadb3a22d3d725df05933eb561c76f15eae3e0bc11a33dbf43",
+    "model": "model.gguf",
+    "text": "{\"candidates\":[{\"source\":0,\"title\":\"Choosing Kotlin Multiplatform for Shared Networking\",\"statement\":\"We decided to use Kotlin Multiplatform for the shared networking layer to allow Swift and Kotlin UIs to remain native.\",\"rationale\":\"This decision allows for a shared networking layer while maintaining native UIs on both platforms.\",\"confidence\":0.95}]}"
+  },
+  {
+    "key": "8481cbc9cea87d45ab1d798a167488b3def867fd47f72982bf7968abbf6711ea",
+    "model": "model.gguf",
+    "text": "{\"candidates\":[{\"source\":0,\"title\":\"Log Format Standardization\",\"statement\":\"All services will use JSON logging via log/slog, and logrus will be deprecated.\",\"rationale\":\"This ensures consistency in log format across services, simplifying the log pipeline and improving maintainability.\",\"confidence\":1.0}]}"
+  },
+  {
+    "key": "a96e17a475952248d42a26c3350f9e62f2761cea2c540cf58bb65d84ac67f033",
+    "model": "model.gguf",
+    "text": "{\"candidates\":[{\"source\":0,\"title\":\"Store money as int64 minor units\",\"statement\":\"We decided to store all money as int64 minor units (cents) to avoid precision loss in financial calculations.\",\"rationale\":\"Floats lose precision on sums, and the ledger already reconciles in cents.\",\"confidence\":1.0}]}"
+  },
+  {
+    "key": "b8eb32386903d96a4d8a99d7cd60daec744e2d5f683600f66cd16d5e60679a86",
+    "model": "model.gguf",
+    "text": "{\"candidates\":[{\"source\":0,\"title\":\"Public API Versioning Strategy\",\"statement\":\"Public APIs will use URL path versioning (/v1, /v2) to indicate versions.\",\"rationale\":\"Clients and caches handle URL paths more simply than headers.\",\"confidence\":1.0}]}"
+  },
+  {
+    "key": "dd53d52f0627991d5240605f20d416ab68a4dedfdd7e0db43f2655aaa47c7693",
+    "model": "model.gguf",
+    "text": "{\"candidates\":[{\"source\":0,\"title\":\"Use Full Commit SHA for GitHub Actions\",\"statement\":\"GitHub Actions in the organization should be pinned to a full commit SHA instead of tags.\",\"rationale\":\"Tags are mutable and caused issues in the past, leading to the decision to use full commit SHAs for stability.\",\"confidence\":0.95}]}"
+  }
+]
