@@ -1,0 +1,14 @@
+# Checks the conformance suite cannot pass against a tools-only product server, each with the reason.
+# Every other check in the scenarios that run must pass. A listed check that starts to pass fails the
+# run, so this file cannot go stale.
+server:
+  # These need the fixture tools test_missing_capability, test_streaming_elicitation, and
+  # test_logging_tool. ipso has no tool that needs a client capability, opens a stream, or logs.
+  - server-stateless:sep-2575-server-rejects-undeclared-capability
+  - server-stateless:sep-2575-missing-capability-http-400
+  - server-stateless:sep-2575-http-server-no-independent-requests-on-stream
+  - server-stateless:sep-2575-server-no-log-without-loglevel
+  # ipso declares only the tools capability, so these methods do not exist here.
+  - caching:sep-2549-prompts-list-caching-hints
+  - caching:sep-2549-resources-list-caching-hints
+  - caching:sep-2549-resources-templates-list-caching-hints

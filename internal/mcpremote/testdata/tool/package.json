@@ -1,0 +1,8 @@
+{
+  "name": "ipso-mcp-conformance",
+  "private": true,
+  "description": "Pins the MCP conformance suite that ci / mcp-conformance runs.",
+  "dependencies": {
+    "@modelcontextprotocol/conformance": "0.2.0-alpha.12"
+  }
+}
