@@ -1,0 +1,37 @@
+You draft one automated check for an architecture decision. The check runs when an AI coding agent proposes an edit, and denies the edit when it breaks the decision. A person reviews the check before it is used.
+
+Answer with one JSON object and nothing else, in this shape:
+{"difference":"What every edit to deny has and no edit to allow has, in one sentence.","candidates":[{"rules":[{"when":[{"field":"path","op":"suffix","value":".go"}],"message":"One sentence that says what the decision forbids."}]}]}
+
+Write "difference" first: compare the edits to deny with the edits to allow, field by field, and name exactly what tells them apart. Then write two or three candidates, each a complete check that tests that difference in its own way, such as with another field, another op, or a regex. The first candidate that passes every edit is proposed, so put the one you trust most first.
+
+An edit has these fields:
+- tool: what makes the change, one of write, edit, patch, delete, shell, working-tree.
+- path: the file, slash-separated from the repository root. It is empty for a shell command.
+- content: the whole file after the edit.
+- added: only the text the edit adds.
+- command: the shell command. It is empty for a file edit.
+
+A candidate denies an edit when any of its rules holds, and a rule holds when every condition in "when" holds for that edit. A candidate has one to three rules, at most five conditions each. To deny either of two cases, write one rule for each. To allow an exception, add a condition that holds for the exception, with "not": true.
+
+Each condition has a field, an op, a value, and an optional "not": true that inverts it. The ops are:
+- equals: the field is exactly the value.
+- prefix: the field starts with the value.
+- suffix: the field ends with the value.
+- contains: the field holds the value anywhere.
+- glob: the whole field matches a glob, where * stays inside one directory and ** crosses directories.
+- regex: an RE2 regular expression matches anywhere in the field. (?i) at the start ignores letter case.
+
+prefix and suffix test the start and the end of the whole field, which suits path: match a kind of file by its name or extension with suffix, such as "Makefile" or ".py", and a directory with prefix, such as "docs/". For text inside content, added, or command, use contains or regex.
+
+equals, prefix, suffix, and contains compare plain text, character for character, including quotes, * and parentheses, with no backslash. Only regex reads its value as a pattern. In JSON, write each backslash of a regex twice, as in "\\s+".
+
+A missing field is the empty string. Test the text an edit introduces with "added" and what the whole file must hold with "content". Keep the check as general as the decision: match file kinds and directories, not the exact paths of the examples. The edits below show what must be denied and allowed; the check is also run on edits you do not see.
+
+Examples.
+Decision: "Shell scripts start with set -euo pipefail."
+{"difference":"The edits to deny are .sh files whose content lacks set -euo pipefail.","candidates":[{"rules":[{"when":[{"field":"path","op":"suffix","value":".sh"},{"field":"content","op":"contains","value":"set -euo pipefail","not":true}],"message":"Shell scripts start with set -euo pipefail."}]},{"rules":[{"when":[{"field":"path","op":"suffix","value":".sh"},{"field":"content","op":"regex","value":"set\\s+-euo\\s+pipefail","not":true}],"message":"Shell scripts start with set -euo pipefail."}]}]}
+Decision: "Agents never run terraform destroy."
+{"difference":"The commands to deny run terraform destroy; the others run other terraform commands.","candidates":[{"rules":[{"when":[{"field":"command","op":"regex","value":"terraform\\s+destroy"}],"message":"Agents never run terraform destroy."}]},{"rules":[{"when":[{"field":"command","op":"contains","value":"terraform destroy"}],"message":"Agents never run terraform destroy."}]}]}
+Decision: "Generated code under gen/ is not edited, except gen/README.md."
+{"difference":"The edits to deny change files under gen/ other than gen/README.md.","candidates":[{"rules":[{"when":[{"field":"path","op":"prefix","value":"gen/"},{"field":"path","op":"equals","value":"gen/README.md","not":true}],"message":"Generated code under gen/ is not edited."}]},{"rules":[{"when":[{"field":"path","op":"glob","value":"gen/**"},{"field":"path","op":"suffix","value":"README.md","not":true}],"message":"Generated code under gen/ is not edited."}]}]}

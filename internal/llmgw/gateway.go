@@ -254,13 +254,16 @@ type message struct {
 	Content string `json:"content"`
 }
 
-// chatRequest is the OpenAI chat completions shape that Mistral and Azure OpenAI also accept.
+// chatRequest is the OpenAI chat completions shape that Mistral and Azure OpenAI also accept. Every
+// prompt asks for one JSON object, so the route is asked to answer with valid JSON (ADR-0087).
+// Converse has no such switch, and the callers check every answer either way.
 func chatRequest(model, system, user string, maxTokens int) any {
 	return map[string]any{
-		"model":       model,
-		"messages":    []message{{Role: "system", Content: system}, {Role: "user", Content: user}},
-		"temperature": 0,
-		"max_tokens":  maxTokens,
+		"model":           model,
+		"messages":        []message{{Role: "system", Content: system}, {Role: "user", Content: user}},
+		"temperature":     0,
+		"max_tokens":      maxTokens,
+		"response_format": map[string]string{"type": "json_object"},
 	}
 }
 

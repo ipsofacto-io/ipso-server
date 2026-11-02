@@ -22,6 +22,11 @@ var envFixtures = []Fixture{
 
 const envRule = `{"rules":[{"when":[{"field":"path","op":"suffix","value":".env"}],"message":"Do not commit .env files."}]}`
 
+// answer is a model answer that holds these candidate rules.
+func answer(candidates ...string) string {
+	return `{"difference":"The edit to deny writes a .env file.","candidates":[` + strings.Join(candidates, ",") + `]}`
+}
+
 func checkRequest(fixtures []Fixture) CheckRequest {
 	return CheckRequest{
 		DecisionID: testDecision, Version: 1, Title: "Never commit .env files",
@@ -44,7 +49,7 @@ func (s *scriptedLLM) complete(_ context.Context, _, user string) (Completion, e
 }
 
 func TestDraftCheckProposesARuleThatPassesItsFixtures(t *testing.T) {
-	llm := &scriptedLLM{answers: []string{"```json\n" + envRule + "\n```"}}
+	llm := &scriptedLLM{answers: []string{"```json\n" + answer(envRule) + "\n```"}}
 	check, stats, err := DraftCheck(t.Context(), llm.complete, checkRequest(envFixtures))
 	if err != nil {
 		t.Fatal(err)
@@ -60,20 +65,26 @@ func TestDraftCheckProposesARuleThatPassesItsFixtures(t *testing.T) {
 	}
 }
 
-func TestDraftCheckKeepsOnlyTheRules(t *testing.T) {
-	answer := strings.Replace(envRule, `{"rules"`, `{"difference":"The edit to deny writes a .env file.","rules"`, 1)
-	check, _, err := DraftCheck(t.Context(), (&scriptedLLM{answers: []string{answer}}).complete, checkRequest(envFixtures))
-	if err != nil {
-		t.Fatal(err)
+func TestDraftCheckProposesTheFirstCandidateThatPasses(t *testing.T) {
+	wrong := strings.Replace(envRule, `".env"`, `".go"`, 1)
+	broad := strings.Replace(envRule, `"suffix","value":".env"`, `"contains","value":"e"`, 1)
+	llm := &scriptedLLM{answers: []string{answer(wrong, `{"rules":[]}`, envRule)}}
+	check, stats, err := DraftCheck(t.Context(), llm.complete, checkRequest(envFixtures))
+	if err != nil || stats.Calls != 1 {
+		t.Fatalf("err %v stats %+v", err, stats)
 	}
 	if spec, _ := json.Marshal(check.Spec); string(spec) != envRule {
 		t.Fatalf("spec %s", spec)
+	}
+	llm = &scriptedLLM{answers: []string{answer(envRule, broad)}}
+	if check, _, err = DraftCheck(t.Context(), llm.complete, checkRequest(envFixtures)); err != nil || check.Spec.Rules[0].When[0].Op != "suffix" {
+		t.Fatalf("a later candidate replaced the first that passes: %+v %v", check.Spec, err)
 	}
 }
 
 func TestDraftCheckRepairsOnceWithWhatFailed(t *testing.T) {
 	wrong := strings.Replace(envRule, `".env"`, `".go"`, 1)
-	llm := &scriptedLLM{answers: []string{wrong, envRule}}
+	llm := &scriptedLLM{answers: []string{answer(wrong), answer(envRule)}}
 	check, stats, err := DraftCheck(t.Context(), llm.complete, checkRequest(envFixtures))
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +93,7 @@ func TestDraftCheckRepairsOnceWithWhatFailed(t *testing.T) {
 		t.Fatalf("check %+v stats %+v", check, stats)
 	}
 	repair := llm.users[1]
-	if !strings.Contains(repair, "edit 1 must be denied") || !strings.Contains(repair, "edit 2 must be allowed") || !strings.Contains(repair, wrong) {
+	if !strings.Contains(repair, "candidate 1: edit 1 must be denied") || !strings.Contains(repair, "candidate 1: edit 2 must be allowed") || !strings.Contains(repair, wrong) {
 		t.Fatalf("repair prompt %q", repair)
 	}
 }
@@ -131,17 +142,20 @@ func TestRepairNamesTheConditionsThatDecide(t *testing.T) {
 
 func TestDraftCheckGivesUpAfterOneRepair(t *testing.T) {
 	for _, tc := range []struct{ name, answer, problem string }{
-		{"wrong rule", strings.Replace(envRule, `".env"`, `".go"`, 1), "edit 1 must be denied"},
-		{"prose", "Here is the rule: " + envRule, "not one JSON object"},
-		{"broken JSON", strings.Replace(envRule, `"value":".env"`, `"value",".env"`, 1), `invalid character ',' after object key, where the answer reads :[{"field":"path","op":"suffix","value",)`},
-		{"two values", envRule + envRule, "more than one JSON value"},
-		{"unknown field", strings.Replace(envRule, `"message"`, `"allow":true,"message"`, 1), "not one JSON object"},
-		{"unknown op", strings.Replace(envRule, `"suffix"`, `"endswith"`, 1), "op must be"},
-		{"unknown field name", strings.Replace(envRule, `"field":"path"`, `"field":"file"`, 1), "field must be"},
-		{"bad regex", strings.Replace(envRule, `"op":"suffix","value":".env"`, `"op":"regex","value":"(.env"`, 1), "regex does not compile"},
-		{"no conditions", `{"rules":[{"when":[],"message":"x"}]}`, "one to 5 conditions"},
-		{"no rules", `{"rules":[]}`, "one to 3 rules"},
-		{"no message", strings.Replace(envRule, `"Do not commit .env files."`, `""`, 1), "message needs"},
+		{"wrong rule", answer(strings.Replace(envRule, `".env"`, `".go"`, 1)), "candidate 1: edit 1 must be denied"},
+		{"prose", "Here is the rule: " + answer(envRule), "not one JSON object"},
+		{"broken JSON", answer(strings.Replace(envRule, `"value":".env"`, `"value",".env"`, 1)), `invalid character ',' after object key, where the answer reads ` + `:[{"field":"path","op":"suffix","value",)`},
+		{"two values", answer(envRule) + answer(envRule), "more than one JSON value"},
+		{"bare rule", envRule, `unknown field "rules"`},
+		{"no candidates", answer(), "one to 3 candidates"},
+		{"four candidates", answer(envRule, envRule, envRule, envRule), "one to 3 candidates"},
+		{"unknown field", answer(strings.Replace(envRule, `"message"`, `"allow":true,"message"`, 1)), "not one JSON object"},
+		{"unknown op", answer(strings.Replace(envRule, `"suffix"`, `"endswith"`, 1)), "candidate 1: rule 1: condition 1: op must be"},
+		{"unknown field name", answer(strings.Replace(envRule, `"field":"path"`, `"field":"file"`, 1)), "field must be"},
+		{"bad regex", answer(strings.Replace(envRule, `"op":"suffix","value":".env"`, `"op":"regex","value":"(.env"`, 1)), "regex does not compile"},
+		{"no conditions", answer(`{"rules":[{"when":[],"message":"x"}]}`), "one to 5 conditions"},
+		{"no rules", answer(`{"rules":[]}`), "candidate 1: it needs one to 3 rules"},
+		{"no message", answer(strings.Replace(envRule, `"Do not commit .env files."`, `""`, 1)), "message needs"},
 	} {
 		llm := &scriptedLLM{answers: []string{tc.answer, tc.answer}}
 		_, stats, err := DraftCheck(t.Context(), llm.complete, checkRequest(envFixtures))
@@ -228,6 +242,16 @@ func TestGoldenReferenceRulesPassEveryFixture(t *testing.T) {
 		}
 		if problems := failingFixtures(c.Reference, rule, append(append([]Fixture{}, c.Examples...), c.Holdout...)); len(problems) > 0 {
 			t.Errorf("%s: %v", c.ID, problems)
+		}
+	}
+}
+
+// TestPromptsAskForJSON keeps both system prompts naming JSON: the gateway asks every chat route
+// for a JSON object, and Azure OpenAI refuses that mode when no message mentions JSON (ADR-0087).
+func TestPromptsAskForJSON(t *testing.T) {
+	for name, prompt := range map[string]string{"pull request": systemPrompt, "check": checkPrompt} {
+		if !strings.Contains(prompt, "JSON object") {
+			t.Errorf("the %s prompt does not ask for a JSON object", name)
 		}
 	}
 }

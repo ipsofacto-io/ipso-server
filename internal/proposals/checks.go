@@ -21,7 +21,7 @@ import (
 // with a rule as data, the server writes the Rego from it, and the rule reaches review only when
 // it compiles as `ipso compile` compiles it and passes every fixture a person wrote.
 const (
-	checkPromptVersion = "check-rule-v3"
+	checkPromptVersion = "check-rule-v4"
 	maxFixtures        = 50
 	maxFixtureRunes    = 8 << 10
 	maxFixturesBytes   = 1 << 20
@@ -30,6 +30,8 @@ const (
 	maxDecisionRunes   = 4000
 	maxShownRunes      = 1000
 	maxQuotedRunes     = 200
+	maxPreviousRunes   = 3000
+	maxDrafts          = 3
 	maxRules           = 3
 	maxConditions      = 5
 	maxValueRunes      = 200
@@ -37,10 +39,10 @@ const (
 	maxProblems        = 10
 )
 
-//go:embed prompts/check-rule-v3.txt
+//go:embed prompts/check-rule-v4.txt
 var checkPrompt string
 
-// ErrCheckFailed means no drafted rule passed every fixture, after one repair. Nothing is proposed.
+// ErrCheckFailed means no candidate rule passed every fixture, after one repair. Nothing is proposed.
 var ErrCheckFailed = errors.New("no drafted rule passes every fixture")
 
 // ErrCheckRequest means the request cannot be drafted: it names no decision, its text is too long,
@@ -116,8 +118,9 @@ type CheckStats struct {
 
 var editFields = map[string]bool{"tool": true, "path": true, "content": true, "added": true, "command": true}
 
-// DraftCheck asks the model for a rule, writes and compiles its Rego, and runs every fixture. When
-// the answer fails, it asks once more with what failed. A rule that still fails is ErrCheckFailed.
+// DraftCheck asks the model for up to three candidate rules, writes and compiles the Rego of each,
+// and runs every fixture. The first candidate that passes them all is the check. When none does, it
+// asks once more with what failed, and a second failure is ErrCheckFailed.
 func DraftCheck(ctx context.Context, complete CompleteFunc, req CheckRequest) (Check, CheckStats, error) {
 	if err := req.validate(); err != nil {
 		return Check{}, CheckStats{}, err
@@ -202,22 +205,40 @@ func repairPrompt(user, previous string, problems []string) string {
 	if len(problems) > maxProblems {
 		problems = append(problems[:maxProblems], fmt.Sprintf("and %d more", len(problems)-maxProblems))
 	}
-	return user + "\nYour previous answer:\n" + truncate(previous, maxShownRunes) + "\n\nIt fails:\n- " + strings.Join(problems, "\n- ") +
-		"\n\nAnswer again with one corrected JSON object."
+	return user + "\nYour previous answer:\n" + truncate(previous, maxPreviousRunes) + "\n\nIt fails:\n- " + strings.Join(problems, "\n- ") +
+		"\n\nAnswer again with one JSON object. Write candidates that fix each failure, and do not repeat a candidate that failed."
 }
 
-// draft parses an answer, writes and compiles its Rego, and runs every fixture. It returns what
-// failed, in words the model can act on, and none when the rule passes.
+// draft parses an answer and tries its candidates in order: each is validated, its Rego written
+// and compiled, and every fixture run. It returns the first candidate that passes, or what failed
+// for each, in words the model can act on.
 func draft(text string, fixtures []Fixture) (RuleSpec, []string) {
-	spec, err := parseSpec(text)
+	candidates, err := parseCandidates(text)
 	if err != nil {
 		return RuleSpec{}, []string{err.Error()}
 	}
+	var problems []string
+	for i, spec := range candidates {
+		failed := tryCandidate(spec, fixtures)
+		if len(failed) == 0 {
+			return spec, nil
+		}
+		for _, problem := range failed {
+			problems = append(problems, fmt.Sprintf("candidate %d: %s", i+1, problem))
+		}
+	}
+	return RuleSpec{}, problems
+}
+
+func tryCandidate(spec RuleSpec, fixtures []Fixture) []string {
+	if err := spec.validate(); err != nil {
+		return []string{err.Error()}
+	}
 	rule, err := rulecheck.Compile([]byte(render(spec)))
 	if err != nil {
-		return RuleSpec{}, []string{"the rule does not compile: " + rulecheck.Code(err)}
+		return []string{"the rule does not compile: " + rulecheck.Code(err)}
 	}
-	return spec, failingFixtures(spec, rule, fixtures)
+	return failingFixtures(spec, rule, fixtures)
 }
 
 // failingFixtures runs every fixture through the compiled rule and says what it gets wrong: the
@@ -317,29 +338,30 @@ func patternHint(c Condition) string {
 	return " (" + c.Op + " compares plain text; for a pattern, use regex)"
 }
 
-func parseSpec(text string) (RuleSpec, error) {
+// parseCandidates refuses anything but the one object the prompt asks for. A candidate is checked
+// on its own afterwards, so one bad candidate does not hide a good one.
+func parseCandidates(text string) ([]RuleSpec, error) {
 	if len(text) > maxOutputBytes {
-		return RuleSpec{}, errors.New("the answer is too large")
+		return nil, errors.New("the answer is too large")
 	}
 	body := unfence(text)
 	decoder := json.NewDecoder(strings.NewReader(body))
 	decoder.DisallowUnknownFields()
-	// The model writes what tells the edits apart before the rules, and only the rules are kept.
+	// The model writes what tells the edits apart before the candidates, and only these are kept.
 	var answer struct {
-		Difference string `json:"difference"`
-		Rules      []Rule `json:"rules"`
+		Difference string     `json:"difference"`
+		Candidates []RuleSpec `json:"candidates"`
 	}
 	if err := decoder.Decode(&answer); err != nil {
-		return RuleSpec{}, fmt.Errorf("the answer is not one JSON object with the fields of the example (%s)", decodeProblem(body, err))
+		return nil, fmt.Errorf("the answer is not one JSON object with the fields of the example (%s)", decodeProblem(body, err))
 	}
-	spec := RuleSpec{Rules: answer.Rules}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return RuleSpec{}, errors.New("the answer holds more than one JSON value")
+		return nil, errors.New("the answer holds more than one JSON value")
 	}
-	if err := spec.validate(); err != nil {
-		return RuleSpec{}, err
+	if len(answer.Candidates) == 0 || len(answer.Candidates) > maxDrafts {
+		return nil, fmt.Errorf("the answer needs one to %d candidates", maxDrafts)
 	}
-	return spec, nil
+	return answer.Candidates, nil
 }
 
 // decodeProblem names what broke the JSON and, for a syntax error, the text that ends at it, so the
@@ -355,7 +377,7 @@ func decodeProblem(body string, err error) string {
 
 func (s RuleSpec) validate() error {
 	if len(s.Rules) == 0 || len(s.Rules) > maxRules {
-		return fmt.Errorf("the answer needs one to %d rules", maxRules)
+		return fmt.Errorf("it needs one to %d rules", maxRules)
 	}
 	for i, rule := range s.Rules {
 		if err := rule.validate(); err != nil {

@@ -116,7 +116,8 @@ func TestRoutesToMistral(t *testing.T) {
 		t.Fatalf("request = %s %v", got.url, got.header)
 	}
 	messages := got.body["messages"].([]any)
-	if got.body["model"] != "mistral-medium-2508" || len(messages) != 2 || got.body["temperature"] != float64(0) || got.body["max_tokens"] != float64(100) {
+	if got.body["model"] != "mistral-medium-2508" || len(messages) != 2 || got.body["temperature"] != float64(0) || got.body["max_tokens"] != float64(100) ||
+		got.body["response_format"].(map[string]any)["type"] != "json_object" {
 		t.Fatalf("body = %v", got.body)
 	}
 	if ledger.tokens[tenantA] != 50 {
