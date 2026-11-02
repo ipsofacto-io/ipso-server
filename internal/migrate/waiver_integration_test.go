@@ -82,7 +82,8 @@ func TestWaiverStaysInsideTheDecisionAndTheCap(t *testing.T) {
 			INSERT INTO registry.waiver
 				(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
 			VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
-			        tstzrange(clock_timestamp(), clock_timestamp() + interval '90 days', '[)'),
+			        -- One clock reading, or the second one makes the period a little over 90 days.
+			        (SELECT tstzrange(t, t + interval '90 days', '[)') FROM (SELECT clock_timestamp() AS t) AS clock),
 			        'TICKET-90')`, tenantA, newDecision, repo)
 		if err != nil {
 			t.Fatal(err)

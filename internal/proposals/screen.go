@@ -6,6 +6,7 @@ import (
 	"unicode"
 
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
+	"github.com/ipsofacto-io/ipso-server/internal/redact"
 )
 
 // decisionLike is the deterministic filter in front of the LLM. It keeps text that does not read
@@ -18,35 +19,15 @@ var decisionLike = regexp.MustCompile(`(?i)\b(we|team)\s+(have\s+)?(decided|agre
 // output check, and a schema that cannot hold an approval.
 var injectionMarkers = regexp.MustCompile(`ignore (all |any |the |your )*(previous|prior|above|earlier)|disregard (all |any |the |your )*(previous|prior|above|earlier|instructions)|forget (all |your |the )*(previous|prior|instructions)|system prompt|developer message|you are now|new instructions|act as (an? )?(admin|system|assistant)|auto[- ]?approve|mark (this|it) as (approved|accepted)|set status|status"? ?: ?"?(approved|accepted)|<\|?(im_start|im_end|system|endoftext)\|?>|\[/?inst\]|<</?sys>>|(^| )(system|assistant): `)
 
-var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(-----END [A-Z ]*PRIVATE KEY-----|$)`),
-	regexp.MustCompile(`\b(AKIA|ASIA)[0-9A-Z]{16}\b`),
-	regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{20,}\b`),
-	regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{20,}\b`),
-	regexp.MustCompile(`\bxox[abprs]-[A-Za-z0-9-]{10,}\b`),
-	regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}\b`),
-	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b`),
-	regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{16,}`),
-	regexp.MustCompile(`(?i)\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)\b\s*[:=]\s*\S+`),
-	regexp.MustCompile(`[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@\S+`),
-}
-
 var (
-	emailPattern   = regexp.MustCompile(`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b`)
 	mentionPattern = regexp.MustCompile(`(^|[^\w])@[A-Za-z0-9][A-Za-z0-9-]*`)
 	// unsafeOutput is what a proposal must not hold, because a reviewer's screen could render it.
 	unsafeOutput = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://|\bwww\.|[<>]|!\[|\]\(|@[a-z0-9]`)
 )
 
-const redacted = "[REDACTED]"
-
 // Redact removes secrets, email addresses, and mentions. It runs on all text before the LLM.
 func Redact(text string) string {
-	for _, pattern := range secretPatterns {
-		text = pattern.ReplaceAllString(text, redacted)
-	}
-	text = emailPattern.ReplaceAllString(text, redacted)
-	return mentionPattern.ReplaceAllString(text, "${1}[user]")
+	return mentionPattern.ReplaceAllString(redact.Text(text), "${1}[user]")
 }
 
 // trusted reports whether the author can already write to the repository. Anyone can comment on a
