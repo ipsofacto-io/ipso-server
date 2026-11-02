@@ -371,7 +371,7 @@ func ProposeCheck(ctx context.Context, db *sql.DB, tenant uuid.UUID, check Check
 	if err != nil {
 		return false, err
 	}
-	if problems := failingFixtures(rule, check.Fixtures); len(problems) > 0 {
+	if problems := failingFixtures(check.Spec, rule, check.Fixtures); len(problems) > 0 {
 		return false, ErrCheckFailed
 	}
 	spec, err := json.Marshal(check.Spec)

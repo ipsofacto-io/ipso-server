@@ -21,7 +21,7 @@ import (
 // with a rule as data, the server writes the Rego from it, and the rule reaches review only when
 // it compiles as `ipso compile` compiles it and passes every fixture a person wrote.
 const (
-	checkPromptVersion = "check-rule-v1"
+	checkPromptVersion = "check-rule-v2"
 	maxFixtures        = 50
 	maxFixtureRunes    = 8 << 10
 	maxFixturesBytes   = 1 << 20
@@ -29,6 +29,7 @@ const (
 	maxToolRunes       = 50
 	maxDecisionRunes   = 4000
 	maxShownRunes      = 1000
+	maxQuotedRunes     = 200
 	maxRules           = 3
 	maxConditions      = 5
 	maxValueRunes      = 200
@@ -36,7 +37,7 @@ const (
 	maxProblems        = 10
 )
 
-//go:embed prompts/check-rule-v1.txt
+//go:embed prompts/check-rule-v2.txt
 var checkPrompt string
 
 // ErrCheckFailed means no drafted rule passed every fixture, after one repair. Nothing is proposed.
@@ -120,10 +121,7 @@ func DraftCheck(ctx context.Context, complete CompleteFunc, req CheckRequest) (C
 	if err := req.validate(); err != nil {
 		return Check{}, CheckStats{}, err
 	}
-	user, err := checkUser(req)
-	if err != nil {
-		return Check{}, CheckStats{}, err
-	}
+	user := checkUser(req)
 	var stats CheckStats
 	prompt := user
 	for {
@@ -180,31 +178,30 @@ func validFixtures(fixtures []Fixture) error {
 	return nil
 }
 
-// checkUser shows the decision and its fixtures, with each field cut to maxShownRunes.
-func checkUser(req CheckRequest) (string, error) {
-	shown := make([]Fixture, len(req.Fixtures))
+// checkUser shows the decision and its fixtures, one numbered edit per line, with each field cut to
+// maxShownRunes.
+func checkUser(req CheckRequest) string {
+	var b strings.Builder
+	b.WriteString("Decision: " + req.Title + "\n" + req.Statement + "\n\nEdits a person wrote for this decision, and whether the check must deny each one:\n")
 	for i, f := range req.Fixtures {
-		shown[i] = Fixture{Tool: cut(f.Tool), Path: cut(f.Path), Content: cut(f.Content), Added: cut(f.Added), Command: cut(f.Command), Deny: f.Deny}
+		fmt.Fprintf(&b, "edit %d: %s\n", i+1, f.shown(maxShownRunes))
 	}
-	fixtures, err := json.Marshal(shown)
-	if err != nil {
-		return "", err
-	}
-	return "Decision: " + req.Title + "\n" + req.Statement + "\n\nEdits a person wrote for this decision, and whether the check must deny each one:\n" + string(fixtures), nil
+	return b.String()
 }
 
-func cut(text string) string {
-	if utf8.RuneCountInString(text) <= maxShownRunes {
-		return text
-	}
-	return string([]rune(text)[:maxShownRunes])
+// shown is the fixture as the model reads it, with each field cut to limit runes.
+func (f Fixture) shown(limit int) string {
+	return jsonText(Fixture{
+		Tool: truncate(f.Tool, limit), Path: truncate(f.Path, limit), Content: truncate(f.Content, limit),
+		Added: truncate(f.Added, limit), Command: truncate(f.Command, limit), Deny: f.Deny,
+	})
 }
 
 func repairPrompt(user, previous string, problems []string) string {
 	if len(problems) > maxProblems {
 		problems = append(problems[:maxProblems], fmt.Sprintf("and %d more", len(problems)-maxProblems))
 	}
-	return user + "\n\nYour previous answer:\n" + cut(previous) + "\n\nIt fails:\n- " + strings.Join(problems, "\n- ") +
+	return user + "\nYour previous answer:\n" + truncate(previous, maxShownRunes) + "\n\nIt fails:\n- " + strings.Join(problems, "\n- ") +
 		"\n\nAnswer again with one corrected JSON object."
 }
 
@@ -219,34 +216,93 @@ func draft(text string, fixtures []Fixture) (RuleSpec, []string) {
 	if err != nil {
 		return RuleSpec{}, []string{"the rule does not compile: " + rulecheck.Code(err)}
 	}
-	return spec, failingFixtures(rule, fixtures)
+	return spec, failingFixtures(spec, rule, fixtures)
 }
 
-func failingFixtures(rule *rulecheck.Rule, fixtures []Fixture) []string {
+// failingFixtures runs every fixture through the compiled rule and says what it gets wrong: the
+// edit, and the conditions that decide it.
+func failingFixtures(spec RuleSpec, rule *rulecheck.Rule, fixtures []Fixture) []string {
 	var problems []string
+	var probe *rulecheck.Rule
 	for i, f := range fixtures {
 		denials, err := rule.Deny(f.edit())
-		switch {
-		case err != nil:
+		if err != nil {
 			problems = append(problems, fmt.Sprintf("edit %d: the rule fails to evaluate (%s)", i+1, rulecheck.Code(err)))
-		case f.Deny && len(denials) == 0:
-			problems = append(problems, fmt.Sprintf("edit %d must be denied, and the rule allows it", i+1))
-		case !f.Deny && len(denials) > 0:
-			problems = append(problems, fmt.Sprintf("edit %d must be allowed, and the rule denies it", i+1))
+			continue
 		}
+		if f.Deny == (len(denials) > 0) {
+			continue
+		}
+		if probe == nil {
+			if probe, err = rulecheck.Compile([]byte(renderConditions(spec))); err != nil {
+				return append(problems, fmt.Sprintf("edit %d: the rule gets it wrong, and its conditions do not evaluate alone (%s)", i+1, rulecheck.Code(err)))
+			}
+		}
+		problems = append(problems, explain(spec, probe, i+1, f))
 	}
 	return problems
+}
+
+// renderConditions writes each condition as its own rule, whose message is its place, so the engine
+// that runs the check also says which conditions hold for an edit.
+func renderConditions(spec RuleSpec) string {
+	var b strings.Builder
+	b.WriteString("package ipso.checks.generated\n")
+	for r, rule := range spec.Rules {
+		for c, cond := range rule.When {
+			b.WriteString("\ndeny contains " + jsonText(place(r, c)) + " if {\n\t" + condition(cond) + "\n}\n")
+		}
+	}
+	return b.String()
+}
+
+func place(rule, condition int) string {
+	return fmt.Sprintf("%d.%d", rule+1, condition+1)
+}
+
+// explain says why the rule gets one edit wrong: for an edit to deny, which condition of each rule
+// does not hold, and for an edit to allow, which rules hold.
+func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture) string {
+	edit := fmt.Sprintf(" Edit %d is %s", number, f.shown(maxQuotedRunes))
+	held, err := probe.Deny(f.edit())
+	if err != nil {
+		return fmt.Sprintf("edit %d: its conditions do not evaluate alone (%s).", number, rulecheck.Code(err)) + edit
+	}
+	holds := map[string]bool{}
+	for _, id := range held {
+		holds[id] = true
+	}
+	var reasons []string
+	for r, rule := range spec.Rules {
+		var unmet []string
+		for c, cond := range rule.When {
+			if !holds[place(r, c)] {
+				unmet = append(unmet, jsonText(cond))
+			}
+		}
+		switch {
+		case f.Deny:
+			reasons = append(reasons, fmt.Sprintf("in rule %d, %s does not hold", r+1, strings.Join(unmet, " and ")))
+		case len(unmet) == 0:
+			reasons = append(reasons, fmt.Sprintf("rule %d", r+1))
+		}
+	}
+	if f.Deny {
+		return fmt.Sprintf("edit %d must be denied, and the rule allows it: %s.", number, strings.Join(reasons, "; ")) + edit
+	}
+	return fmt.Sprintf("edit %d must be allowed, and the rule denies it: every condition of %s holds for it.", number, strings.Join(reasons, " and ")) + edit
 }
 
 func parseSpec(text string) (RuleSpec, error) {
 	if len(text) > maxOutputBytes {
 		return RuleSpec{}, errors.New("the answer is too large")
 	}
-	decoder := json.NewDecoder(strings.NewReader(unfence(text)))
+	body := unfence(text)
+	decoder := json.NewDecoder(strings.NewReader(body))
 	decoder.DisallowUnknownFields()
 	var spec RuleSpec
 	if err := decoder.Decode(&spec); err != nil {
-		return RuleSpec{}, errors.New("the answer is not one JSON object with the fields of the example")
+		return RuleSpec{}, fmt.Errorf("the answer is not one JSON object with the fields of the example (%s)", decodeProblem(body, err))
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return RuleSpec{}, errors.New("the answer holds more than one JSON value")
@@ -255,6 +311,17 @@ func parseSpec(text string) (RuleSpec, error) {
 		return RuleSpec{}, err
 	}
 	return spec, nil
+}
+
+// decodeProblem names what broke the JSON and, for a syntax error, the text that ends at it, so the
+// repair can fix that place.
+func decodeProblem(body string, err error) string {
+	var syntax *json.SyntaxError
+	if !errors.As(err, &syntax) {
+		return err.Error()
+	}
+	end := min(len(body), int(syntax.Offset))
+	return err.Error() + ", where the answer reads " + strings.Join(strings.Fields(strings.ToValidUTF8(body[max(0, end-40):end], "")), " ")
 }
 
 func (s RuleSpec) validate() error {
@@ -306,7 +373,7 @@ func render(spec RuleSpec) string {
 		for _, c := range rule.When {
 			b.WriteString("\t" + condition(c) + "\n")
 		}
-		b.WriteString("\tmsg := " + regoString(rule.Message) + "\n}\n")
+		b.WriteString("\tmsg := " + jsonText(rule.Message) + "\n}\n")
 	}
 	return b.String()
 }
@@ -314,8 +381,8 @@ func render(spec RuleSpec) string {
 // condition reads a missing field as the empty string, so a rule never depends on whether the
 // hook set it.
 func condition(c Condition) string {
-	field := "object.get(input, " + regoString(c.Field) + `, "")`
-	value := regoString(c.Value)
+	field := "object.get(input, " + jsonText(c.Field) + `, "")`
+	value := jsonText(c.Value)
 	var expr string
 	switch c.Op {
 	case "equals":
@@ -337,11 +404,12 @@ func condition(c Condition) string {
 	return expr
 }
 
-// regoString is a JSON string, which Rego reads as the same string.
-func regoString(text string) string {
+// jsonText encodes a value as JSON without HTML escaping. Rego reads a JSON string as the same
+// string, and the model reads the text as it was written.
+func jsonText(v any) string {
 	var b bytes.Buffer
 	encoder := json.NewEncoder(&b)
 	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(text)
+	_ = encoder.Encode(v)
 	return strings.TrimSuffix(b.String(), "\n")
 }

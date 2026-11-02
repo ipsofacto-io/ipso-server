@@ -76,10 +76,48 @@ func TestDraftCheckRepairsOnceWithWhatFailed(t *testing.T) {
 	}
 }
 
+// TestRepairNamesTheConditionsThatDecide shows the feedback for each wrong edit: for an edit to
+// deny, the conditions that do not hold, and for an edit to allow, the rules that hold.
+func TestRepairNamesTheConditionsThatDecide(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		spec   RuleSpec
+		want   string
+		absent string
+	}{
+		{
+			name: "edit to deny",
+			spec: RuleSpec{Rules: []Rule{{Message: "m", When: []Condition{
+				{Field: "path", Op: "suffix", Value: ".env"}, {Field: "content", Op: "contains", Value: "SECRET"},
+			}}}},
+			want:   `edit 1 must be denied, and the rule allows it: in rule 1, {"field":"content","op":"contains","value":"SECRET"} does not hold. Edit 1 is {"tool":"write","path":"service/.env","content":"PORT=1\n","added":"PORT=1\n","deny":true}`,
+			absent: `"value":".env"} does not hold`,
+		},
+		{
+			name: "edit to allow",
+			spec: RuleSpec{Rules: []Rule{
+				{Message: "m", When: []Condition{{Field: "path", Op: "suffix", Value: ".env"}}},
+				{Message: "m", When: []Condition{{Field: "path", Op: "suffix", Value: ".env", Not: true}}},
+			}},
+			want: `edit 2 must be allowed, and the rule denies it: every condition of rule 2 holds for it. Edit 2 is {"tool":"write","path":"service/main.go"`,
+		},
+	} {
+		rule, err := rulecheck.Compile([]byte(render(tc.spec)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		problems := strings.Join(failingFixtures(tc.spec, rule, envFixtures), "\n")
+		if !strings.Contains(problems, tc.want) || (tc.absent != "" && strings.Contains(problems, tc.absent)) {
+			t.Errorf("%s: problems %q", tc.name, problems)
+		}
+	}
+}
+
 func TestDraftCheckGivesUpAfterOneRepair(t *testing.T) {
 	for _, tc := range []struct{ name, answer, problem string }{
 		{"wrong rule", strings.Replace(envRule, `".env"`, `".go"`, 1), "edit 1 must be denied"},
 		{"prose", "Here is the rule: " + envRule, "not one JSON object"},
+		{"broken JSON", strings.Replace(envRule, `"value":".env"`, `"value",".env"`, 1), `invalid character ',' after object key, where the answer reads :[{"field":"path","op":"suffix","value",)`},
 		{"two values", envRule + envRule, "more than one JSON value"},
 		{"unknown field", strings.Replace(envRule, `"message"`, `"allow":true,"message"`, 1), "not one JSON object"},
 		{"unknown op", strings.Replace(envRule, `"suffix"`, `"endswith"`, 1), "op must be"},
@@ -172,7 +210,7 @@ func TestGoldenReferenceRulesPassEveryFixture(t *testing.T) {
 			t.Errorf("%s: %v", c.ID, err)
 			continue
 		}
-		if problems := failingFixtures(rule, append(append([]Fixture{}, c.Examples...), c.Holdout...)); len(problems) > 0 {
+		if problems := failingFixtures(c.Reference, rule, append(append([]Fixture{}, c.Examples...), c.Holdout...)); len(problems) > 0 {
 			t.Errorf("%s: %v", c.ID, problems)
 		}
 	}
