@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"github.com/ipsofacto-io/ipso/pkg/mcptools"
+
+	"github.com/ipsofacto-io/ipso-server/internal/authn"
+	"github.com/ipsofacto-io/ipso-server/internal/authn/authntest"
 )
 
 // applicableScenarios are the server scenarios of the 2026-07-28 requirement set that a tools-only
@@ -33,17 +36,17 @@ func TestConformance(t *testing.T) {
 		t.Fatal(err)
 	}
 	resource := "http://" + listener.Addr().String() + "/mcp"
-	auth := newFakeAuthServer(t)
-	handler, err := NewHandler(Config{ResourceURL: resource, AuthorizationServers: []string{auth.server.URL}, Version: "conformance"},
-		auth.verifier(resource),
-		func(context.Context, Claims) (Caller, bool) {
+	auth := authntest.NewServer(t)
+	handler, err := NewHandler(Config{ResourceURL: resource, AuthorizationServers: []string{auth.Server.URL}, Version: "conformance"},
+		verifierFor(t, auth, resource),
+		func(context.Context, authn.Claims) (Caller, bool) {
 			return Caller{Tenant: testTenant, Principal: testPrincipal}, true
 		},
 		func(Caller) mcptools.Backend { return &recordingBackend{} })
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := auth.token(resource, []string{ScopeRead, ScopePropose})
+	token := auth.Token(resource, []string{ScopeRead, ScopePropose})
 	server := &http.Server{
 		ReadHeaderTimeout: 5 * time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

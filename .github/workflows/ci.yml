@@ -65,6 +65,60 @@ jobs:
       - name: Run the scenarios that apply to the remote handler
         run: go test -tags conformance ./internal/mcpremote -run TestConformance -count=1 -v
 
+  # The ipso-web pact (ADR-0091): regenerated from its consumer test, verified against the handler
+  # on PostgreSQL 18, and refused when the committed file differs. pact-go links the Pact FFI, a
+  # native library that is downloaded at a pinned version and checked against a pinned digest.
+  pact:
+    name: ci / pact
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PACT_FFI_VERSION: "0.5.8"
+      # SHA-256 of libpact_ffi-linux-x86_64.so.gz in the libpact_ffi-v0.5.8 release.
+      PACT_FFI_SHA256: 2e4e234bac79be7d934df7111f72d98c289c66e56ceda6ef568145ff73af20f4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the Pact FFI
+        run: |
+          set -euo pipefail
+          dir="${RUNNER_TEMP}/pact-ffi"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --output "$dir/libpact_ffi.so.gz" \
+            "https://github.com/pact-foundation/pact-reference/releases/download/libpact_ffi-v${PACT_FFI_VERSION}/libpact_ffi-linux-x86_64.so.gz"
+          echo "${PACT_FFI_SHA256}  $dir/libpact_ffi.so.gz" | sha256sum --check --strict
+          gunzip "$dir/libpact_ffi.so.gz"
+          echo "CGO_LDFLAGS=-L$dir -Wl,-rpath,$dir" >> "$GITHUB_ENV"
+      - name: Regenerate the pact
+        run: go test -tags pact -run TestPactConsumer -count=1 ./internal/api
+      # Testcontainers starts PostgreSQL 18 on the runner's Docker.
+      - name: Verify the pact against the handler
+        run: go test -tags 'integration pact' -run TestPactProvider -count=1 ./internal/api
+      # Runs after a failed verification too, so one run shows both answers.
+      - name: Refuse a committed pact that differs
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain -- api/pacts)" ]; then
+            git diff -- api/pacts
+            echo "::group::The pact the consumer test wrote"
+            cat api/pacts/ipso-web-ipso-server.json
+            echo "::endgroup::"
+            echo "::error::api/pacts differs from what the consumer test writes. Commit the regenerated file."
+            exit 1
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: pact-ipso-web-ipso-server
+          path: api/pacts/ipso-web-ipso-server.json
+          if-no-files-found: error
+
   lint:
     name: ci / lint
     runs-on: ubuntu-latest
@@ -95,5 +149,6 @@ jobs:
           go-version-file: go.mod
       - run: go install github.com/google/go-licenses/v2@v2.0.1
       # This repository is FSL-1.1-ALv2, which go-licenses cannot classify, so its own packages
-      # are ignored. Every dependency is still checked against the allowlist.
-      - run: go-licenses check ./cmd/ipso-server --ignore github.com/ipsofacto-io/ipso-server --allowed_licenses=Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC
+      # are ignored. Every dependency is still checked against the allowlist. ./internal/api is
+      # checked before the binary serves it (IPSO-133).
+      - run: go-licenses check ./cmd/ipso-server ./internal/api --ignore github.com/ipsofacto-io/ipso-server --allowed_licenses=Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC
