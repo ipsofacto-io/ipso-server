@@ -45,7 +45,7 @@ func readChecks(t *testing.T, db *sql.DB, tenant uuid.UUID, query string) checkI
 
 func TestCheckProposalWaitsInTheReviewQueue(t *testing.T) {
 	db := newDB(t)
-	llm := &scriptedLLM{answers: []string{envRule}}
+	llm := &scriptedLLM{answers: []string{answer(envRule)}}
 	check, _, err := DraftCheck(t.Context(), llm.complete, checkRequest(envFixtures))
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestCheckProposalWaitsInTheReviewQueue(t *testing.T) {
 
 func TestProposeCheckRefusesARuleThatFailsAFixture(t *testing.T) {
 	db := newDB(t)
-	llm := &scriptedLLM{answers: []string{envRule}}
+	llm := &scriptedLLM{answers: []string{answer(envRule)}}
 	check, _, err := DraftCheck(t.Context(), llm.complete, checkRequest(envFixtures))
 	if err != nil {
 		t.Fatal(err)
