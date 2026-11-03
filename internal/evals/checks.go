@@ -83,11 +83,5 @@ func passes(rego string, fixtures []proposals.Fixture) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, f := range fixtures {
-		denials, err := rule.Deny(rulecheck.Edit{Tool: f.Tool, Path: f.Path, Content: f.Content, Added: f.Added, Command: f.Command})
-		if err != nil || (len(denials) > 0) != f.Deny {
-			return false, nil
-		}
-	}
-	return true, nil
+	return proposals.Passes(rule, fixtures), nil
 }

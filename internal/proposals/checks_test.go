@@ -126,6 +126,11 @@ func TestDraftCheckKeepsTheCandidatesBeforeACutOff(t *testing.T) {
 	if !strings.Contains(llm.users[1], "the answer stops after candidate 1") || !strings.Contains(llm.users[1], "candidate 1: edit 1 must be denied") {
 		t.Fatalf("repair prompt %q", llm.users[1])
 	}
+	// A break after a candidate, such as a trailing comma, keeps it too.
+	llm = &scriptedLLM{answers: []string{strings.TrimSuffix(answer(envRule), "]}") + ",]}"}}
+	if _, stats, err = DraftCheck(t.Context(), llm.complete, checkRequest(envFixtures)); err != nil || stats.Calls != 1 {
+		t.Fatalf("trailing comma: stats %+v err %v", stats, err)
+	}
 }
 
 // TestRepairNamesTheConditionsThatDecide shows the feedback for each wrong edit: for an edit to
@@ -180,7 +185,7 @@ func TestDraftCheckGivesUpAfterOneRepair(t *testing.T) {
 		{"wrong rule", answer(strings.Replace(envRule, `".env"`, `".go"`, 1)), "candidate 1: edit 1 must be denied"},
 		{"prose", "Here is the rule: " + answer(envRule), "not one JSON object"},
 		{"broken JSON", answer(strings.Replace(envRule, `"value":".env"`, `"value",".env"`, 1)), `invalid character ',' after object key, where the answer reads ` + `:[{"field":"path","op":"suffix","value",)`},
-		{"two values", answer(envRule) + answer(envRule), "more than one JSON value"},
+		{"two values", answer(wrongRule) + answer(envRule), "the answer breaks after candidate 1 (it holds more than one JSON value)"},
 		{"bare rule", envRule, `unknown field "rules"`},
 		{"no candidates", answer(), "one to 3 candidates"},
 		{"four candidates", answer(wrongRule, wrongRule, wrongRule, envRule), "only the first 3 candidates are tried"},
@@ -209,7 +214,14 @@ func TestDraftCheckGivesUpAfterOneRepair(t *testing.T) {
 }
 
 func TestDraftCheckNeedsAnEditToDenyAndOneToAllow(t *testing.T) {
-	for _, fixtures := range [][]Fixture{nil, envFixtures[:1], envFixtures[1:], {{Path: "a.env", Deny: true}, envFixtures[1]}} {
+	long := Fixture{Tool: "write", Path: "a.txt", Content: strings.Repeat("x\n", 500), Added: strings.Repeat("y\n", 500), Command: strings.Repeat("z\n", 500)}
+	large := []Fixture{envFixtures[0]}
+	for range maxFixtures - 1 {
+		large = append(large, long)
+	}
+	same := envFixtures[0]
+	same.Deny = false
+	for _, fixtures := range [][]Fixture{nil, envFixtures[:1], envFixtures[1:], {{Path: "a.env", Deny: true}, envFixtures[1]}, {envFixtures[0], same}, large} {
 		llm := &scriptedLLM{answers: []string{envRule}}
 		if _, _, err := DraftCheck(t.Context(), llm.complete, checkRequest(fixtures)); !errors.Is(err, ErrCheckRequest) || len(llm.users) != 0 {
 			t.Errorf("fixtures %+v: err %v calls %d", fixtures, err, len(llm.users))

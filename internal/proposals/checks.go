@@ -29,8 +29,11 @@ const (
 	maxToolRunes       = 50
 	maxDecisionRunes   = 4000
 	maxShownRunes      = 1000
-	maxQuotedRunes     = 200
-	maxDrafts          = 3
+	// maxShownBytes bounds the request as the model reads it, leaving room under the gateway's
+	// 256 KiB for the system prompt and the problems a repair adds.
+	maxShownBytes  = 160 << 10
+	maxQuotedRunes = 200
+	maxDrafts      = 3
 	// maxCheckTokens bounds a check answer, so a model that loops stops early: two candidates of a
 	// few conditions take about 250.
 	maxCheckTokens  = 512
@@ -143,6 +146,9 @@ func DraftCheck(ctx context.Context, complete CompleteFunc, req CheckRequest) (C
 		return Check{}, CheckStats{}, err
 	}
 	user := checkUser(req)
+	if len(user) > maxShownBytes {
+		return Check{}, CheckStats{}, fmt.Errorf("%w: the decision and its fixtures are longer than %d bytes as the model reads them", ErrCheckRequest, maxShownBytes)
+	}
 	var stats CheckStats
 	prompt := user
 	for {
@@ -181,6 +187,7 @@ func validFixtures(fixtures []Fixture) error {
 		return fmt.Errorf("%w: more than %d fixtures", ErrCheckRequest, maxFixtures)
 	}
 	denied, allowed := false, false
+	verdicts := map[Fixture]bool{}
 	for i, f := range fixtures {
 		if f.Tool == "" || utf8.RuneCountInString(f.Tool) > maxToolRunes || utf8.RuneCountInString(f.Path) > maxPathRunes ||
 			utf8.RuneCountInString(f.Content) > maxFixtureRunes || utf8.RuneCountInString(f.Added) > maxFixtureRunes ||
@@ -189,6 +196,13 @@ func validFixtures(fixtures []Fixture) error {
 		}
 		denied = denied || f.Deny
 		allowed = allowed || !f.Deny
+		// No rule denies an edit and allows the same edit, so such a request would only spend calls.
+		edit := f
+		edit.Deny = false
+		if deny, seen := verdicts[edit]; seen && deny != f.Deny {
+			return fmt.Errorf("%w: fixture %d is an edit another fixture gives the other verdict", ErrCheckRequest, i)
+		}
+		verdicts[edit] = f.Deny
 	}
 	if !denied || !allowed {
 		return fmt.Errorf("%w: the fixtures need an edit to deny and an edit to allow", ErrCheckRequest)
@@ -290,6 +304,17 @@ func checkCandidate(spec RuleSpec, fixtures []Fixture) []string {
 		return []string{"the rule does not compile: " + rulecheck.Code(err)}
 	}
 	return failingFixtures(spec, rule, fixtures)
+}
+
+// Passes reports whether a compiled rule denies exactly the fixtures that must be denied.
+func Passes(rule *rulecheck.Rule, fixtures []Fixture) bool {
+	for _, f := range fixtures {
+		denials, err := rule.Deny(f.edit())
+		if err != nil || (len(denials) > 0) != f.Deny {
+			return false
+		}
+	}
+	return true
 }
 
 // failingFixtures runs every fixture through the compiled rule and says what it gets wrong: the
@@ -444,8 +469,8 @@ func patternHint(c Condition) string {
 
 // parseCandidates reads the one object the prompt asks for, token by token. Each candidate is
 // decoded on its own afterwards, so one bad candidate does not hide a good one. An answer cut off,
-// as at its token bound, keeps the candidates it completed, with a note of where it stops; any
-// other break refuses the whole answer.
+// as at its token bound, or broken after a candidate keeps the candidates it completed, with a
+// note of where it stops; an answer broken before any candidate is refused.
 func parseCandidates(text string) ([]json.RawMessage, error) {
 	if len(text) > maxOutputBytes {
 		return nil, errors.New("the answer is too large")
@@ -460,6 +485,8 @@ func parseCandidates(text string) ([]json.RawMessage, error) {
 		return candidates, nil
 	case len(candidates) > 0 && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)):
 		return candidates, fmt.Errorf("the answer stops after candidate %d", len(candidates))
+	case len(candidates) > 0:
+		return candidates, fmt.Errorf("the answer breaks after candidate %d (%s)", len(candidates), decodeProblem(body, err))
 	default:
 		return nil, fmt.Errorf("the answer is not one JSON object with the fields of the example (%s)", decodeProblem(body, err))
 	}
