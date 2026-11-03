@@ -38,12 +38,14 @@ func checkRequest(fixtures []Fixture) CheckRequest {
 
 // scriptedLLM answers each call with the next of its answers.
 type scriptedLLM struct {
-	answers []string
-	users   []string
+	answers   []string
+	users     []string
+	maxTokens []int
 }
 
-func (s *scriptedLLM) complete(_ context.Context, _, user string) (Completion, error) {
+func (s *scriptedLLM) complete(_ context.Context, _, user string, maxTokens int) (Completion, error) {
 	s.users = append(s.users, user)
+	s.maxTokens = append(s.maxTokens, maxTokens)
 	if len(s.users) > len(s.answers) {
 		return Completion{}, errors.New("no answer left")
 	}
@@ -56,7 +58,7 @@ func TestDraftCheckProposesARuleThatPassesItsFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Calls != 1 || stats.Repaired || check.Repaired || check.DecisionID != testDecision || check.Model != "test-model" || check.PromptVersion != checkPromptVersion {
+	if stats.Calls != 1 || stats.Repaired || check.Repaired || check.DecisionID != testDecision || check.Model != "test-model" || check.PromptVersion != checkPromptVersion || llm.maxTokens[0] != maxCheckTokens {
 		t.Fatalf("check %+v stats %+v", check, stats)
 	}
 	if !strings.Contains(llm.users[0], `"path":"service/.env"`) || !strings.Contains(llm.users[0], "Never commit .env files") {

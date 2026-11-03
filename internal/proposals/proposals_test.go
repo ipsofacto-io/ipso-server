@@ -46,7 +46,7 @@ type fakeLLM struct {
 	system string
 }
 
-func (f *fakeLLM) complete(_ context.Context, system, user string) (Completion, error) {
+func (f *fakeLLM) complete(_ context.Context, system, user string, _ int) (Completion, error) {
 	f.calls++
 	f.system, f.user = system, user
 	return Completion{Text: f.answer, Model: "test-model"}, f.err
@@ -359,7 +359,7 @@ func TestAnswerThatLeaksTheCanaryIsRefused(t *testing.T) {
 		"uppercase": func(hex string) string { return strings.ToUpper(hex) },
 	} {
 		t.Run(name, func(t *testing.T) {
-			obedient := func(_ context.Context, system, _ string) (Completion, error) {
+			obedient := func(_ context.Context, system, _ string, _ int) (Completion, error) {
 				hex := canary.FindStringSubmatch(system)[1]
 				return Completion{Text: `{"candidates":[{"source":0,"title":"Use Go","statement":"The marker is ` + leak(hex) + `","rationale":"","confidence":0.9}]}`}, nil
 			}

@@ -32,11 +32,14 @@ const (
 	maxPreviousRunes   = 3000
 	maxQuotedRunes     = 200
 	maxDrafts          = 3
-	maxRules           = 3
-	maxConditions      = 5
-	maxValueRunes      = 200
-	maxMessageRunes    = 200
-	maxProblems        = 6
+	// maxCheckTokens bounds a check answer, so a model that loops stops early: two candidates of a
+	// few conditions take about 250.
+	maxCheckTokens  = 512
+	maxRules        = 3
+	maxConditions   = 5
+	maxValueRunes   = 200
+	maxMessageRunes = 200
+	maxProblems     = 6
 )
 
 //go:embed prompts/check-rule-v4.txt
@@ -144,7 +147,7 @@ func DraftCheck(ctx context.Context, complete CompleteFunc, req CheckRequest) (C
 	var stats CheckStats
 	prompt := user
 	for {
-		answer, err := complete(ctx, checkPrompt, prompt)
+		answer, err := complete(ctx, checkPrompt, prompt, maxCheckTokens)
 		stats.Calls++
 		if err != nil {
 			return Check{}, stats, err

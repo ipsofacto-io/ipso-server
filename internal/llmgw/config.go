@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -112,6 +113,9 @@ type Route struct {
 	KeyEnv string `json:"key_env"`
 	// AllowNonEU accepts a BYOK route the gateway cannot place in the EU. Only a tenant sets it.
 	AllowNonEU bool `json:"allow_non_eu"`
+	// TimeoutSeconds bounds one call on this route, 1 to 600, and 0 keeps the default of 90. A model
+	// served on CPU reads a long prompt for longer than that.
+	TimeoutSeconds int `json:"timeout_seconds"`
 }
 
 // ParseConfig reads a configuration strictly: an unknown field is an error.
@@ -143,6 +147,7 @@ type endpoint struct {
 	url      string
 	key      string
 	eu       bool
+	timeout  time.Duration
 }
 
 // resolve checks one route and returns where it sends requests. byok is true for a tenant's own
@@ -167,8 +172,14 @@ func resolve(r Route, byok bool) (endpoint, error) {
 	if r.AllowNonEU && !byok {
 		return fail("allow_non_eu is only for a tenant's own route")
 	}
+	if r.TimeoutSeconds < 0 || r.TimeoutSeconds > maxRouteTimeoutSeconds {
+		return fail("timeout_seconds must be 1 to %d", maxRouteTimeoutSeconds)
+	}
 
-	e := endpoint{name: r.Name, provider: r.Provider, model: r.Model, key: key}
+	e := endpoint{name: r.Name, provider: r.Provider, model: r.Model, key: key, timeout: routeTimeout}
+	if r.TimeoutSeconds > 0 {
+		e.timeout = time.Duration(r.TimeoutSeconds) * time.Second
+	}
 	switch r.Provider {
 	case Mistral:
 		if r.Endpoint != "" || r.Region != "" || r.DeploymentType != "" {

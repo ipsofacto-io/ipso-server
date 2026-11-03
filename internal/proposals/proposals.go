@@ -32,6 +32,8 @@ const (
 	maxTitleRunes  = 120
 	maxFieldRunes  = 1000
 	maxOutputBytes = 64 << 10
+	// maxAnswerTokens bounds the extraction answer: five candidates of at most 2,120 characters.
+	maxAnswerTokens = 2048
 	// maxKnownProposals bounds how many pending proposals Dedupe compares against.
 	maxKnownProposals = 2000
 )
@@ -46,9 +48,9 @@ type Completion = llmgw.Completion
 // is stored.
 var ErrAnswer = errors.New("the answer is not the expected JSON")
 
-// CompleteFunc calls the LLM gateway for one tenant, as llmgw.Gateway.For returns it. The gateway
-// owns routing, budgets, and its own redaction (ADR-0081).
-type CompleteFunc func(ctx context.Context, system, user string) (Completion, error)
+// CompleteFunc calls the LLM gateway for one tenant, as llmgw.Gateway.For returns it, with the most
+// tokens the answer may hold. The gateway owns routing, budgets, and its own redaction (ADR-0081).
+type CompleteFunc func(ctx context.Context, system, user string, maxTokens int) (Completion, error)
 
 // Proposal is one candidate that passed every check. It has no status field, because the only
 // status a proposal can have here is pending.
@@ -102,7 +104,7 @@ func Extract(ctx context.Context, complete CompleteFunc, repo string, number int
 	if err != nil {
 		return nil, stats, err
 	}
-	answer, err := complete(ctx, systemPrompt+" CANARY-"+canary+"\n", user)
+	answer, err := complete(ctx, systemPrompt+" CANARY-"+canary+"\n", user, maxAnswerTokens)
 	if err != nil {
 		return nil, stats, fmt.Errorf("complete: %w", err)
 	}

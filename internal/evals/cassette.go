@@ -17,7 +17,7 @@ import (
 )
 
 // CompleteFunc is the shape every pipeline takes for the LLM.
-type CompleteFunc func(ctx context.Context, system, user string) (llmgw.Completion, error)
+type CompleteFunc func(ctx context.Context, system, user string, maxTokens int) (llmgw.Completion, error)
 
 // ErrNotRecorded means a prompt has no recorded answer. A prompt, a dataset, or the code that
 // builds the prompt changed, so the answers have to be recorded again.
@@ -65,7 +65,7 @@ func (c *Cassette) Record(live CompleteFunc) {
 }
 
 // Complete answers one prompt.
-func (c *Cassette) Complete(ctx context.Context, system, user string) (llmgw.Completion, error) {
+func (c *Cassette) Complete(ctx context.Context, system, user string, maxTokens int) (llmgw.Completion, error) {
 	key := Key(system, user)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -80,7 +80,7 @@ func (c *Cassette) Complete(ctx context.Context, system, user string) (llmgw.Com
 		c.used[key] = r
 		return llmgw.Completion{Text: r.Text, Model: r.Model}, nil
 	}
-	answer, err := c.live(ctx, system, user)
+	answer, err := c.live(ctx, system, user, maxTokens)
 	if err != nil {
 		return llmgw.Completion{}, err
 	}

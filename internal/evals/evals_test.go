@@ -166,17 +166,17 @@ func TestCassetteReplaysAndRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recorder.Record(func(context.Context, string, string) (llmgw.Completion, error) {
+	recorder.Record(func(context.Context, string, string, int) (llmgw.Completion, error) {
 		calls++
 		return llmgw.Completion{Text: "answer", Model: "m"}, nil
 	})
 	first := "DATA-" + "0123456789abcdef0123456789abcdef" + "\n{}"
 	second := "DATA-" + "fedcba9876543210fedcba9876543210" + "\n{}"
-	if _, err := recorder.Complete(t.Context(), "sys", first); err != nil {
+	if _, err := recorder.Complete(t.Context(), "sys", first, 0); err != nil {
 		t.Fatal(err)
 	}
 	// The same prompt with another nonce is the same key, so it is not sent again.
-	if _, err := recorder.Complete(t.Context(), "sys", second); err != nil || calls != 1 {
+	if _, err := recorder.Complete(t.Context(), "sys", second, 0); err != nil || calls != 1 {
 		t.Fatalf("calls %d err %v", calls, err)
 	}
 	if err := recorder.Save(path); err != nil {
@@ -187,11 +187,11 @@ func TestCassetteReplaysAndRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer, err := replay.Complete(t.Context(), "sys", second)
+	answer, err := replay.Complete(t.Context(), "sys", second, 0)
 	if err != nil || answer.Text != "answer" || answer.Model != "m" {
 		t.Fatalf("answer %+v err %v", answer, err)
 	}
-	if _, err := replay.Complete(t.Context(), "another system prompt", first); !errors.Is(err, ErrNotRecorded) {
+	if _, err := replay.Complete(t.Context(), "another system prompt", first, 0); !errors.Is(err, ErrNotRecorded) {
 		t.Fatalf("err = %v, want ErrNotRecorded", err)
 	}
 	raw, _ := os.ReadFile(path)

@@ -168,6 +168,8 @@ func TestConfigErrors(t *testing.T) {
 		},
 		"a pattern that matches empty text": func(c *Config) { c.Redact = []string{"x*"} },
 		"an invalid pattern":                func(c *Config) { c.Redact = []string{"("} },
+		"a negative timeout":                func(c *Config) { c.Routes[0].TimeoutSeconds = -1 },
+		"a timeout over ten minutes":        func(c *Config) { c.Routes[0].TimeoutSeconds = 601 },
 	}
 	for name, change := range cases {
 		t.Run(name, func(t *testing.T) {
