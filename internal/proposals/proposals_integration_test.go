@@ -257,7 +257,7 @@ func TestInboxPages(t *testing.T) {
 	if len(rest.Proposals) != 1 || rest.Proposals[0].ID == first.Proposals[1].ID {
 		t.Fatalf("second page %+v", rest)
 	}
-	for _, query := range []string{"?limit=0", "?limit=101", "?limit=x", "?before=x"} {
+	for _, query := range []string{"?limit=", "?limit=0", "?limit=101", "?limit=x", "?before=", "?before=x", "?before=00000000-0000-0000-0000-000000000000"} {
 		recorder := httptest.NewRecorder()
 		Handler(db, func(*http.Request) (uuid.UUID, bool) { return tenantA, true }).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/proposals"+query, nil))
 		if recorder.Code != http.StatusBadRequest {

@@ -109,8 +109,33 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 	}{
 		{"resolve", http.MethodPost, "/v1/resolve", resolve, func(t *testing.T, a map[string]any) {
 			resolutions := list(a, "resolutions")
-			if len(resolutions) != 2 || len(list(resolutions[0].(map[string]any), "decisions")) != 2 {
+			decisions := list(a, "decisions")
+			if len(resolutions) != 2 || len(decisions) != 2 {
 				t.Errorf("%v", a)
+			}
+			ids := map[string]bool{}
+			for _, raw := range decisions {
+				decision := raw.(map[string]any)
+				id, _ := decision["id"].(string)
+				if id == "" || ids[id] || decision["body"] == nil {
+					t.Errorf("decision %v", decision)
+				}
+				ids[id] = true
+			}
+			for _, raw := range resolutions {
+				resolution := raw.(map[string]any)
+				if _, carried := resolution["decisions"]; carried {
+					t.Errorf("a path carries decision bodies: %v", resolution)
+				}
+				named := list(resolution, "decision_ids")
+				if len(named) != 2 {
+					t.Errorf("path %v", resolution)
+				}
+				for _, id := range named {
+					if !ids[id.(string)] {
+						t.Errorf("path names %v, which is not in decisions", id)
+					}
+				}
 			}
 		}},
 		{"list_decisions", http.MethodGet, "/v1/decisions?valid=" + valid + "&known=" + known + "&limit=10", nil, func(t *testing.T, a map[string]any) {

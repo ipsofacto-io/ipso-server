@@ -192,9 +192,10 @@ func (v *JWTVerifier) fetchKeys(ctx context.Context) (jwk.Set, error) {
 	return set, nil
 }
 
-// Verify checks a token's signature, issuer, audience, and expiry and returns its claims. A token
-// that fails may have been signed by a rotated key, so the keys are read again, at most once per
-// keyRefreshInterval. The error says nothing a caller should see.
+// Verify checks a token's signature, issuer, audience, and expiry and returns its claims. A signature
+// that fails may be a rotated key, so the keys are read again, at most once per keyRefreshInterval.
+// A token the current keys already verify is not a reason to call out: a new key cannot fix an
+// issuer, an audience, or an expiry. The error says nothing a caller should see.
 func (v *JWTVerifier) Verify(ctx context.Context, raw string) (Claims, error) {
 	if raw == "" || len(raw) > maxTokenBytes {
 		return Claims{}, errors.New("the token is empty or too large")
@@ -204,6 +205,9 @@ func (v *JWTVerifier) Verify(ctx context.Context, raw string) (Claims, error) {
 	v.mu.Unlock()
 	token, err := v.parse(raw, keys)
 	if err != nil {
+		if !errors.Is(err, jws.VerificationError()) {
+			return Claims{}, err
+		}
 		fresh, ok := v.refresh(ctx)
 		if !ok {
 			return Claims{}, err
@@ -233,6 +237,8 @@ func (v *JWTVerifier) refresh(ctx context.Context) (jwk.Set, bool) {
 	if time.Since(v.fetched) < keyRefreshInterval {
 		return nil, false
 	}
+	// A failed fetch still uses the interval. Rolling it back would let a stream of bad tokens
+	// hammer the authorization server while it is down.
 	v.fetched = time.Now()
 	keys, err := v.fetchKeys(ctx)
 	if err != nil {

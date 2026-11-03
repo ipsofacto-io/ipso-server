@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -72,6 +73,17 @@ WHERE d.scope_refs && $1::uuid[]
   AND d.sys_period @> $3::timestamptz
   AND d.tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
 ORDER BY d.decision_id, d.version DESC`
+
+	// decisionsInForceForScopes is decisionsInForce plus each row's scope refs as text.
+	// ResolvePaths reads it once for every scope any path matched, then keeps each body once.
+	decisionsInForceForScopes = `
+SELECT DISTINCT ON (d.decision_id) d.decision_id, d.version, d.body, d.scope_refs::text
+FROM registry.decision_version_all d
+WHERE d.scope_refs && $1::uuid[]
+  AND d.valid_period @> $2::timestamptz
+  AND d.sys_period @> $3::timestamptz
+  AND d.tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+ORDER BY d.decision_id, d.version DESC`
 )
 
 // Resolve returns the decisions in force for the subject at valid time validAt, as the registry
@@ -110,10 +122,24 @@ func Resolve(ctx context.Context, db *sql.DB, tenant uuid.UUID, in Subject, vali
 // MaxResolvePaths bounds the paths of one check request. A larger change is sent in parts.
 const MaxResolvePaths = 500
 
-// Resolution is the answer for one path of a check request.
+// Resolution names the decisions in force for one path. DecisionIDs refers to Resolved.Decisions.
 type Resolution struct {
-	Path      string
-	Decisions []Decision
+	Path        string
+	DecisionIDs []uuid.UUID
+}
+
+// Resolved is the answer of one check request. Decisions holds each decision once, in decision id
+// order. Resolutions holds one entry per path, in the order given (ADR-0092).
+type Resolved struct {
+	Decisions   []Decision
+	Resolutions []Resolution
+}
+
+// decisionScopes is one decision and the scopes it names. The body is not copied when the answer
+// keeps the decision.
+type decisionScopes struct {
+	decision Decision
+	scopes   []uuid.UUID
 }
 
 // ResolvePaths answers a check request: the decisions in force for each changed path of repo in
@@ -122,47 +148,174 @@ type Resolution struct {
 // in one read-only REPEATABLE READ transaction, so a write while it runs cannot answer two paths
 // from two different registries.
 //
+// Decision bodies are read once, for the union of the scopes any path matched, and each body is
+// kept once. A path names those decisions by id. An org-wide decision is not stored again for
+// every path (ADR-0092).
+//
 // The tenant must be the authenticated one, because ResolvePaths trusts it.
-func ResolvePaths(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo, env string, paths []string, validAt, knownAt time.Time) ([]Resolution, error) {
+func ResolvePaths(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo, env string, paths []string, validAt, knownAt time.Time) (Resolved, error) {
 	if tenant == uuid.Nil {
-		return nil, fmt.Errorf("%w: no tenant", ErrInvalidQuery)
+		return Resolved{}, fmt.Errorf("%w: no tenant", ErrInvalidQuery)
 	}
 	if validAt.IsZero() || knownAt.IsZero() {
-		return nil, fmt.Errorf("%w: the valid time and the transaction time are required", ErrInvalidQuery)
+		return Resolved{}, fmt.Errorf("%w: the valid time and the transaction time are required", ErrInvalidQuery)
 	}
 	if repo == "" || env == "" {
-		return nil, fmt.Errorf("%w: a check request names the repo and the env", ErrInvalidSubject)
+		return Resolved{}, fmt.Errorf("%w: a check request names the repo and the env", ErrInvalidSubject)
 	}
 	if len(paths) == 0 || len(paths) > MaxResolvePaths {
-		return nil, fmt.Errorf("%w: a check request names 1 to %d paths", ErrInvalidQuery, MaxResolvePaths)
+		return Resolved{}, fmt.Errorf("%w: a check request names 1 to %d paths", ErrInvalidQuery, MaxResolvePaths)
 	}
 	subjects := make([]subject, 0, len(paths))
 	for _, p := range paths {
 		if p == "" {
-			return nil, fmt.Errorf("%w: an empty path", ErrInvalidSubject)
+			return Resolved{}, fmt.Errorf("%w: an empty path", ErrInvalidSubject)
 		}
 		s, err := newSubject(Subject{Repo: repo, Path: p, Env: env})
 		if err != nil {
-			return nil, err
+			return Resolved{}, err
 		}
 		subjects = append(subjects, s)
 	}
 
-	resolutions := make([]Resolution, 0, len(paths))
+	var resolved Resolved
 	err := readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
+		scopes := make([][]uuid.UUID, len(subjects))
+		seen := make(map[uuid.UUID]struct{})
+		union := make([]uuid.UUID, 0)
 		for i, s := range subjects {
-			decisions, err := decisionsFor(ctx, tx, s, validAt, knownAt)
+			matched, err := matchingScopes(ctx, tx, s, knownAt)
 			if err != nil {
 				return err
 			}
-			resolutions = append(resolutions, Resolution{Path: paths[i], Decisions: decisions})
+			if len(matched) == 0 {
+				continue
+			}
+			ancestors, err := ancestorsOf(ctx, tx, matched, knownAt)
+			if err != nil {
+				return err
+			}
+			scopes[i] = ancestors
+			for _, id := range ancestors {
+				if _, ok := seen[id]; ok {
+					continue
+				}
+				seen[id] = struct{}{}
+				union = append(union, id)
+			}
 		}
+		var decisions []decisionScopes
+		if len(union) > 0 {
+			var err error
+			decisions, err = readDecisionsWithRefs(ctx, tx, union, validAt, knownAt)
+			if err != nil {
+				return err
+			}
+		}
+		resolved = assignPathDecisions(paths, scopes, decisions)
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return Resolved{}, err
 	}
-	return resolutions, nil
+	return resolved, nil
+}
+
+// readDecisionsWithRefs reads each decision in force for the scopes once, with the scopes it names.
+func readDecisionsWithRefs(ctx context.Context, tx *sql.Tx, scopes []uuid.UUID, validAt, knownAt time.Time) ([]decisionScopes, error) {
+	rows, err := tx.QueryContext(ctx, decisionsInForceForScopes, scopes, validAt, knownAt)
+	if err != nil {
+		return nil, fmt.Errorf("read decisions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var decisions []decisionScopes
+	for rows.Next() {
+		var (
+			item     decisionScopes
+			body     []byte
+			refsText sql.NullString
+		)
+		if err := rows.Scan(&item.decision.ID, &item.decision.Version, &body, &refsText); err != nil {
+			return nil, fmt.Errorf("read decisions: %w", err)
+		}
+		if !refsText.Valid {
+			return nil, fmt.Errorf("decision %s: missing scope refs", item.decision.ID)
+		}
+		refs, err := parseUUIDArray(refsText.String)
+		if err != nil {
+			return nil, fmt.Errorf("decision %s: %w", item.decision.ID, err)
+		}
+		item.decision.Body = body
+		item.scopes = refs
+		decisions = append(decisions, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read decisions: %w", err)
+	}
+	return decisions, nil
+}
+
+// assignPathDecisions keeps each decision once and names it by id on every path whose scopes
+// overlap the decision. A decision that overlaps no path is left out. paths and scopes are
+// parallel. Decision bodies are the slices from decisions, not copies.
+func assignPathDecisions(paths []string, scopes [][]uuid.UUID, decisions []decisionScopes) Resolved {
+	resolved := Resolved{
+		Decisions:   make([]Decision, 0, len(decisions)),
+		Resolutions: make([]Resolution, len(paths)),
+	}
+	used := make([]bool, len(decisions))
+	for i := range paths {
+		ids := make([]uuid.UUID, 0)
+		if len(scopes[i]) > 0 {
+			set := make(map[uuid.UUID]struct{}, len(scopes[i]))
+			for _, id := range scopes[i] {
+				set[id] = struct{}{}
+			}
+			for j, item := range decisions {
+				if overlaps(item.scopes, set) {
+					ids = append(ids, item.decision.ID)
+					used[j] = true
+				}
+			}
+		}
+		resolved.Resolutions[i] = Resolution{Path: paths[i], DecisionIDs: ids}
+	}
+	for j, item := range decisions {
+		if used[j] {
+			resolved.Decisions = append(resolved.Decisions, item.decision)
+		}
+	}
+	return resolved
+}
+
+func overlaps(refs []uuid.UUID, scopes map[uuid.UUID]struct{}) bool {
+	for _, id := range refs {
+		if _, ok := scopes[id]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// parseUUIDArray reads the text form PostgreSQL gives a uuid array, such as {id,id}.
+func parseUUIDArray(text string) ([]uuid.UUID, error) {
+	if text == "{}" {
+		return []uuid.UUID{}, nil
+	}
+	if len(text) < 2 || text[0] != '{' || text[len(text)-1] != '}' {
+		return nil, errors.New("scope refs are not a uuid array")
+	}
+	parts := strings.Split(text[1:len(text)-1], ",")
+	refs := make([]uuid.UUID, len(parts))
+	for i, part := range parts {
+		id, err := uuid.Parse(strings.TrimSpace(part))
+		if err != nil {
+			return nil, errors.New("scope refs are not a uuid array")
+		}
+		refs[i] = id
+	}
+	return refs, nil
 }
 
 // decisionsFor is the Q1 read inside a transaction that already has ipso.tenant set.

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/jwx/v3/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwt"
 
 	"github.com/ipsofacto-io/ipso-server/internal/authn/authntest"
 )
@@ -113,6 +114,69 @@ func TestVerifierPicksUpARotatedKeyOnlyWithinTheLimit(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("a bad token inside the limit called out: %d", calls)
+	}
+}
+
+func TestVerifierDoesNotRefreshKeysForAClaimFailure(t *testing.T) {
+	auth := authntest.NewServer(t)
+	verifier, _, err := Discover(t.Context(), auth.Server.Client(), auth.Server.URL, testAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	public, err := auth.Signing.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth.Keys = func() any {
+		calls++
+		return map[string]any{"keys": []any{public}}
+	}
+	verifier.mu.Lock()
+	verifier.fetched = time.Now().Add(-2 * keyRefreshInterval)
+	verifier.mu.Unlock()
+
+	expired := auth.Token(testAudience, nil, func(b *jwt.Builder) *jwt.Builder {
+		return b.Expiration(time.Now().Add(-time.Hour))
+	})
+	if _, err := verifier.Verify(t.Context(), expired); err == nil {
+		t.Fatal("an expired token was accepted")
+	}
+	if _, err := verifier.Verify(t.Context(), auth.Token("https://other.example.test", nil)); err == nil {
+		t.Fatal("a token for another audience was accepted")
+	}
+	if calls != 0 {
+		t.Fatalf("a claim failure called out %d times", calls)
+	}
+}
+
+func TestVerifierAFailedKeyFetchStillWaits(t *testing.T) {
+	auth := authntest.NewServer(t)
+	verifier, _, err := Discover(t.Context(), auth.Server.Client(), auth.Server.URL, testAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	auth.Keys = func() any {
+		calls++
+		return map[string]any{"keys": []any{}}
+	}
+	other := authntest.NewServer(t)
+	other.Server.Close()
+	auth.Signing = other.Signing
+	token := auth.Token(testAudience, nil)
+	verifier.mu.Lock()
+	verifier.fetched = time.Now().Add(-2 * keyRefreshInterval)
+	verifier.mu.Unlock()
+
+	if _, err := verifier.Verify(t.Context(), token); err == nil {
+		t.Fatal("a token signed by an unpublished key was accepted")
+	}
+	if _, err := verifier.Verify(t.Context(), token); err == nil {
+		t.Fatal("the second try was accepted")
+	}
+	if calls != 1 {
+		t.Fatalf("a failed fetch was repeated: %d calls", calls)
 	}
 }
 

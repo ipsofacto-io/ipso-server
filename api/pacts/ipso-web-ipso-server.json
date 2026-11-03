@@ -1,0 +1,1194 @@
+{
+  "consumer": {
+    "name": "ipso-web"
+  },
+  "interactions": [
+    {
+      "description": "a request for the decisions a slug names",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds decisions, scopes, a waiver, and proposals"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Authorization": [
+            "Bearer token"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Authorization": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^Bearer \\S+$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/decisions/use-tls",
+        "query": {
+          "valid": [
+            "2026-06-01T00:00:00Z"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "decisions": [
+              {
+                "body": {
+                  "slug": "use-tls",
+                  "title": "use-tls"
+                },
+                "id": "fc763eba-0905-41c5-a27f-3934ab26786c",
+                "version": 1
+              }
+            ],
+            "known": "2026-11-01T00:00:00Z",
+            "valid": "2026-06-01T00:00:00Z"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decisions": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.decisions[*].body": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decisions[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.decisions[*].version": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.known": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.valid": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "transport": "http",
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the decisions in force",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds decisions, scopes, a waiver, and proposals"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Authorization": [
+            "Bearer token"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Authorization": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^Bearer \\S+$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/decisions",
+        "query": {
+          "valid": [
+            "2026-06-01T00:00:00Z"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "decisions": [
+              {
+                "body": {
+                  "slug": "use-tls",
+                  "title": "use-tls"
+                },
+                "id": "fc763eba-0905-41c5-a27f-3934ab26786c",
+                "version": 1
+              }
+            ],
+            "known": "2026-11-01T00:00:00Z",
+            "valid": "2026-06-01T00:00:00Z"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decisions": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.decisions[*].body": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decisions[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.decisions[*].version": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.known": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.valid": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "transport": "http",
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the drafted checks",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds decisions, scopes, a waiver, and proposals"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Authorization": [
+            "Bearer token"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Authorization": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^Bearer \\S+$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/check-proposals"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "check_proposals": [
+              {
+                "captured_at": "2026-11-01T00:00:00Z",
+                "decision_id": "fc763eba-0905-41c5-a27f-3934ab26786c",
+                "decision_version": 1,
+                "engine": "opa",
+                "fixtures": [
+                  {}
+                ],
+                "id": "fc763eba-0905-41c5-a27f-3934ab26786c",
+                "model_id": "m",
+                "prompt_version": "p",
+                "rego": "package p",
+                "repaired": false,
+                "spec": {},
+                "status": "pending",
+                "target": "agent-edit"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.check_proposals": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.check_proposals[*].captured_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.check_proposals[*].decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.check_proposals[*].decision_version": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.check_proposals[*].fixtures": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.check_proposals[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.check_proposals[*].model_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.check_proposals[*].prompt_version": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.check_proposals[*].rego": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.check_proposals[*].repaired": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.check_proposals[*].spec": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "transport": "http",
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the proposals from coding agents",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds decisions, scopes, a waiver, and proposals"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Authorization": [
+            "Bearer token"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Authorization": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^Bearer \\S+$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/agent-proposals"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "agent_proposals": [
+              {
+                "captured_at": "2026-11-01T00:00:00Z",
+                "id": "fc763eba-0905-41c5-a27f-3934ab26786c",
+                "payload": {
+                  "title": "Pin API versions"
+                },
+                "principal_id": "fc763eba-0905-41c5-a27f-3934ab26786c",
+                "status": "pending"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.agent_proposals": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.agent_proposals[*].captured_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.agent_proposals[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.agent_proposals[*].payload": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.agent_proposals[*].principal_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "transport": "http",
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the proposals from pull requests",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds decisions, scopes, a waiver, and proposals"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Authorization": [
+            "Bearer token"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Authorization": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^Bearer \\S+$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/proposals"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "proposals": [
+              {
+                "captured_at": "2026-11-01T00:00:00Z",
+                "confidence": 0.8,
+                "id": "fc763eba-0905-41c5-a27f-3934ab26786c",
+                "kind": "decision",
+                "model_id": "m",
+                "origin": "llm",
+                "payload": {
+                  "title": "Use Postgres"
+                },
+                "pr_number": 8,
+                "prompt_version": "p",
+                "repo": "acme/api",
+                "source_url": "https://github.com/acme/api/pull/8",
+                "status": "pending",
+                "trust_level": "untrusted"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.proposals": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.proposals[*].captured_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.proposals[*].confidence": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.proposals[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.proposals[*].model_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.proposals[*].payload": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.proposals[*].pr_number": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.proposals[*].prompt_version": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.proposals[*].repo": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.proposals[*].source_url": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+(#[A-Za-z0-9_-]+)?$"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "transport": "http",
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the scope tree",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds decisions, scopes, a waiver, and proposals"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Authorization": [
+            "Bearer token"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Authorization": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^Bearer \\S+$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/scopes"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "known": "2026-11-01T00:00:00Z",
+            "scopes": [
+              {
+                "id": "fc763eba-0905-41c5-a27f-3934ab26786c",
+                "kind": "org",
+                "parent_id": null,
+                "selector": "acme"
+              },
+              {
+                "id": "fc763eba-0905-41c5-a27f-3934ab26786c",
+                "kind": "repo",
+                "parent_id": "fc763eba-0905-41c5-a27f-3934ab26786c",
+                "selector": "acme/api"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.known": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.scopes": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "arrayContains",
+                  "variants": [
+                    {
+                      "index": 0,
+                      "rules": {
+                        "$.id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                            }
+                          ]
+                        },
+                        "$.selector": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "index": 1,
+                      "rules": {
+                        "$.id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                            }
+                          ]
+                        },
+                        "$.kind": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.parent_id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                            }
+                          ]
+                        },
+                        "$.selector": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "transport": "http",
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the waivers in force",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds decisions, scopes, a waiver, and proposals"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Authorization": [
+            "Bearer token"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Authorization": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^Bearer \\S+$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/waivers",
+        "query": {
+          "valid": [
+            "2026-06-01T00:00:00Z"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "known": "2026-11-01T00:00:00Z",
+            "valid": "2026-06-01T00:00:00Z",
+            "waivers": [
+              {
+                "decision_id": "fc763eba-0905-41c5-a27f-3934ab26786c",
+                "expires_at": "2026-06-10T00:00:00Z",
+                "id": "fc763eba-0905-41c5-a27f-3934ab26786c",
+                "scope_id": "fc763eba-0905-41c5-a27f-3934ab26786c",
+                "ticket_ref": "OPS-1",
+                "valid_from": "2026-05-01T00:00:00Z"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.known": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.valid": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.waivers": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.waivers[*].decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.waivers[*].expires_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.waivers[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.waivers[*].scope_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.waivers[*].ticket_ref": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.waivers[*].valid_from": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "transport": "http",
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to resolve the decisions for changed paths",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds decisions, scopes, a waiver, and proposals"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "env": "prod",
+            "paths": [
+              "docs/a.md"
+            ],
+            "repo": "acme/api",
+            "valid": "2026-06-01T00:00:00Z"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Authorization": [
+            "Bearer token"
+          ],
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Authorization": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^Bearer \\S+$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/v1/resolve"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "decisions": [
+              {
+                "body": {
+                  "slug": "use-tls",
+                  "title": "use-tls"
+                },
+                "id": "fc763eba-0905-41c5-a27f-3934ab26786c",
+                "version": 1
+              }
+            ],
+            "known": "2026-11-01T00:00:00Z",
+            "resolutions": [
+              {
+                "decision_ids": [
+                  "fc763eba-0905-41c5-a27f-3934ab26786c"
+                ],
+                "path": "docs/a.md"
+              }
+            ],
+            "valid": "2026-06-01T00:00:00Z"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decisions": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.decisions[*].body": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decisions[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.decisions[*].version": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.known": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.resolutions": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.resolutions[*].decision_ids": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.resolutions[*].decision_ids[*]": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.resolutions[*].path": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.valid": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "transport": "http",
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request without a token",
+      "pending": false,
+      "request": {
+        "method": "GET",
+        "path": "/v1/decisions"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "error": "unauthorized"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ],
+          "WWW-Authenticate": [
+            "Bearer realm=\"ipso\""
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "WWW-Authenticate": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^Bearer realm=\"ipso\"$"
+                }
+              ]
+            }
+          }
+        },
+        "status": 401
+      },
+      "transport": "http",
+      "type": "Synchronous/HTTP"
+    }
+  ],
+  "metadata": {
+    "pact-go": {
+      "version": "2.8.0"
+    },
+    "pactRust": {
+      "ffi": "0.5.8",
+      "mockserver": "2.2.6",
+      "models": "1.3.16"
+    },
+    "pactSpecification": {
+      "version": "4.0"
+    }
+  },
+  "provider": {
+    "name": "ipso-server"
+  }
+}

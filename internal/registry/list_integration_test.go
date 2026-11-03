@@ -29,14 +29,11 @@ func TestResolvePathsAnswersEachPathInOneRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].Path != "docs/a.md" || got[1].Path != "main.go" {
-		t.Fatalf("%+v", got)
+	if len(got.Resolutions) != 2 || got.Resolutions[0].Path != "docs/a.md" || got.Resolutions[1].Path != "main.go" {
+		t.Fatalf("%+v", got.Resolutions)
 	}
-	ids := func(ds []Decision) []uuid.UUID {
-		out := make([]uuid.UUID, 0, len(ds))
-		for _, d := range ds {
-			out = append(out, d.ID)
-		}
+	sortIDs := func(in []uuid.UUID) []uuid.UUID {
+		out := append([]uuid.UUID(nil), in...)
 		slices.SortFunc(out, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
 		return out
 	}
@@ -44,18 +41,29 @@ func TestResolvePathsAnswersEachPathInOneRead(t *testing.T) {
 		slices.SortFunc(in, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
 		return in
 	}
-	if !slices.Equal(ids(got[0].Decisions), want(orgWide, onDocs, onProd)) {
-		t.Fatalf("docs/a.md: %v", ids(got[0].Decisions))
+	if !slices.Equal(sortIDs(got.Resolutions[0].DecisionIDs), want(orgWide, onDocs, onProd)) {
+		t.Fatalf("docs/a.md: %v", got.Resolutions[0].DecisionIDs)
 	}
-	if !slices.Equal(ids(got[1].Decisions), want(orgWide, onProd)) {
-		t.Fatalf("main.go: %v", ids(got[1].Decisions))
+	if !slices.Equal(sortIDs(got.Resolutions[1].DecisionIDs), want(orgWide, onProd)) {
+		t.Fatalf("main.go: %v", got.Resolutions[1].DecisionIDs)
+	}
+	// The org-wide decision applies to both paths and is stored once.
+	seen := map[uuid.UUID]int{}
+	for _, d := range got.Decisions {
+		seen[d.ID]++
+		if len(d.Body) == 0 {
+			t.Fatalf("decision %s has no body", d.ID)
+		}
+	}
+	if len(got.Decisions) != 3 || seen[orgWide] != 1 || seen[onDocs] != 1 || seen[onProd] != 1 {
+		t.Fatalf("decisions %+v", got.Decisions)
 	}
 
 	other, err := ResolvePaths(t.Context(), r.app, tenantB, "acme/api", "prod", []string{"docs/a.md"}, validAt, knownAt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(other) != 1 || len(other[0].Decisions) != 0 {
+	if len(other.Resolutions) != 1 || len(other.Resolutions[0].DecisionIDs) != 0 || len(other.Decisions) != 0 {
 		t.Fatalf("tenant B read tenant A: %+v", other)
 	}
 }

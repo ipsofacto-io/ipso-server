@@ -237,7 +237,7 @@ func readPage(w http.ResponseWriter, r *http.Request, tenantFrom TenantFunc) (uu
 		return uuid.Nil, nil, 0, false
 	}
 	limit := defaultPage
-	if raw := query.Get("limit"); raw != "" {
+	if raw := query.Get("limit"); raw != "" || query.Has("limit") {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 1 || parsed > maxPage {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid query"})
@@ -246,9 +246,9 @@ func readPage(w http.ResponseWriter, r *http.Request, tenantFrom TenantFunc) (uu
 		limit = parsed
 	}
 	var before any
-	if raw := query.Get("before"); raw != "" {
+	if raw := query.Get("before"); raw != "" || query.Has("before") {
 		parsed, err := uuid.Parse(raw)
-		if err != nil {
+		if err != nil || parsed == uuid.Nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid query"})
 			return uuid.Nil, nil, 0, false
 		}

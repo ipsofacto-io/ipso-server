@@ -85,7 +85,8 @@ func webCalls() []webCall {
 			answer: map[string]any{
 				"valid":       timestamp(exampleValid),
 				"known":       timestamp(exampleKnown),
-				"resolutions": m.EachLike(map[string]any{"path": m.Like("docs/a.md"), "decisions": m.EachLike(decision, 1)}, 1),
+				"decisions":   m.EachLike(decision, 1),
+				"resolutions": m.EachLike(map[string]any{"path": m.Like("docs/a.md"), "decision_ids": m.EachLike(m.UUID(), 1)}, 1),
 			},
 		},
 		{
@@ -242,6 +243,12 @@ func TestPactConsumerIpsoWeb(t *testing.T) {
 			WillRespondWith(call.status, func(b *consumer.V4ResponseBuilder) {
 				b.Header("Content-Type", m.String("application/json"))
 				for _, h := range call.headers {
+					// A string matcher writes the quotes in this challenge with an extra escape, so the
+					// provider comparison looks for backslashes. The pattern is the header the API sends.
+					if h.key == "WWW-Authenticate" {
+						b.Header(h.key, m.Regex(h.value, `^Bearer realm="ipso"$`))
+						continue
+					}
 					b.Header(h.key, m.String(h.value))
 				}
 				b.JSONBody(call.answer)

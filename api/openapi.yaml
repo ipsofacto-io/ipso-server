@@ -30,9 +30,10 @@ paths:
       summary: Resolve the decisions in force for each changed path of a check.
       description: >-
         A check request names the repo, the env, and every changed path, and gets one resolution for each
-        path (ADR-0051). An omitted field would match every scope and widen the answer, so all three are
-        required. Every path is read in one transaction. This route reads only. It is POST because a list of
-        paths does not fit a URL.
+        path (ADR-0051). Each decision is returned once, and a path names it by id, so an org-wide decision
+        is not repeated for every path (ADR-0092). An omitted field would match every scope and widen the
+        answer, so all three are required. Every path is read in one transaction. This route reads only.
+        It is POST because a list of paths does not fit a URL.
       requestBody:
         required: true
         content:
@@ -41,7 +42,7 @@ paths:
               $ref: '#/components/schemas/ResolveRequest'
       responses:
         '200':
-          description: One resolution for each path, in the order sent.
+          description: Each decision once, and one resolution for each path, in the order sent.
           content:
             application/json:
               schema:
@@ -665,7 +666,7 @@ components:
     ResolveAnswer:
       type: object
       additionalProperties: false
-      required: [valid, known, resolutions]
+      required: [valid, known, decisions, resolutions]
       properties:
         valid:
           type: string
@@ -673,19 +674,26 @@ components:
         known:
           type: string
           format: date-time
+        decisions:
+          type: array
+          description: Each decision in force for any requested path, once.
+          items:
+            $ref: '#/components/schemas/Decision'
         resolutions:
           type: array
           items:
             type: object
             additionalProperties: false
-            required: [path, decisions]
+            required: [path, decision_ids]
             properties:
               path:
                 type: string
-              decisions:
+              decision_ids:
                 type: array
+                description: Ids of decisions in the top-level decisions list, in decision id order.
                 items:
-                  $ref: '#/components/schemas/Decision'
+                  type: string
+                  format: uuid
     DecisionPage:
       type: object
       additionalProperties: false

@@ -36,8 +36,15 @@ type resolveRequest struct {
 }
 
 type resolutionJSON struct {
-	Path      string         `json:"path"`
-	Decisions []decisionJSON `json:"decisions"`
+	Path        string      `json:"path"`
+	DecisionIDs []uuid.UUID `json:"decision_ids"`
+}
+
+type resolveAnswer struct {
+	Valid       time.Time        `json:"valid"`
+	Known       time.Time        `json:"known"`
+	Decisions   []decisionJSON   `json:"decisions"`
+	Resolutions []resolutionJSON `json:"resolutions"`
 }
 
 type scopeJSON struct {
@@ -56,9 +63,9 @@ type waiverJSON struct {
 	ExpiresAt  time.Time `json:"expires_at"`
 }
 
-// resolve answers a check request (ADR-0051): the repo, the env, and every changed path, one
-// resolution for each path. It reads and writes nothing else, so it is POST only because a list of
-// paths does not fit a URL.
+// resolve answers a check request (ADR-0051, ADR-0092): the repo, the env, and every changed path,
+// one resolution for each path. Each decision is returned once. A path names it by id. It reads and
+// writes nothing else, so it is POST only because a list of paths does not fit a URL.
 func (h *registryRoutes) resolve(w http.ResponseWriter, r *http.Request) {
 	tenant, ok := tenantOf(r)
 	if !ok {
@@ -93,16 +100,25 @@ func (h *registryRoutes) resolve(w http.ResponseWriter, r *http.Request) {
 	if req.Known != nil {
 		knownAt = *req.Known
 	}
-	resolutions, err := registry.ResolvePaths(r.Context(), h.db, tenant, req.Repo, req.Env, req.Paths, validAt, knownAt)
+	resolved, err := registry.ResolvePaths(r.Context(), h.db, tenant, req.Repo, req.Env, req.Paths, validAt, knownAt)
 	if err != nil {
 		writeRegistryError(w, err)
 		return
 	}
-	out := make([]resolutionJSON, 0, len(resolutions))
-	for _, resolution := range resolutions {
-		out = append(out, resolutionJSON{Path: resolution.Path, Decisions: decisionList(resolution.Decisions)})
+	resolutions := make([]resolutionJSON, 0, len(resolved.Resolutions))
+	for _, resolution := range resolved.Resolutions {
+		ids := resolution.DecisionIDs
+		if ids == nil {
+			ids = []uuid.UUID{}
+		}
+		resolutions = append(resolutions, resolutionJSON{Path: resolution.Path, DecisionIDs: ids})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"valid": validAt, "known": knownAt, "resolutions": out})
+	writeJSON(w, http.StatusOK, resolveAnswer{
+		Valid:       validAt,
+		Known:       knownAt,
+		Decisions:   decisionList(resolved.Decisions),
+		Resolutions: resolutions,
+	})
 }
 
 func (h *registryRoutes) decisions(w http.ResponseWriter, r *http.Request) {
