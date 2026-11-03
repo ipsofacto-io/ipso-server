@@ -355,7 +355,7 @@ func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture, fixtur
 	for _, id := range held {
 		holds[id] = true
 	}
-	var reasons []string
+	var reasons, holding []string
 	for r, rule := range spec.Rules {
 		var unmet []string
 		for c, cond := range rule.When {
@@ -373,6 +373,7 @@ func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture, fixtur
 				conditions[c] = jsonText(cond)
 			}
 			reasons = append(reasons, fmt.Sprintf("rule %d (%s)", r+1, strings.Join(conditions, " and ")))
+			holding = append(holding, fmt.Sprintf("rule %d", r+1))
 		}
 	}
 	switch {
@@ -381,30 +382,34 @@ func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture, fixtur
 	case f.Deny:
 		return verdict + ": " + strings.Join(reasons, "; ") + "."
 	default:
-		return verdict + ": every condition of " + strings.Join(reasons, " and ") + " holds for it." + differs(f, fixtures)
+		return verdict + ": every condition of " + strings.Join(reasons, " and ") + " holds for it." + differs(f, fixtures, holding)
 	}
 }
 
 // opHint names the plain-text op that holds where the one the model chose does not, as a suffix
-// written for a path that starts with the value.
+// written for a path that starts with the value, and quotes the condition to write: a small model
+// copies a condition it is shown more readily than it follows advice.
 func opHint(c Condition, text string) string {
 	if c.Not || (c.Op != "equals" && c.Op != "prefix" && c.Op != "suffix") {
 		return ""
 	}
+	var where, op string
 	switch {
 	case c.Op != "prefix" && strings.HasPrefix(text, c.Value):
-		return ", which starts with the value: use prefix"
+		where, op = "starts with", "prefix"
 	case c.Op != "suffix" && strings.HasSuffix(text, c.Value):
-		return ", which ends with the value: use suffix"
+		where, op = "ends with", "suffix"
 	case strings.Contains(text, c.Value):
-		return ", which contains the value: use contains"
+		where, op = "contains", "contains"
+	default:
+		return ""
 	}
-	return ""
+	return ", which " + where + " the value: write " + jsonText(Condition{Field: c.Field, Op: op, Value: c.Value}) + " instead"
 }
 
-// differs names the fields in which an edit to allow differs from the closest edit to deny: a rule
-// that tells them apart needs a condition on one of them.
-func differs(f Fixture, fixtures []Fixture) string {
+// differs names the fields in which an edit to allow differs from the closest edit to deny: each
+// rule that holds for both needs a condition on one of them.
+func differs(f Fixture, fixtures []Fixture, rules []string) string {
 	closest, fields := 0, []string(nil)
 	for i, d := range fixtures {
 		if !d.Deny {
@@ -423,7 +428,8 @@ func differs(f Fixture, fixtures []Fixture) string {
 	if fields == nil {
 		return ""
 	}
-	return fmt.Sprintf(" It differs from edit %d, which must be denied, only in its %s.", closest, strings.Join(fields, " and "))
+	return fmt.Sprintf(" It differs from edit %d, which must be denied, only in its %s: add a condition on one of them to %s.",
+		closest, strings.Join(fields, " and "), strings.Join(rules, " and "))
 }
 
 // patternHint flags a plain-text value written as a pattern, the most common reason a condition

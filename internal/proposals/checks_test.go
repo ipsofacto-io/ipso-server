@@ -153,7 +153,7 @@ func TestRepairNamesTheConditionsThatDecide(t *testing.T) {
 		{
 			name: "op that holds",
 			spec: RuleSpec{Rules: []Rule{{Message: "m", When: []Condition{{Field: "path", Op: "suffix", Value: "service/"}}}}},
-			want: `in rule 1, {"field":"path","op":"suffix","value":"service/"} (the path is "service/.env", which starts with the value: use prefix) does not hold.`,
+			want: `in rule 1, {"field":"path","op":"suffix","value":"service/"} (the path is "service/.env", which starts with the value: write {"field":"path","op":"prefix","value":"service/"} instead) does not hold.`,
 		},
 		{
 			name: "edit to allow",
@@ -161,7 +161,7 @@ func TestRepairNamesTheConditionsThatDecide(t *testing.T) {
 				{Message: "m", When: []Condition{{Field: "path", Op: "suffix", Value: ".env"}}},
 				{Message: "m", When: []Condition{{Field: "path", Op: "suffix", Value: ".env", Not: true}}},
 			}},
-			want: `edit 2 must be allowed, and the rule denies it: every condition of rule 2 ({"field":"path","op":"suffix","value":".env","not":true}) holds for it. It differs from edit 1, which must be denied, only in its path and content and added.`,
+			want: `edit 2 must be allowed, and the rule denies it: every condition of rule 2 ({"field":"path","op":"suffix","value":".env","not":true}) holds for it. It differs from edit 1, which must be denied, only in its path and content and added: add a condition on one of them to rule 2.`,
 		},
 	} {
 		rule, err := rulecheck.Compile([]byte(render(tc.spec)))
