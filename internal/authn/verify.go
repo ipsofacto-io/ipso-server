@@ -1,4 +1,7 @@
-package mcpremote
+// Package authn checks the bearer tokens the control plane accepts: signed JWTs from one
+// authorization server for one resource (RFC 8707). Which tenant and principal a token speaks for is
+// the login work's to decide (IPSO-65), so nothing here reads a tenant.
+package authn
 
 import (
 	"context"
@@ -8,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -43,49 +45,70 @@ type JWTVerifier struct {
 	fetched time.Time
 }
 
-type authServerMetadata struct {
-	Issuer                string   `json:"issuer"`
-	JWKSURI               string   `json:"jwks_uri"`
-	CodeChallengeMethods  []string `json:"code_challenge_methods_supported"`
-	ClientIDMetadataDocOK bool     `json:"client_id_metadata_document_supported"`
+// Claims is what a verified token says.
+type Claims struct {
+	Subject  string
+	ClientID string
+	Scopes   []string
 }
 
-// Discover reads the authorization server's metadata (RFC 8414) and its keys, and refuses a server
-// MCP clients could not use: it must offer PKCE with S256 and Client ID Metadata Documents, which
-// are that server's job. The issuer and its key URL must be https. audience is the canonical URL of
+// Verifier checks a bearer token. JWTVerifier is the implementation.
+type Verifier interface {
+	Verify(ctx context.Context, raw string) (Claims, error)
+}
+
+// Metadata is what the authorization server says it offers clients. A resource server that needs
+// more of it than a signed token, as remote MCP does, checks it after Discover.
+type Metadata struct {
+	CodeChallengeMethods      []string `json:"code_challenge_methods_supported"`
+	ClientIDMetadataDocuments bool     `json:"client_id_metadata_document_supported"`
+}
+
+type authServerMetadata struct {
+	Metadata
+	Issuer  string `json:"issuer"`
+	JWKSURI string `json:"jwks_uri"`
+}
+
+// Discover reads the authorization server's metadata (RFC 8414) and its keys. The issuer and its key
+// URL must be https, and the metadata must name the issuer exactly. audience is the canonical URL of
 // this resource (RFC 8707), and a token for anything else is refused.
-func Discover(ctx context.Context, client *http.Client, issuer, audience string) (*JWTVerifier, error) {
+func Discover(ctx context.Context, client *http.Client, issuer, audience string) (*JWTVerifier, Metadata, error) {
 	if client == nil {
-		return nil, errors.New("an HTTP client is required")
+		return nil, Metadata{}, errors.New("an HTTP client is required")
 	}
 	noRedirects := *client
 	noRedirects.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	if err := requireHTTPS("issuer", issuer); err != nil {
-		return nil, err
+		return nil, Metadata{}, err
 	}
 	meta, err := fetchMetadata(ctx, &noRedirects, issuer)
 	if err != nil {
-		return nil, err
+		return nil, Metadata{}, err
 	}
 	if meta.Issuer != issuer {
-		return nil, fmt.Errorf("the metadata names the issuer %q, want %q", meta.Issuer, issuer)
-	}
-	if !slices.Contains(meta.CodeChallengeMethods, "S256") {
-		return nil, errors.New("the authorization server does not offer PKCE with S256")
-	}
-	if !meta.ClientIDMetadataDocOK {
-		return nil, errors.New("the authorization server does not support Client ID Metadata Documents")
+		return nil, Metadata{}, fmt.Errorf("the metadata names the issuer %q, want %q", meta.Issuer, issuer)
 	}
 	if err := requireHTTPS("jwks_uri", meta.JWKSURI); err != nil {
-		return nil, err
+		return nil, Metadata{}, err
 	}
 	verifier := &JWTVerifier{issuer: issuer, audience: audience, jwksURI: meta.JWKSURI, client: &noRedirects}
 	keys, err := verifier.fetchKeys(ctx)
 	if err != nil {
-		return nil, err
+		return nil, Metadata{}, err
 	}
 	verifier.keys, verifier.fetched = keys, time.Now()
-	return verifier, nil
+	return verifier, meta.Metadata, nil
+}
+
+// Bearer returns the token of an Authorization header that uses the Bearer scheme. The header is the
+// only place a token is read from, so a token cannot end up in a URL or a log.
+func Bearer(header string) (string, bool) {
+	scheme, token, found := strings.Cut(header, " ")
+	if !found || !strings.EqualFold(scheme, "Bearer") || token == "" {
+		return "", false
+	}
+	return token, true
 }
 
 func requireHTTPS(name, value string) error {

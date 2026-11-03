@@ -1,0 +1,119 @@
+package api
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"log/slog"
+	"math"
+	"net/http"
+	"net/url"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+
+	"github.com/google/uuid"
+
+	"github.com/ipsofacto-io/ipso-server/internal/authn"
+	"github.com/ipsofacto-io/ipso-server/internal/identity"
+)
+
+// maxLoggedSubject bounds the request a log entry records.
+const maxLoggedSubject = 200
+
+// guard runs before every route, in the order that reveals least: who sent the request, whether
+// that tenant has calls left, whether the query is one the route reads, and whether the principal
+// exists there. The body is not read for a caller who has not proved anything.
+type guard struct {
+	db       *sql.DB
+	verifier authn.Verifier
+	callers  CallerFunc
+	limiter  *tenantLimiter
+	maxBody  int64
+	now      func() time.Time
+	log      *slog.Logger
+}
+
+func (g *guard) wrap(op string, keys []string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, ok := authn.Bearer(r.Header.Get("Authorization"))
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="ipso"`)
+			writeError(w, http.StatusUnauthorized, errUnauthorized)
+			return
+		}
+		claims, err := g.verifier.Verify(r.Context(), token)
+		if err != nil {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="ipso", error="invalid_token"`)
+			writeError(w, http.StatusUnauthorized, errUnauthorized)
+			return
+		}
+		caller, ok := g.callers(r.Context(), claims)
+		if !ok || caller.Tenant == uuid.Nil || caller.Principal == uuid.Nil {
+			writeError(w, http.StatusForbidden, errForbidden)
+			return
+		}
+		if wait, ok := g.limiter.allow(caller.Tenant, g.now()); !ok {
+			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
+			writeError(w, http.StatusTooManyRequests, errRateLimited)
+			return
+		}
+		if !plainQuery(r.URL.RawQuery, keys) {
+			writeError(w, http.StatusBadRequest, errInvalidQuery)
+			return
+		}
+		principal, err := identity.Get(r.Context(), g.db, caller.Tenant, caller.Principal)
+		if errors.Is(err, identity.ErrUnknownPrincipal) {
+			writeError(w, http.StatusForbidden, errForbidden)
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errInternal)
+			return
+		}
+		// An agent's call is logged before it runs, and the log names its sponsor (ADR-0076). A call
+		// that cannot be logged does not run.
+		if principal.Kind == identity.KindAgent && op != "" {
+			if _, err := identity.RecordAction(r.Context(), g.db, caller.Tenant, caller.Principal, "api."+op, loggedSubject(r)); err != nil {
+				g.log.Warn("an agent call could not be logged, so it did not run", "tenant", caller.Tenant, "op", op)
+				writeError(w, http.StatusInternalServerError, errInternal)
+				return
+			}
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, g.maxBody)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, caller)))
+	})
+}
+
+// plainQuery holds for a query the route reads as sent: it parses, no key repeats, so a second value
+// cannot hide behind the first, and every key is one of the route's, so a misspelt time or limit
+// cannot fall back to its default unnoticed. No route reads a tenant key, since the tenant is the
+// token's.
+func plainQuery(raw string, keys []string) bool {
+	values, err := url.ParseQuery(raw)
+	if err != nil {
+		return false
+	}
+	for key, list := range values {
+		if len(list) != 1 || !slices.Contains(keys, key) {
+			return false
+		}
+	}
+	return true
+}
+
+// loggedSubject is the request target as one bounded line. A body is never logged.
+func loggedSubject(r *http.Request) string {
+	cleaned := strings.Map(func(c rune) rune {
+		if unicode.IsControl(c) {
+			return ' '
+		}
+		return c
+	}, r.URL.RequestURI())
+	if runes := []rune(cleaned); len(runes) > maxLoggedSubject {
+		return string(runes[:maxLoggedSubject])
+	}
+	return cleaned
+}

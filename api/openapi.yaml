@@ -1,0 +1,973 @@
+openapi: 3.1.0
+info:
+  title: ipso control plane API
+  version: 0.1.0
+  summary: Read the decision registry, the review queues, and the audit answers of one tenant.
+  description: >-
+    Every route reads, and none writes before authorization exists (IPSO-66). The tenant is always the one
+    the bearer token speaks for, so no route takes a tenant, and a query key `tenant` or `tenant_id` is 400.
+    A repeated query key, and a query key the operation does not list, are 400. Times are RFC 3339. Lists
+    page by id from the highest: pass the last `id` of a page as `before` to read the next one. An answer
+    over the response cap is refused whole with 500 `response too large` and never sent cut short. See
+    ADR-0090 in ipso-spec.
+  license:
+    name: FSL-1.1-ALv2
+    url: https://github.com/ipsofacto-io/ipso-server/blob/main/LICENSE
+security:
+  - bearerAuth: []
+tags:
+  - name: registry
+    description: Decisions, scopes, and waivers, as they were in force and as they were known.
+  - name: review
+    description: Proposals that wait for a person.
+  - name: audit
+    description: The five audit questions of section 2.3 (ADR-0055).
+paths:
+  /v1/resolve:
+    post:
+      operationId: resolve
+      tags: [registry]
+      summary: Resolve the decisions in force for each changed path of a check.
+      description: >-
+        A check request names the repo, the env, and every changed path, and gets one resolution for each
+        path (ADR-0051). An omitted field would match every scope and widen the answer, so all three are
+        required. Every path is read in one transaction. This route reads only. It is POST because a list of
+        paths does not fit a URL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveRequest'
+      responses:
+        '200':
+          description: One resolution for each path, in the order sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveAnswer'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/decisions:
+    get:
+      operationId: list_decisions
+      tags: [registry]
+      summary: List the decisions in force, each at its highest version.
+      parameters:
+        - $ref: '#/components/parameters/Valid'
+        - $ref: '#/components/parameters/Known'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of decisions, by id from the highest.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionPage'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/decisions/{ref}:
+    get:
+      operationId: get_decision
+      tags: [registry]
+      summary: Read the decisions an id or a slug names.
+      description: A slug can name more than one decision. An id or slug that names nothing in this tenant is an empty list.
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          description: A decision id or slug.
+          schema:
+            type: string
+            minLength: 1
+        - $ref: '#/components/parameters/Valid'
+        - $ref: '#/components/parameters/Known'
+      responses:
+        '200':
+          description: The decisions the ref names.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionPage'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/scopes:
+    get:
+      operationId: list_scopes
+      tags: [registry]
+      summary: List the scope tree as it was known.
+      parameters:
+        - $ref: '#/components/parameters/Known'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of scopes, by id from the highest.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScopePage'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/waivers:
+    get:
+      operationId: list_waivers
+      tags: [registry]
+      summary: List the waivers whose period covers the valid time.
+      description: A waiver's reason and approver are not returned (ADR-0054, ADR-0055).
+      parameters:
+        - $ref: '#/components/parameters/Valid'
+        - $ref: '#/components/parameters/Known'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of waivers, by id from the highest.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WaiverPage'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/proposals:
+    get:
+      operationId: list_proposals
+      tags: [review]
+      summary: List the decisions proposed from merged pull requests (ADR-0062).
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of pending proposals, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [proposals]
+                properties:
+                  proposals:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Proposal'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/agent-proposals:
+    get:
+      operationId: list_agent_proposals
+      tags: [review]
+      summary: List the decisions AI coding agents proposed over MCP (ADR-0077).
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of pending agent proposals, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [agent_proposals]
+                properties:
+                  agent_proposals:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AgentProposal'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/check-proposals:
+    get:
+      operationId: list_check_proposals
+      tags: [review]
+      summary: List the drafted agent-edit checks that passed every fixture (ADR-0086).
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of pending check proposals, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [check_proposals]
+                properties:
+                  check_proposals:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CheckProposal'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/audit/decisions:
+    get:
+      operationId: audit_decisions
+      tags: [audit]
+      summary: Q1, the decisions that applied to a subject at a valid time, as known at a transaction time.
+      parameters:
+        - $ref: '#/components/parameters/Repo'
+        - $ref: '#/components/parameters/Path'
+        - $ref: '#/components/parameters/Env'
+        - $ref: '#/components/parameters/RequiredValid'
+        - $ref: '#/components/parameters/RequiredKnown'
+      responses:
+        '200':
+          description: The decisions in force.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditDecisions'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/audit/beliefs:
+    get:
+      operationId: audit_beliefs
+      tags: [audit]
+      summary: Q2, how what the registry believed for a subject changed between two transaction times.
+      parameters:
+        - $ref: '#/components/parameters/Repo'
+        - $ref: '#/components/parameters/Path'
+        - $ref: '#/components/parameters/Env'
+        - $ref: '#/components/parameters/RequiredValid'
+        - name: then
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: now
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: The decisions added, removed, and changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditBeliefs'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/audit/merges:
+    get:
+      operationId: audit_merges
+      tags: [audit]
+      summary: Q3, the decisions that applied when a change merged.
+      parameters:
+        - $ref: '#/components/parameters/Repo'
+        - $ref: '#/components/parameters/Path'
+        - $ref: '#/components/parameters/Env'
+        - name: at
+          in: query
+          required: true
+          description: When the change merged. It is also the transaction time unless known is given.
+          schema:
+            type: string
+            format: date-time
+        - name: known
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: The decisions in force at the merge.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditDecisions'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/audit/supersessions/{decisionID}:
+    get:
+      operationId: audit_supersessions
+      tags: [audit]
+      summary: Q4, the supersession chain through a decision.
+      parameters:
+        - name: decisionID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/RequiredKnown'
+      responses:
+        '200':
+          description: The links of the chain and the versions of its decisions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditChain'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/audit/waivers:
+    get:
+      operationId: audit_waivers
+      tags: [audit]
+      summary: Q5, the waivers that expire within 14 days.
+      parameters:
+        - $ref: '#/components/parameters/RequiredKnown'
+        - name: now
+          in: query
+          required: true
+          description: The clock the 14-day window starts from.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: The waivers that expire soon, the soonest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditWaivers'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        A signed JWT from the configured issuer for this API's audience. It is read from the Authorization
+        header only. Which tenant and principal it speaks for is set by the login of IPSO-65.
+  parameters:
+    Valid:
+      name: valid
+      in: query
+      required: false
+      description: The valid time. Absent means now, and the answer echoes the time used.
+      schema:
+        type: string
+        format: date-time
+    Known:
+      name: known
+      in: query
+      required: false
+      description: The transaction time. Absent means now, and the answer echoes the time used.
+      schema:
+        type: string
+        format: date-time
+    RequiredValid:
+      name: valid
+      in: query
+      required: true
+      schema:
+        type: string
+        format: date-time
+    RequiredKnown:
+      name: known
+      in: query
+      required: true
+      schema:
+        type: string
+        format: date-time
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    Before:
+      name: before
+      in: query
+      required: false
+      description: The last id of the previous page.
+      schema:
+        type: string
+        format: uuid
+    Repo:
+      name: repo
+      in: query
+      required: true
+      description: A lowercase owner/name.
+      schema:
+        type: string
+        minLength: 1
+    Path:
+      name: path
+      in: query
+      required: false
+      description: A path relative to the repository root. Absent matches every path scope, which widens the answer.
+      schema:
+        type: string
+        maxLength: 4096
+    Env:
+      name: env
+      in: query
+      required: false
+      description: An environment. Absent matches every env scope, which widens the answer.
+      schema:
+        type: string
+  responses:
+    InvalidQuery:
+      description: The query, the path, or the body is not usable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: No bearer token, or one that does not verify.
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: The token speaks for no principal of a tenant here.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TooLarge:
+      description: The request body is over the cap.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnsupportedMediaType:
+      description: The request body is not application/json.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RateLimited:
+      description: This tenant has no calls left for now.
+      headers:
+        Retry-After:
+          description: Seconds until a call would be allowed.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Internal:
+      description: The answer could not be read, or it was over the response cap and was refused whole.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Timeout:
+      description: The request ran past its deadline.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum:
+            - invalid query
+            - unauthorized
+            - forbidden
+            - not found
+            - too large
+            - unsupported media type
+            - rate limited
+            - timeout
+            - response too large
+            - internal
+    Decision:
+      type: object
+      additionalProperties: false
+      required: [id, version, body]
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        body:
+          type: object
+          description: The decision record as stored.
+    ResolveRequest:
+      type: object
+      additionalProperties: false
+      required: [repo, env, paths]
+      properties:
+        repo:
+          type: string
+          minLength: 1
+          description: A lowercase owner/name.
+        env:
+          type: string
+          minLength: 1
+        paths:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            type: string
+            minLength: 1
+            maxLength: 4096
+        valid:
+          type: string
+          format: date-time
+          description: The valid time. Absent means now.
+        known:
+          type: string
+          format: date-time
+          description: The transaction time. Absent means now.
+    ResolveAnswer:
+      type: object
+      additionalProperties: false
+      required: [valid, known, resolutions]
+      properties:
+        valid:
+          type: string
+          format: date-time
+        known:
+          type: string
+          format: date-time
+        resolutions:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [path, decisions]
+            properties:
+              path:
+                type: string
+              decisions:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Decision'
+    DecisionPage:
+      type: object
+      additionalProperties: false
+      required: [valid, known, decisions]
+      properties:
+        valid:
+          type: string
+          format: date-time
+        known:
+          type: string
+          format: date-time
+        decisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Decision'
+    Scope:
+      type: object
+      additionalProperties: false
+      required: [id, parent_id, kind, selector]
+      properties:
+        id:
+          type: string
+          format: uuid
+        parent_id:
+          type: [string, 'null']
+          format: uuid
+          description: Null for an org.
+        kind:
+          type: string
+          enum: [org, domain, service, repo, path, env]
+        selector:
+          type: string
+    ScopePage:
+      type: object
+      additionalProperties: false
+      required: [known, scopes]
+      properties:
+        known:
+          type: string
+          format: date-time
+        scopes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Scope'
+    Waiver:
+      type: object
+      additionalProperties: false
+      required: [id, decision_id, scope_id, ticket_ref, valid_from, expires_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        decision_id:
+          type: string
+          format: uuid
+        scope_id:
+          type: string
+          format: uuid
+        ticket_ref:
+          type: string
+        valid_from:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+    WaiverPage:
+      type: object
+      additionalProperties: false
+      required: [valid, known, waivers]
+      properties:
+        valid:
+          type: string
+          format: date-time
+        known:
+          type: string
+          format: date-time
+        waivers:
+          type: array
+          items:
+            $ref: '#/components/schemas/Waiver'
+    Proposal:
+      type: object
+      additionalProperties: false
+      required: [id, kind, origin, status, trust_level, payload, confidence, model_id, prompt_version, repo, pr_number, source_url, captured_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [decision]
+        origin:
+          type: string
+          enum: [llm]
+        status:
+          type: string
+          enum: [pending]
+        trust_level:
+          type: string
+          enum: [untrusted]
+        payload:
+          type: object
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        model_id:
+          type: string
+        prompt_version:
+          type: string
+        repo:
+          type: string
+        pr_number:
+          type: integer
+          minimum: 1
+        source_url:
+          type: string
+          format: uri
+        captured_at:
+          type: string
+          format: date-time
+    AgentProposal:
+      type: object
+      additionalProperties: false
+      required: [id, principal_id, status, payload, captured_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        principal_id:
+          type: string
+          format: uuid
+          description: The agent that proposed it. Its human sponsor is in the identity store.
+        status:
+          type: string
+          enum: [pending]
+        payload:
+          type: object
+        captured_at:
+          type: string
+          format: date-time
+    CheckProposal:
+      type: object
+      additionalProperties: false
+      required: [id, status, decision_id, decision_version, engine, target, spec, rego, fixtures, repaired, model_id, prompt_version, captured_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending]
+        decision_id:
+          type: string
+          format: uuid
+        decision_version:
+          type: integer
+          minimum: 1
+        engine:
+          type: string
+          enum: [opa]
+        target:
+          type: string
+          enum: [agent-edit]
+        spec:
+          type: object
+        rego:
+          type: string
+        fixtures:
+          type: array
+        repaired:
+          type: boolean
+        model_id:
+          type: string
+        prompt_version:
+          type: string
+        captured_at:
+          type: string
+          format: date-time
+    AuditDecisions:
+      type: object
+      additionalProperties: false
+      required: [decisions]
+      properties:
+        decisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Decision'
+    AuditBeliefs:
+      type: object
+      additionalProperties: false
+      required: [added, removed, changed]
+      properties:
+        added:
+          type: array
+          items:
+            $ref: '#/components/schemas/Decision'
+        removed:
+          type: array
+          items:
+            $ref: '#/components/schemas/Decision'
+        changed:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, then, now]
+            properties:
+              id:
+                type: string
+                format: uuid
+              then:
+                $ref: '#/components/schemas/Decision'
+              now:
+                $ref: '#/components/schemas/Decision'
+    AuditChain:
+      type: object
+      additionalProperties: false
+      required: [links, versions]
+      properties:
+        links:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, from, to, effective_at]
+            properties:
+              id:
+                type: string
+                format: uuid
+              from:
+                type: string
+                format: uuid
+              to:
+                type: string
+                format: uuid
+              effective_at:
+                type: string
+                format: date-time
+        versions:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [decision_id, version, valid_from, valid_to]
+            properties:
+              decision_id:
+                type: string
+                format: uuid
+              version:
+                type: integer
+                minimum: 1
+              valid_from:
+                type: string
+                format: date-time
+              valid_to:
+                type: [string, 'null']
+                format: date-time
+    AuditWaivers:
+      type: object
+      additionalProperties: false
+      required: [waivers]
+      properties:
+        waivers:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, decision_id, scope_id, ticket_ref, expires_at]
+            properties:
+              id:
+                type: string
+                format: uuid
+              decision_id:
+                type: string
+                format: uuid
+              scope_id:
+                type: string
+                format: uuid
+              ticket_ref:
+                type: string
+              expires_at:
+                type: string
+                format: date-time

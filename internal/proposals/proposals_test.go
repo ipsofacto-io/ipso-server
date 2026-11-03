@@ -319,11 +319,14 @@ func TestInboxRefusesWithoutARealTenant(t *testing.T) {
 		tenant TenantFunc
 		want   int
 	}{
-		"nil func":       {"/v1/proposals", nil, http.StatusUnauthorized},
-		"no tenant":      {"/v1/proposals", func(*http.Request) (uuid.UUID, bool) { return uuid.Nil, false }, http.StatusUnauthorized},
-		"nil tenant":     {"/v1/proposals", func(*http.Request) (uuid.UUID, bool) { return uuid.Nil, true }, http.StatusUnauthorized},
-		"smuggled key":   {"/v1/proposals?tenant_id=x", func(*http.Request) (uuid.UUID, bool) { return uuid.Nil, true }, http.StatusBadRequest},
-		"smuggled upper": {"/v1/proposals?TENANT=x", func(*http.Request) (uuid.UUID, bool) { return uuid.Nil, true }, http.StatusBadRequest},
+		"nil func":             {"/v1/proposals", nil, http.StatusUnauthorized},
+		"no tenant":            {"/v1/proposals", func(*http.Request) (uuid.UUID, bool) { return uuid.Nil, false }, http.StatusUnauthorized},
+		"nil tenant":           {"/v1/proposals", func(*http.Request) (uuid.UUID, bool) { return uuid.Nil, true }, http.StatusUnauthorized},
+		"smuggled key":         {"/v1/proposals?tenant_id=x", func(*http.Request) (uuid.UUID, bool) { return uuid.Nil, true }, http.StatusBadRequest},
+		"smuggled upper":       {"/v1/proposals?TENANT=x", func(*http.Request) (uuid.UUID, bool) { return uuid.Nil, true }, http.StatusBadRequest},
+		"agents, nil func":     {"/v1/agent-proposals", nil, http.StatusUnauthorized},
+		"agents, nil tenant":   {"/v1/agent-proposals", func(*http.Request) (uuid.UUID, bool) { return uuid.Nil, true }, http.StatusUnauthorized},
+		"agents, smuggled key": {"/v1/agent-proposals?tenant=x", func(*http.Request) (uuid.UUID, bool) { return uuid.Nil, true }, http.StatusBadRequest},
 	} {
 		t.Run(name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()

@@ -107,6 +107,64 @@ func Resolve(ctx context.Context, db *sql.DB, tenant uuid.UUID, in Subject, vali
 	return decisions, err
 }
 
+// MaxResolvePaths bounds the paths of one check request. A larger change is sent in parts.
+const MaxResolvePaths = 500
+
+// Resolution is the answer for one path of a check request.
+type Resolution struct {
+	Path      string
+	Decisions []Decision
+}
+
+// ResolvePaths answers a check request: the decisions in force for each changed path of repo in
+// env, one resolution for each path, in the order given. repo, env, and every path are required,
+// because an omitted field matches every scope and widens the answer (ADR-0051). Every path is read
+// in one read-only REPEATABLE READ transaction, so a write while it runs cannot answer two paths
+// from two different registries.
+//
+// The tenant must be the authenticated one, because ResolvePaths trusts it.
+func ResolvePaths(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo, env string, paths []string, validAt, knownAt time.Time) ([]Resolution, error) {
+	if tenant == uuid.Nil {
+		return nil, fmt.Errorf("%w: no tenant", ErrInvalidQuery)
+	}
+	if validAt.IsZero() || knownAt.IsZero() {
+		return nil, fmt.Errorf("%w: the valid time and the transaction time are required", ErrInvalidQuery)
+	}
+	if repo == "" || env == "" {
+		return nil, fmt.Errorf("%w: a check request names the repo and the env", ErrInvalidSubject)
+	}
+	if len(paths) == 0 || len(paths) > MaxResolvePaths {
+		return nil, fmt.Errorf("%w: a check request names 1 to %d paths", ErrInvalidQuery, MaxResolvePaths)
+	}
+	subjects := make([]subject, 0, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			return nil, fmt.Errorf("%w: an empty path", ErrInvalidSubject)
+		}
+		s, err := newSubject(Subject{Repo: repo, Path: p, Env: env})
+		if err != nil {
+			return nil, err
+		}
+		subjects = append(subjects, s)
+	}
+
+	resolutions := make([]Resolution, 0, len(paths))
+	err := readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
+		for i, s := range subjects {
+			decisions, err := decisionsFor(ctx, tx, s, validAt, knownAt)
+			if err != nil {
+				return err
+			}
+			resolutions = append(resolutions, Resolution{Path: paths[i], Decisions: decisions})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resolutions, nil
+}
+
 // decisionsFor is the Q1 read inside a transaction that already has ipso.tenant set.
 // No match is a nil slice, which the caller tells from a failure by err alone.
 func decisionsFor(ctx context.Context, tx *sql.Tx, subject subject, validAt, knownAt time.Time) ([]Decision, error) {

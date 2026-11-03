@@ -20,6 +20,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ipsofacto-io/ipso/pkg/mcptools"
+
+	"github.com/ipsofacto-io/ipso-server/internal/authn"
 )
 
 // Scopes a token can hold. Reading and proposing are separate, so a client can ask for the least.
@@ -42,18 +44,6 @@ const (
 	codeUnsupportedVersion = -32022
 )
 
-// Claims is what a verified token says.
-type Claims struct {
-	Subject  string
-	ClientID string
-	Scopes   []string
-}
-
-// Verifier checks a bearer token. JWTVerifier is the implementation.
-type Verifier interface {
-	Verify(ctx context.Context, raw string) (Claims, error)
-}
-
 // Caller is who a verified token speaks for. A nil tenant or principal is refused.
 type Caller struct {
 	Tenant    uuid.UUID
@@ -62,7 +52,7 @@ type Caller struct {
 
 // CallerFunc maps verified claims to a caller. The mapping belongs to the login work (IPSO-65). The
 // tenant comes from here and never from the request. A false result is 403.
-type CallerFunc func(context.Context, Claims) (Caller, bool)
+type CallerFunc func(context.Context, authn.Claims) (Caller, bool)
 
 // BackendFunc returns the tools for one caller.
 type BackendFunc func(Caller) mcptools.Backend
@@ -79,13 +69,13 @@ type handler struct {
 	cfg         Config
 	resource    *url.URL
 	metadataURL string
-	verifier    Verifier
+	verifier    authn.Verifier
 	callers     CallerFunc
 	backends    BackendFunc
 }
 
 // NewHandler returns the MCP endpoint and its Protected Resource Metadata (RFC 9728).
-func NewHandler(cfg Config, verifier Verifier, callers CallerFunc, backends BackendFunc) (http.Handler, error) {
+func NewHandler(cfg Config, verifier authn.Verifier, callers CallerFunc, backends BackendFunc) (http.Handler, error) {
 	resource, err := url.Parse(cfg.ResourceURL)
 	if err != nil {
 		return nil, fmt.Errorf("the resource URL: %w", err)
@@ -250,18 +240,18 @@ func (h *handler) originAllowed(r *http.Request) bool {
 
 // authenticate answers 401 with where to get a token. The header form is the only one accepted, so a
 // token cannot end up in a URL or a log.
-func (h *handler) authenticate(w http.ResponseWriter, r *http.Request) (Claims, bool) {
-	scheme, token, found := strings.Cut(r.Header.Get("Authorization"), " ")
-	if !found || !strings.EqualFold(scheme, "Bearer") || token == "" {
+func (h *handler) authenticate(w http.ResponseWriter, r *http.Request) (authn.Claims, bool) {
+	token, ok := authn.Bearer(r.Header.Get("Authorization"))
+	if !ok {
 		w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata=%q, scope=%q`, h.metadataURL, ScopeRead))
 		writeFailure(w, http.StatusUnauthorized, "a bearer token is required")
-		return Claims{}, false
+		return authn.Claims{}, false
 	}
 	claims, err := h.verifier.Verify(r.Context(), token)
 	if err != nil {
 		w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer error="invalid_token", resource_metadata=%q`, h.metadataURL))
 		writeFailure(w, http.StatusUnauthorized, "the token is not valid")
-		return Claims{}, false
+		return authn.Claims{}, false
 	}
 	return claims, true
 }

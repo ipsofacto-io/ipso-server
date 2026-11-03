@@ -171,7 +171,8 @@ func tenantTx(ctx context.Context, db *sql.DB, tenant uuid.UUID, readOnly bool, 
 // TenantFunc returns the authenticated tenant. Handler reads no tenant from the request.
 type TenantFunc func(*http.Request) (uuid.UUID, bool)
 
-// Handler returns the review routes, GET /v1/proposals for decision proposals and
+// Handler returns the review routes, GET /v1/proposals for decision proposals,
+// GET /v1/agent-proposals for what AI coding agents proposed over MCP (ADR-0077), and
 // GET /v1/check-proposals for drafted checks. The binary does not serve them. The control plane
 // mounts them with the tenant from the token. A missing tenant is 401 and runs no query. A query
 // key tenant or tenant_id is 400 and runs no query. Another tenant's rows are never read.
@@ -188,6 +189,18 @@ func Handler(db *sql.DB, tenantFrom TenantFunc) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"proposals": items})
+	})
+	mux.HandleFunc("GET /v1/agent-proposals", func(w http.ResponseWriter, r *http.Request) {
+		tenant, before, limit, ok := readPage(w, r, tenantFrom)
+		if !ok {
+			return
+		}
+		items, err := agentInbox(r.Context(), db, tenant, before, limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"agent_proposals": items})
 	})
 	mux.HandleFunc("GET /v1/check-proposals", func(w http.ResponseWriter, r *http.Request) {
 		tenant, before, limit, ok := readPage(w, r, tenantFrom)
@@ -279,6 +292,46 @@ func inbox(ctx context.Context, db *sql.DB, tenant uuid.UUID, before any, limit 
 			var payload []byte
 			if err := rows.Scan(&item.ID, &item.Kind, &item.Origin, &item.Status, &item.TrustLevel, &payload, &item.Confidence,
 				&item.ModelID, &item.PromptVersion, &item.Repo, &item.Number, &item.SourceURL, &item.CapturedAt); err != nil {
+				return err
+			}
+			item.Payload = payload
+			items = append(items, item)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+type agentInboxItem struct {
+	ID          uuid.UUID       `json:"id"`
+	PrincipalID uuid.UUID       `json:"principal_id"`
+	Status      string          `json:"status"`
+	Payload     json.RawMessage `json:"payload"`
+	CapturedAt  time.Time       `json:"captured_at"`
+}
+
+// agentInbox reads what agents proposed. principal_id names the agent, and its sponsor is in
+// identity.principal.
+func agentInbox(ctx context.Context, db *sql.DB, tenant uuid.UUID, before any, limit int) ([]agentInboxItem, error) {
+	items := []agentInboxItem{}
+	err := tenantTx(ctx, db, tenant, true, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id, principal_id, status, payload, lower(sys_period)
+			FROM proposals.agent_proposal
+			WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id < $2::uuid)
+			ORDER BY id DESC
+			LIMIT $3`, tenant, before, limit)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var item agentInboxItem
+			var payload []byte
+			if err := rows.Scan(&item.ID, &item.PrincipalID, &item.Status, &payload, &item.CapturedAt); err != nil {
 				return err
 			}
 			item.Payload = payload

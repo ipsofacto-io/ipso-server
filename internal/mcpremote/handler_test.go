@@ -13,10 +13,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lestrrat-go/jwx/v3/jwa"
-	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jwt"
 
 	"github.com/ipsofacto-io/ipso/pkg/mcptools"
+
+	"github.com/ipsofacto-io/ipso-server/internal/authn"
+	"github.com/ipsofacto-io/ipso-server/internal/authn/authntest"
 )
 
 const (
@@ -54,18 +56,18 @@ func (r *recordingBackend) Propose(context.Context, mcptools.ProposeInput) (mcpt
 }
 
 type rig struct {
-	auth    *fakeAuthServer
+	auth    *authntest.Server
 	backend *recordingBackend
 	handler http.Handler
 }
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
-	auth := newFakeAuthServer(t)
+	auth := authntest.NewServer(t)
 	backend := &recordingBackend{}
-	handler, err := NewHandler(Config{ResourceURL: testResource, AuthorizationServers: []string{auth.server.URL}, Version: "test"},
-		auth.verifier(testResource),
-		func(_ context.Context, claims Claims) (Caller, bool) {
+	handler, err := NewHandler(Config{ResourceURL: testResource, AuthorizationServers: []string{auth.Server.URL}, Version: "test"},
+		verifierFor(t, auth, testResource),
+		func(_ context.Context, claims authn.Claims) (Caller, bool) {
 			if claims.Subject != "agent-1" {
 				return Caller{}, false
 			}
@@ -102,21 +104,21 @@ func toolCall(name string) (string, map[string]string) {
 
 func TestUnauthenticatedCallsAreRejected(t *testing.T) {
 	r := newRig(t)
-	good := r.auth.token(testResource, []string{ScopeRead})
-	other := newFakeAuthServer(t)
-	expired := r.auth.token(testResource, []string{ScopeRead}, func(b *jwt.Builder) *jwt.Builder {
+	good := r.auth.Token(testResource, []string{ScopeRead})
+	other := authntest.NewServer(t)
+	expired := r.auth.Token(testResource, []string{ScopeRead}, func(b *jwt.Builder) *jwt.Builder {
 		return b.Expiration(time.Now().Add(-time.Hour))
 	})
-	wrongIssuer := r.auth.token(testResource, []string{ScopeRead}, func(b *jwt.Builder) *jwt.Builder { return b.Issuer("https://elsewhere.test") })
+	wrongIssuer := r.auth.Token(testResource, []string{ScopeRead}, func(b *jwt.Builder) *jwt.Builder { return b.Issuer("https://elsewhere.test") })
 	for name, token := range map[string]string{
 		"no token":          "",
 		"garbage":           "not-a-token",
-		"another audience":  r.auth.token("https://other.example.test/mcp", []string{ScopeRead}),
-		"another signer":    other.token(testResource, []string{ScopeRead}),
+		"another audience":  r.auth.Token("https://other.example.test/mcp", []string{ScopeRead}),
+		"another signer":    other.Token(testResource, []string{ScopeRead}),
 		"expired":           expired,
 		"another issuer":    wrongIssuer,
-		"too large":         good + strings.Repeat("a", maxTokenBytes),
-		"an unsigned token": unsignedToken(t, r.auth.server.URL),
+		"too large":         good + strings.Repeat("a", 16<<10),
+		"an unsigned token": unsignedToken(t, r.auth.Server.URL),
 		"a token signed by a symmetric key made from the public key": symmetricToken(t, r),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -159,7 +161,7 @@ func unsignedToken(t *testing.T, issuer string) string {
 // symmetricToken tries the classic confusion: HS256 with the published key as the secret.
 func symmetricToken(t *testing.T, r *rig) string {
 	t.Helper()
-	public, err := r.auth.signing.PublicKey()
+	public, err := r.auth.Signing.PublicKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +169,7 @@ func symmetricToken(t *testing.T, r *rig) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := jwt.NewBuilder().Issuer(r.auth.server.URL).Audience([]string{testResource}).Subject("agent-1").Expiration(time.Now().Add(time.Hour)).Claim("scope", ScopeRead).Build()
+	token, err := jwt.NewBuilder().Issuer(r.auth.Server.URL).Audience([]string{testResource}).Subject("agent-1").Expiration(time.Now().Add(time.Hour)).Claim("scope", ScopeRead).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +182,7 @@ func symmetricToken(t *testing.T, r *rig) string {
 
 func TestAnAuthorizedClientCallsTheTools(t *testing.T) {
 	r := newRig(t)
-	token := r.auth.token(testResource, []string{ScopeRead, ScopePropose})
+	token := r.auth.Token(testResource, []string{ScopeRead, ScopePropose})
 
 	body, headers := toolCall(mcptools.ToolApplicable)
 	rec := r.post(token, body, headers)
@@ -215,7 +217,7 @@ func TestAnAuthorizedClientCallsTheTools(t *testing.T) {
 
 func TestScopesAreLeastPrivilege(t *testing.T) {
 	r := newRig(t)
-	read := r.auth.token(testResource, []string{ScopeRead})
+	read := r.auth.Token(testResource, []string{ScopeRead})
 	body, headers := toolCall(mcptools.ToolPropose)
 	rec := r.post(read, body, headers)
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Header().Get("WWW-Authenticate"), `error="insufficient_scope", scope="ipso.propose"`) {
@@ -224,12 +226,12 @@ func TestScopesAreLeastPrivilege(t *testing.T) {
 	if r.backend.proposed != 0 {
 		t.Fatal("a read token proposed")
 	}
-	none := r.auth.token(testResource, nil)
+	none := r.auth.Token(testResource, nil)
 	body, headers = toolCall(mcptools.ToolApplicable)
 	if rec = r.post(none, body, headers); rec.Code != http.StatusForbidden {
 		t.Fatalf("a token with no scope read: %d", rec.Code)
 	}
-	propose := r.auth.token(testResource, []string{ScopePropose})
+	propose := r.auth.Token(testResource, []string{ScopePropose})
 	if rec = r.post(propose, body, headers); rec.Code != http.StatusForbidden {
 		t.Fatalf("a propose token read: %d", rec.Code)
 	}
@@ -241,7 +243,7 @@ func TestScopesAreLeastPrivilege(t *testing.T) {
 
 func TestATenantInTheRequestChangesNothing(t *testing.T) {
 	r := newRig(t)
-	token := r.auth.token(testResource, []string{ScopeRead})
+	token := r.auth.Token(testResource, []string{ScopeRead})
 	body, headers := toolCall(mcptools.ToolApplicable)
 	headers["X-Tenant-Id"] = uuid.NewString()
 	if rec := r.post(token, body, headers); rec.Code != http.StatusOK {
@@ -254,7 +256,7 @@ func TestATenantInTheRequestChangesNothing(t *testing.T) {
 
 func TestATokenForNoPrincipalIsRefused(t *testing.T) {
 	r := newRig(t)
-	stranger := r.auth.token(testResource, []string{ScopeRead}, func(b *jwt.Builder) *jwt.Builder { return b.Subject("nobody") })
+	stranger := r.auth.Token(testResource, []string{ScopeRead}, func(b *jwt.Builder) *jwt.Builder { return b.Subject("nobody") })
 	body, headers := toolCall(mcptools.ToolApplicable)
 	if rec := r.post(stranger, body, headers); rec.Code != http.StatusForbidden {
 		t.Fatalf("status %d", rec.Code)
@@ -263,7 +265,7 @@ func TestATokenForNoPrincipalIsRefused(t *testing.T) {
 
 func TestTransportRules(t *testing.T) {
 	r := newRig(t)
-	token := r.auth.token(testResource, []string{ScopeRead, ScopePropose})
+	token := r.auth.Token(testResource, []string{ScopeRead, ScopePropose})
 	body, good := toolCall(mcptools.ToolApplicable)
 	with := func(name, value string) map[string]string {
 		headers := map[string]string{}
@@ -330,7 +332,7 @@ func TestTransportRules(t *testing.T) {
 
 func TestStatelessFailuresCarryTheirHTTPStatus(t *testing.T) {
 	r := newRig(t)
-	token := r.auth.token(testResource, []string{ScopeRead})
+	token := r.auth.Token(testResource, []string{ScopeRead})
 	latest := map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list"}
 	for name, tc := range map[string]struct {
 		body    string
@@ -370,7 +372,7 @@ func TestStatelessFailuresCarryTheirHTTPStatus(t *testing.T) {
 
 func TestUnsupportedVersionNamesWhatIsSupported(t *testing.T) {
 	r := newRig(t)
-	token := r.auth.token(testResource, []string{ScopeRead})
+	token := r.auth.Token(testResource, []string{ScopeRead})
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01","io.modelcontextprotocol/clientCapabilities":{}}}}`
 	rec := r.post(token, body, map[string]string{"MCP-Protocol-Version": "2099-01-01", "Mcp-Method": "tools/list"})
 	if rec.Code != http.StatusBadRequest {
@@ -395,7 +397,7 @@ func TestUnsupportedVersionNamesWhatIsSupported(t *testing.T) {
 
 func TestDNSRebindingIsRefused(t *testing.T) {
 	r := newRig(t)
-	token := r.auth.token(testResource, []string{ScopeRead})
+	token := r.auth.Token(testResource, []string{ScopeRead})
 	body, headers := toolCall(mcptools.ToolApplicable)
 	req := httptest.NewRequest(http.MethodPost, testResource, strings.NewReader(body))
 	req.Host = "attacker.example"
@@ -432,91 +434,35 @@ func TestProtectedResourceMetadata(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
 		t.Fatal(err)
 	}
-	if doc.Resource != testResource || doc.Servers[0] != r.auth.server.URL || len(doc.Scopes) != 2 || doc.Bearer[0] != "header" {
+	if doc.Resource != testResource || doc.Servers[0] != r.auth.Server.URL || len(doc.Scopes) != 2 || doc.Bearer[0] != "header" {
 		t.Fatalf("%+v", doc)
 	}
 }
 
 func TestDiscoverRefusesAServerClientsCouldNotUse(t *testing.T) {
 	for name, tc := range map[string]struct {
-		change func(*fakeAuthServer)
+		change func(*authntest.Server)
 		want   string
 	}{
-		"no client id metadata": {func(a *fakeAuthServer) { delete(a.meta, "client_id_metadata_document_supported") }, "Client ID Metadata"},
-		"no pkce":               {func(a *fakeAuthServer) { a.meta["code_challenge_methods_supported"] = []string{"plain"} }, "S256"},
-		"another issuer":        {func(a *fakeAuthServer) { a.meta["issuer"] = "https://elsewhere.test" }, "names the issuer"},
-		"keys over http":        {func(a *fakeAuthServer) { a.meta["jwks_uri"] = "http://elsewhere.test/jwks" }, "jwks_uri"},
-		"no keys":               {func(a *fakeAuthServer) { a.keys = func() any { return map[string]any{"keys": []any{}} } }, "no keys"},
-		"a symmetric key": {func(a *fakeAuthServer) {
-			key, err := jwk.Import([]byte("a shared secret that anyone could read"))
-			if err != nil {
-				a.t.Fatal(err)
-			}
-			a.keys = func() any { return map[string]any{"keys": []any{key}} }
-		}, "symmetric"},
+		"no client id metadata": {func(a *authntest.Server) { delete(a.Meta, "client_id_metadata_document_supported") }, "Client ID Metadata"},
+		"no pkce":               {func(a *authntest.Server) { a.Meta["code_challenge_methods_supported"] = []string{"plain"} }, "S256"},
+		"another issuer":        {func(a *authntest.Server) { a.Meta["issuer"] = "https://elsewhere.test" }, "names the issuer"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			auth := newFakeAuthServer(t)
+			auth := authntest.NewServer(t)
 			tc.change(auth)
-			_, err := Discover(t.Context(), auth.server.Client(), auth.server.URL, testResource)
+			_, err := Discover(t.Context(), auth.Server.Client(), auth.Server.URL, testResource)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err %v", err)
 			}
 		})
 	}
-	if _, err := Discover(t.Context(), http.DefaultClient, "http://plain.example.test", testResource); err == nil || !strings.Contains(err.Error(), "https") {
-		t.Fatalf("err %v", err)
-	}
-	if _, err := Discover(t.Context(), nil, "https://x.test", testResource); err == nil {
-		t.Fatal("no client")
-	}
-}
-
-func TestVerifierPicksUpARotatedKeyOnlyWithinTheLimit(t *testing.T) {
-	auth := newFakeAuthServer(t)
-	verifier := auth.verifier(testResource)
-	calls := 0
-	rotated := newFakeAuthServer(t)
-	rotated.server.Close()
-	public, err := rotated.signing.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth.keys = func() any {
-		calls++
-		return map[string]any{"keys": []any{public}}
-	}
-	token := auth.token(testResource, []string{ScopeRead})
-	auth.signing = rotated.signing
-	newToken := auth.token(testResource, []string{ScopeRead})
-
-	if _, err := verifier.Verify(t.Context(), newToken); err == nil {
-		t.Fatal("a key this server has not read yet was accepted")
-	}
-	if calls != 0 {
-		t.Fatalf("a bad token made this server call out %d times", calls)
-	}
-	verifier.mu.Lock()
-	verifier.fetched = time.Now().Add(-2 * keyRefreshInterval)
-	verifier.mu.Unlock()
-	if _, err := verifier.Verify(t.Context(), newToken); err != nil {
-		t.Fatalf("a rotated key: %v", err)
-	}
-	if calls != 1 {
-		t.Fatalf("calls %d", calls)
-	}
-	if _, err := verifier.Verify(t.Context(), token); err == nil {
-		t.Fatal("the rotated-out key still works")
-	}
-	if calls != 1 {
-		t.Fatalf("a bad token inside the limit called out: %d", calls)
-	}
 }
 
 func TestNewHandlerRefusesABadConfig(t *testing.T) {
-	auth := newFakeAuthServer(t)
-	verifier := auth.verifier(testResource)
-	callers := func(context.Context, Claims) (Caller, bool) { return Caller{}, false }
+	auth := authntest.NewServer(t)
+	verifier := verifierFor(t, auth, testResource)
+	callers := func(context.Context, authn.Claims) (Caller, bool) { return Caller{}, false }
 	backends := func(Caller) mcptools.Backend { return nil }
 	for name, url := range map[string]string{
 		"plain http": "http://mcp.example.test/mcp",

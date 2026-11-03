@@ -265,3 +265,65 @@ func TestInboxPages(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentProposalsAppearInTheirInbox(t *testing.T) {
+	db := newDB(t)
+	agents := map[uuid.UUID]uuid.UUID{}
+	for _, tenant := range []uuid.UUID{tenantA, tenantB} {
+		var person, agent uuid.UUID
+		if err := db.QueryRowContext(t.Context(), `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'Ada') RETURNING id`, tenant).Scan(&person); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRowContext(t.Context(), `INSERT INTO identity.principal (tenant_id, kind, name, sponsor_id) VALUES ($1, 'agent', 'claude-code', $2) RETURNING id`, tenant, person).Scan(&agent); err != nil {
+			t.Fatal(err)
+		}
+		agents[tenant] = agent
+		for _, title := range []string{"Use Postgres", "Cache sessions in Redis"} {
+			if _, err := db.ExecContext(t.Context(), `INSERT INTO proposals.agent_proposal (tenant_id, principal_id, payload) VALUES ($1, $2, jsonb_build_object('title', $3::text))`, tenant, agent, title); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	read := func(query string) []struct {
+		ID          uuid.UUID       `json:"id"`
+		PrincipalID uuid.UUID       `json:"principal_id"`
+		Status      string          `json:"status"`
+		Payload     json.RawMessage `json:"payload"`
+	} {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		Handler(db, func(*http.Request) (uuid.UUID, bool) { return tenantA, true }).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/agent-proposals"+query, nil))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", recorder.Code, recorder.Body)
+		}
+		var answer struct {
+			AgentProposals []struct {
+				ID          uuid.UUID       `json:"id"`
+				PrincipalID uuid.UUID       `json:"principal_id"`
+				Status      string          `json:"status"`
+				Payload     json.RawMessage `json:"payload"`
+			} `json:"agent_proposals"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
+			t.Fatal(err)
+		}
+		return answer.AgentProposals
+	}
+	all := read("")
+	if len(all) != 2 {
+		t.Fatalf("%+v", all)
+	}
+	for _, item := range all {
+		if item.PrincipalID != agents[tenantA] || item.Status != "pending" {
+			t.Fatalf("%+v", item)
+		}
+	}
+	if !strings.Contains(string(all[0].Payload), "Cache sessions in Redis") {
+		t.Fatalf("newest first: %s", all[0].Payload)
+	}
+	rest := read("?limit=1&before=" + all[0].ID.String())
+	if len(rest) != 1 || rest[0].ID != all[1].ID {
+		t.Fatalf("second page %+v", rest)
+	}
+}
