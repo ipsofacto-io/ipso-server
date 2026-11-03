@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -82,7 +83,8 @@ func bounded(next http.Handler, limits Limits, log *slog.Logger) http.Handler {
 			answer.status = http.StatusOK
 		}
 		w.WriteHeader(answer.status)
-		_, _ = w.Write(answer.body.Bytes())
+		// The buffer is the JSON answer already encoded, with Content-Type application/json.
+		_, _ = io.Copy(w, bytes.NewReader(answer.body.Bytes()))
 	})
 	timed := http.TimeoutHandler(capped, limits.Timeout, errorJSON(errTimeout))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
