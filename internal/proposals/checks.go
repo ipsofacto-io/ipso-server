@@ -29,7 +29,6 @@ const (
 	maxToolRunes       = 50
 	maxDecisionRunes   = 4000
 	maxShownRunes      = 1000
-	maxPreviousRunes   = 3000
 	maxQuotedRunes     = 200
 	maxDrafts          = 3
 	// maxCheckTokens bounds a check answer, so a model that loops stops early: two candidates of a
@@ -163,7 +162,7 @@ func DraftCheck(ctx context.Context, complete CompleteFunc, req CheckRequest) (C
 			return Check{}, stats, ErrCheckFailed
 		}
 		stats.Repaired = true
-		prompt = repairPrompt(user, answer.Text, problems)
+		prompt = repairPrompt(user, problems)
 	}
 }
 
@@ -219,12 +218,14 @@ func (f Fixture) shown() string {
 	})
 }
 
-func repairPrompt(user, previous string, problems []string) string {
+// repairPrompt names what failed without the failed answer: a small model shown its answer tends to
+// write it again. Each problem quotes the conditions it is about.
+func repairPrompt(user string, problems []string) string {
 	if len(problems) > maxProblems {
 		problems = append(problems[:maxProblems], fmt.Sprintf("and %d more", len(problems)-maxProblems))
 	}
-	return user + "\nYour previous answer:\n" + truncate(previous, maxPreviousRunes) + "\n\nIt fails:\n- " + strings.Join(problems, "\n- ") +
-		"\n\nAnswer again with one JSON object. Write two new candidates that fix each failure, and do not repeat a candidate that failed."
+	return user + "\nA previous answer failed:\n- " + strings.Join(problems, "\n- ") +
+		"\n\nAnswer with one JSON object. Write two new candidates that avoid each failure."
 }
 
 // draft parses an answer and tries its first maxDrafts candidates in order: each is decoded,
@@ -232,10 +233,13 @@ func repairPrompt(user, previous string, problems []string) string {
 // that passes, or what failed for each, in words the model can act on.
 func draft(text string, fixtures []Fixture) (RuleSpec, []string) {
 	candidates, err := parseCandidates(text)
-	if err != nil {
+	if len(candidates) == 0 {
 		return RuleSpec{}, []string{err.Error()}
 	}
 	var problems []string
+	if err != nil {
+		problems = append(problems, err.Error())
+	}
 	if len(candidates) > maxDrafts {
 		problems = append(problems, fmt.Sprintf("only the first %d candidates are tried", maxDrafts))
 	}
@@ -347,7 +351,11 @@ func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture) string
 		case f.Deny && len(unmet) > 0:
 			reasons = append(reasons, fmt.Sprintf("in rule %d, %s does not hold", r+1, strings.Join(unmet, " and ")))
 		case !f.Deny && len(unmet) == 0:
-			reasons = append(reasons, fmt.Sprintf("rule %d", r+1))
+			conditions := make([]string, len(rule.When))
+			for c, cond := range rule.When {
+				conditions[c] = jsonText(cond)
+			}
+			reasons = append(reasons, fmt.Sprintf("rule %d (%s)", r+1, strings.Join(conditions, " and ")))
 		}
 	}
 	switch {
@@ -370,30 +378,88 @@ func patternHint(c Condition) string {
 	return " (" + c.Op + " compares plain text; for a pattern, use regex)"
 }
 
-// parseCandidates refuses anything but the one object the prompt asks for. Each candidate is
-// decoded on its own afterwards, so one bad candidate does not hide a good one.
+// parseCandidates reads the one object the prompt asks for, token by token. Each candidate is
+// decoded on its own afterwards, so one bad candidate does not hide a good one. An answer cut off,
+// as at its token bound, keeps the candidates it completed, with a note of where it stops; any
+// other break refuses the whole answer.
 func parseCandidates(text string) ([]json.RawMessage, error) {
 	if len(text) > maxOutputBytes {
 		return nil, errors.New("the answer is too large")
 	}
 	body := unfence(text)
-	decoder := json.NewDecoder(strings.NewReader(body))
-	decoder.DisallowUnknownFields()
-	// The model writes what tells the edits apart before the candidates, and only these are kept.
-	var answer struct {
-		Difference string            `json:"difference"`
-		Candidates []json.RawMessage `json:"candidates"`
-	}
-	if err := decoder.Decode(&answer); err != nil {
+	var candidates []json.RawMessage
+	err := readAnswer(json.NewDecoder(strings.NewReader(body)), &candidates)
+	switch {
+	case err == nil && len(candidates) == 0:
+		return nil, fmt.Errorf("the answer needs one to %d candidates", maxDrafts)
+	case err == nil:
+		return candidates, nil
+	case len(candidates) > 0 && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)):
+		return candidates, fmt.Errorf("the answer stops after candidate %d", len(candidates))
+	default:
 		return nil, fmt.Errorf("the answer is not one JSON object with the fields of the example (%s)", decodeProblem(body, err))
 	}
+}
+
+// readAnswer reads {"difference": ..., "candidates": [...]} and appends each whole candidate. The
+// model writes what tells the edits apart before the candidates, and only these are kept.
+func readAnswer(decoder *json.Decoder, candidates *[]json.RawMessage) error {
+	if err := delim(decoder, '{'); err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, _ := token.(string)
+		if seen[key] {
+			return fmt.Errorf("the field %q appears twice", key)
+		}
+		seen[key] = true
+		switch key {
+		case "difference":
+			var difference string
+			if err := decoder.Decode(&difference); err != nil {
+				return err
+			}
+		case "candidates":
+			if err := delim(decoder, '['); err != nil {
+				return err
+			}
+			for decoder.More() {
+				var raw json.RawMessage
+				if err := decoder.Decode(&raw); err != nil {
+					return err
+				}
+				*candidates = append(*candidates, raw)
+			}
+			if err := delim(decoder, ']'); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("json: unknown field %q", key)
+		}
+	}
+	if err := delim(decoder, '}'); err != nil {
+		return err
+	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return nil, errors.New("the answer holds more than one JSON value")
+		return errors.New("it holds more than one JSON value")
 	}
-	if len(answer.Candidates) == 0 {
-		return nil, fmt.Errorf("the answer needs one to %d candidates", maxDrafts)
+	return nil
+}
+
+func delim(decoder *json.Decoder, want json.Delim) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
 	}
-	return answer.Candidates, nil
+	if token != want {
+		return fmt.Errorf("expected %q", want.String())
+	}
+	return nil
 }
 
 // decodeProblem names what broke the JSON and, for a syntax error, the text that ends at it, so the
@@ -427,20 +493,24 @@ func (r Rule) validate() error {
 		return fmt.Errorf("its message needs one to %d characters", maxMessageRunes)
 	}
 	for i, c := range r.When {
+		// The condition is quoted, since the repair does not show the answer again.
+		at := fmt.Sprintf("condition %d %s", i+1, jsonText(c))
 		if !editFields[c.Field] {
-			return fmt.Errorf("condition %d: field must be tool, path, content, added, or command", i+1)
+			return fmt.Errorf("%s: field must be tool, path, content, added, or command", at)
 		}
 		if c.Value == "" || utf8.RuneCountInString(c.Value) > maxValueRunes {
-			return fmt.Errorf("condition %d: value needs one to %d characters", i+1, maxValueRunes)
+			return fmt.Errorf("%s: value needs one to %d characters", at, maxValueRunes)
 		}
 		switch c.Op {
 		case "equals", "prefix", "suffix", "contains", "glob":
 		case "regex":
 			if _, err := regexp.Compile(c.Value); err != nil {
-				return fmt.Errorf("condition %d: the regex does not compile", i+1)
+				return fmt.Errorf("%s: the regex does not compile", at)
 			}
+		case "not":
+			return fmt.Errorf(`%s: "not" is not an op; write equals, prefix, suffix, contains, glob, or regex, and add "not": true`, at)
 		default:
-			return fmt.Errorf("condition %d: op must be equals, prefix, suffix, contains, glob, or regex", i+1)
+			return fmt.Errorf("%s: op must be equals, prefix, suffix, contains, glob, or regex", at)
 		}
 	}
 	return nil

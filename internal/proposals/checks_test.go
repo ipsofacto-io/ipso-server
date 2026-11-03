@@ -96,9 +96,29 @@ func TestDraftCheckRepairsOnceWithWhatFailed(t *testing.T) {
 	if stats.Calls != 2 || !stats.Repaired || !check.Repaired {
 		t.Fatalf("check %+v stats %+v", check, stats)
 	}
+	// The repair quotes the conditions that failed, and does not show the failed answer again.
 	repair := llm.users[1]
-	if !strings.Contains(repair, "candidate 1: edit 1 must be denied") || !strings.Contains(repair, "candidate 1: edit 2 must be allowed") || !strings.Contains(repair, wrong) {
+	if !strings.Contains(repair, "candidate 1: edit 1 must be denied") || !strings.Contains(repair, "candidate 1: edit 2 must be allowed") ||
+		!strings.Contains(repair, `{"field":"path","op":"suffix","value":".go"}`) || strings.Contains(repair, wrong) {
 		t.Fatalf("repair prompt %q", repair)
+	}
+}
+
+// TestDraftCheckKeepsTheCandidatesBeforeACutOff shows an answer cut off at its token bound: the
+// candidates it completed are tried, and the repair says where it stops.
+func TestDraftCheckKeepsTheCandidatesBeforeACutOff(t *testing.T) {
+	cut := `,{"rules":[{"when":[{"field":"content","op":"regex","value":"aaaa`
+	llm := &scriptedLLM{answers: []string{strings.TrimSuffix(answer(envRule), "]}") + cut}}
+	check, stats, err := DraftCheck(t.Context(), llm.complete, checkRequest(envFixtures))
+	if err != nil || stats.Calls != 1 || check.Spec.Rules[0].When[0].Value != ".env" {
+		t.Fatalf("check %+v stats %+v err %v", check, stats, err)
+	}
+	llm = &scriptedLLM{answers: []string{strings.TrimSuffix(answer(wrongRule), "]}") + cut, answer(envRule)}}
+	if _, stats, err = DraftCheck(t.Context(), llm.complete, checkRequest(envFixtures)); err != nil || stats.Calls != 2 {
+		t.Fatalf("stats %+v err %v", stats, err)
+	}
+	if !strings.Contains(llm.users[1], "the answer stops after candidate 1") || !strings.Contains(llm.users[1], "candidate 1: edit 1 must be denied") {
+		t.Fatalf("repair prompt %q", llm.users[1])
 	}
 }
 
@@ -130,7 +150,7 @@ func TestRepairNamesTheConditionsThatDecide(t *testing.T) {
 				{Message: "m", When: []Condition{{Field: "path", Op: "suffix", Value: ".env"}}},
 				{Message: "m", When: []Condition{{Field: "path", Op: "suffix", Value: ".env", Not: true}}},
 			}},
-			want: `edit 2 must be allowed, and the rule denies it: every condition of rule 2 holds for it.`,
+			want: `edit 2 must be allowed, and the rule denies it: every condition of rule 2 ({"field":"path","op":"suffix","value":".env","not":true}) holds for it.`,
 		},
 	} {
 		rule, err := rulecheck.Compile([]byte(render(tc.spec)))
@@ -155,7 +175,9 @@ func TestDraftCheckGivesUpAfterOneRepair(t *testing.T) {
 		{"four candidates", answer(wrongRule, wrongRule, wrongRule, envRule), "only the first 3 candidates are tried"},
 		{"not a candidate", answer(`"rules"`), `candidate 1: it is not an object with "rules"`},
 		{"unknown field", answer(strings.Replace(envRule, `"message"`, `"allow":true,"message"`, 1)), `candidate 1: it is not an object with "rules" as in the example (json: unknown field "allow")`},
-		{"unknown op", answer(strings.Replace(envRule, `"suffix"`, `"endswith"`, 1)), "candidate 1: rule 1: condition 1: op must be"},
+		{"unknown op", answer(strings.Replace(envRule, `"suffix"`, `"endswith"`, 1)), `candidate 1: rule 1: condition 1 {"field":"path","op":"endswith","value":".env"}: op must be`},
+		{"not as an op", answer(strings.Replace(envRule, `"suffix"`, `"not"`, 1)), `"not" is not an op; write equals`},
+		{"cut off before a candidate", strings.TrimSuffix(answer(envRule), `{"rules":[{"when":[{"field":"path","op":"suffix","value":".env"}],"message":"Do not commit .env files."}]}]}`) + `{"rules":[`, "unexpected EOF"},
 		{"unknown field name", answer(strings.Replace(envRule, `"field":"path"`, `"field":"file"`, 1)), "field must be"},
 		{"bad regex", answer(strings.Replace(envRule, `"op":"suffix","value":".env"`, `"op":"regex","value":"(.env"`, 1)), "regex does not compile"},
 		{"no conditions", answer(`{"rules":[{"when":[],"message":"x"}]}`), "one to 5 conditions"},
