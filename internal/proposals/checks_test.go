@@ -80,6 +80,12 @@ func TestDraftCheckProposesTheFirstCandidateThatPasses(t *testing.T) {
 	if spec, _ := json.Marshal(check.Spec); string(spec) != envRule {
 		t.Fatalf("spec %s", spec)
 	}
+	// "not" as an op reads as contains with "not": true.
+	llm = &scriptedLLM{answers: []string{answer(`{"rules":[{"when":[{"field":"path","op":"not","value":"main.go"}],"message":"m"}]}`)}}
+	if check, _, err = DraftCheck(t.Context(), llm.complete, checkRequest(envFixtures)); err != nil ||
+		check.Spec.Rules[0].When[0] != (Condition{Field: "path", Op: "contains", Value: "main.go", Not: true}) {
+		t.Fatalf("not as an op: %+v %v", check.Spec, err)
+	}
 	llm = &scriptedLLM{answers: []string{answer(envRule, broad)}}
 	if check, _, err = DraftCheck(t.Context(), llm.complete, checkRequest(envFixtures)); err != nil || check.Spec.Rules[0].When[0].Op != "suffix" {
 		t.Fatalf("a later candidate replaced the first that passes: %+v %v", check.Spec, err)
@@ -145,12 +151,17 @@ func TestRepairNamesTheConditionsThatDecide(t *testing.T) {
 			want: `in rule 1, {"field":"path","op":"contains","value":"\\.env"} (contains compares plain text; for a pattern, use regex) (the path is "service/.env") does not hold.`,
 		},
 		{
+			name: "op that holds",
+			spec: RuleSpec{Rules: []Rule{{Message: "m", When: []Condition{{Field: "path", Op: "suffix", Value: "service/"}}}}},
+			want: `in rule 1, {"field":"path","op":"suffix","value":"service/"} (the path is "service/.env", which starts with the value: use prefix) does not hold.`,
+		},
+		{
 			name: "edit to allow",
 			spec: RuleSpec{Rules: []Rule{
 				{Message: "m", When: []Condition{{Field: "path", Op: "suffix", Value: ".env"}}},
 				{Message: "m", When: []Condition{{Field: "path", Op: "suffix", Value: ".env", Not: true}}},
 			}},
-			want: `edit 2 must be allowed, and the rule denies it: every condition of rule 2 ({"field":"path","op":"suffix","value":".env","not":true}) holds for it.`,
+			want: `edit 2 must be allowed, and the rule denies it: every condition of rule 2 ({"field":"path","op":"suffix","value":".env","not":true}) holds for it. It differs from edit 1, which must be denied, only in its path and content and added.`,
 		},
 	} {
 		rule, err := rulecheck.Compile([]byte(render(tc.spec)))
@@ -176,9 +187,10 @@ func TestDraftCheckGivesUpAfterOneRepair(t *testing.T) {
 		{"not a candidate", answer(`"rules"`), `candidate 1: it is not an object with "rules"`},
 		{"unknown field", answer(strings.Replace(envRule, `"message"`, `"allow":true,"message"`, 1)), `candidate 1: it is not an object with "rules" as in the example (json: unknown field "allow")`},
 		{"unknown op", answer(strings.Replace(envRule, `"suffix"`, `"endswith"`, 1)), `candidate 1: rule 1: condition 1 {"field":"path","op":"endswith","value":".env"}: op must be`},
-		{"not as an op", answer(strings.Replace(envRule, `"suffix"`, `"not"`, 1)), `"not" is not an op; write equals`},
+		{"not as an op and not", answer(strings.Replace(envRule, `"op":"suffix","value":".env"`, `"op":"not","value":".env","not":true`, 1)), `"not" is not an op; write equals`},
 		{"cut off before a candidate", strings.TrimSuffix(answer(envRule), `{"rules":[{"when":[{"field":"path","op":"suffix","value":".env"}],"message":"Do not commit .env files."}]}]}`) + `{"rules":[`, "unexpected EOF"},
 		{"unknown field name", answer(strings.Replace(envRule, `"field":"path"`, `"field":"file"`, 1)), "field must be"},
+		{"long value", answer(strings.Replace(envRule, `".env"`, `"`+strings.Repeat("a", 300)+`"`, 1)), `"value":"` + strings.Repeat("a", maxQuotedRunes) + `"}: value needs`},
 		{"bad regex", answer(strings.Replace(envRule, `"op":"suffix","value":".env"`, `"op":"regex","value":"(.env"`, 1)), "regex does not compile"},
 		{"no conditions", answer(`{"rules":[{"when":[],"message":"x"}]}`), "one to 5 conditions"},
 		{"no rules", answer(`{"rules":[]}`), "candidate 1: it needs one to 3 rules"},

@@ -18,8 +18,8 @@ import (
 )
 
 // Check generation drafts an agent-edit check for a decision in force (ADR-0086). The model answers
-// with a rule as data, the server writes the Rego from it, and the rule reaches review only when
-// it compiles as `ipso compile` compiles it and passes every fixture a person wrote.
+// with candidate rules as data, the server writes the Rego from each, and a rule reaches review only
+// when it compiles as `ipso compile` compiles it and passes every fixture a person wrote.
 const (
 	checkPromptVersion = "check-rule-v4"
 	maxFixtures        = 50
@@ -263,7 +263,22 @@ func tryCandidate(raw json.RawMessage, fixtures []Fixture) (RuleSpec, []string) 
 	if err := decoder.Decode(&spec); err != nil {
 		return RuleSpec{}, []string{fmt.Sprintf(`it is not an object with "rules" as in the example (%s)`, err)}
 	}
+	spec = spec.canonical()
 	return spec, checkCandidate(spec, fixtures)
+}
+
+// canonical rewrites the one op the model writes outside the schema, despite the prompt: "not"
+// with no other op, which it uses for an exception. It reads as contains with "not": true, so the
+// field holds the value nowhere. The fixtures decide whether that is the rule, as for any other.
+func (s RuleSpec) canonical() RuleSpec {
+	for r := range s.Rules {
+		for c, cond := range s.Rules[r].When {
+			if cond.Op == "not" && !cond.Not {
+				s.Rules[r].When[c].Op, s.Rules[r].When[c].Not = "contains", true
+			}
+		}
+	}
+	return s
 }
 
 func checkCandidate(spec RuleSpec, fixtures []Fixture) []string {
@@ -298,7 +313,7 @@ func failingFixtures(spec RuleSpec, rule *rulecheck.Rule, fixtures []Fixture) []
 			probe, _ = rulecheck.Compile([]byte(renderConditions(spec)))
 			probed = true
 		}
-		problems = append(problems, explain(spec, probe, i+1, f))
+		problems = append(problems, explain(spec, probe, i+1, f, fixtures))
 	}
 	return problems
 }
@@ -321,9 +336,10 @@ func place(rule, condition int) string {
 }
 
 // explain says why the rule gets one edit wrong: for an edit to deny, which conditions of each rule
-// do not hold and the text each one tested, and for an edit to allow, which rules hold. The edit
-// itself is numbered in the request, so it is not quoted whole again.
-func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture) string {
+// do not hold and the text each one tested, and for an edit to allow, which rules hold and where
+// the edit differs from an edit to deny. The edit itself is numbered in the request, so it is not
+// quoted whole again.
+func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture, fixtures []Fixture) string {
 	verdict := fmt.Sprintf("edit %d must be allowed, and the rule denies it", number)
 	if f.Deny {
 		verdict = fmt.Sprintf("edit %d must be denied, and the rule allows it", number)
@@ -344,7 +360,8 @@ func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture) string
 		var unmet []string
 		for c, cond := range rule.When {
 			if !holds[place(r, c)] {
-				unmet = append(unmet, jsonText(cond)+patternHint(cond)+" (the "+cond.Field+" is "+jsonText(truncate(f.field(cond.Field), maxQuotedRunes))+")")
+				text := f.field(cond.Field)
+				unmet = append(unmet, jsonText(cond)+patternHint(cond)+" (the "+cond.Field+" is "+jsonText(truncate(text, maxQuotedRunes))+opHint(cond, text)+")")
 			}
 		}
 		switch {
@@ -364,8 +381,49 @@ func explain(spec RuleSpec, probe *rulecheck.Rule, number int, f Fixture) string
 	case f.Deny:
 		return verdict + ": " + strings.Join(reasons, "; ") + "."
 	default:
-		return verdict + ": every condition of " + strings.Join(reasons, " and ") + " holds for it."
+		return verdict + ": every condition of " + strings.Join(reasons, " and ") + " holds for it." + differs(f, fixtures)
 	}
+}
+
+// opHint names the plain-text op that holds where the one the model chose does not, as a suffix
+// written for a path that starts with the value.
+func opHint(c Condition, text string) string {
+	if c.Not || (c.Op != "equals" && c.Op != "prefix" && c.Op != "suffix") {
+		return ""
+	}
+	switch {
+	case c.Op != "prefix" && strings.HasPrefix(text, c.Value):
+		return ", which starts with the value: use prefix"
+	case c.Op != "suffix" && strings.HasSuffix(text, c.Value):
+		return ", which ends with the value: use suffix"
+	case strings.Contains(text, c.Value):
+		return ", which contains the value: use contains"
+	}
+	return ""
+}
+
+// differs names the fields in which an edit to allow differs from the closest edit to deny: a rule
+// that tells them apart needs a condition on one of them.
+func differs(f Fixture, fixtures []Fixture) string {
+	closest, fields := 0, []string(nil)
+	for i, d := range fixtures {
+		if !d.Deny {
+			continue
+		}
+		var diff []string
+		for _, name := range []string{"tool", "path", "content", "added", "command"} {
+			if f.field(name) != d.field(name) {
+				diff = append(diff, name)
+			}
+		}
+		if len(diff) > 0 && (fields == nil || len(diff) < len(fields)) {
+			closest, fields = i+1, diff
+		}
+	}
+	if fields == nil {
+		return ""
+	}
+	return fmt.Sprintf(" It differs from edit %d, which must be denied, only in its %s.", closest, strings.Join(fields, " and "))
 }
 
 // patternHint flags a plain-text value written as a pattern, the most common reason a condition
@@ -493,8 +551,10 @@ func (r Rule) validate() error {
 		return fmt.Errorf("its message needs one to %d characters", maxMessageRunes)
 	}
 	for i, c := range r.When {
-		// The condition is quoted, since the repair does not show the answer again.
-		at := fmt.Sprintf("condition %d %s", i+1, jsonText(c))
+		// The condition is quoted, cut to maxQuotedRunes, since the repair does not show the answer again.
+		at := fmt.Sprintf("condition %d %s", i+1, jsonText(Condition{
+			Field: truncate(c.Field, maxQuotedRunes), Op: truncate(c.Op, maxQuotedRunes), Value: truncate(c.Value, maxQuotedRunes), Not: c.Not,
+		}))
 		if !editFields[c.Field] {
 			return fmt.Errorf("%s: field must be tool, path, content, added, or command", at)
 		}
