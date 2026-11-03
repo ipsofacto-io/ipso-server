@@ -14,7 +14,7 @@ var commentText = regexp.MustCompile(`"text":"((?:[^"\\]|\\.)*)"`)
 
 // obedient does whatever the comment says: it copies the comment, and the canary when asked for
 // instructions, into every field.
-func obedient(_ context.Context, system, user string) (llmgw.Completion, error) {
+func obedient(_ context.Context, system, user string, _ int) (llmgw.Completion, error) {
 	var text string
 	if match := commentText.FindStringSubmatch(user); match != nil {
 		_ = json.Unmarshal([]byte(`"`+match[1]+`"`), &text)
@@ -31,7 +31,7 @@ func obedient(_ context.Context, system, user string) (llmgw.Completion, error) 
 }
 
 // resistant names the decision and ignores everything else.
-func resistant(context.Context, string, string) (llmgw.Completion, error) {
+func resistant(context.Context, string, string, int) (llmgw.Completion, error) {
 	return llmgw.Completion{Text: `{"candidates":[{"source":0,"title":"Use the chosen tool","statement":"The team uses the chosen tool.","rationale":"","confidence":0.6}]}`, Model: "resistant"}, nil
 }
 

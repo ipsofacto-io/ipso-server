@@ -21,6 +21,8 @@ type sent struct {
 	url    string
 	header http.Header
 	body   map[string]any
+	// timeout is how long the call had left when the provider received it.
+	timeout time.Duration
 }
 
 // provider answers every request with the next response in line, and records what it was sent.
@@ -38,7 +40,11 @@ func (p *provider) RoundTrip(req *http.Request) (*http.Response, error) {
 	raw, _ := io.ReadAll(req.Body)
 	var body map[string]any
 	_ = json.Unmarshal(raw, &body)
-	p.requests = append(p.requests, sent{url: req.URL.String(), header: req.Header.Clone(), body: body})
+	var timeout time.Duration
+	if deadline, ok := req.Context().Deadline(); ok {
+		timeout = time.Until(deadline)
+	}
+	p.requests = append(p.requests, sent{url: req.URL.String(), header: req.Header.Clone(), body: body, timeout: timeout})
 	if p.fail != nil {
 		return nil, p.fail
 	}
@@ -116,7 +122,8 @@ func TestRoutesToMistral(t *testing.T) {
 		t.Fatalf("request = %s %v", got.url, got.header)
 	}
 	messages := got.body["messages"].([]any)
-	if got.body["model"] != "mistral-medium-2508" || len(messages) != 2 || got.body["temperature"] != float64(0) || got.body["max_tokens"] != float64(100) {
+	if got.body["model"] != "mistral-medium-2508" || len(messages) != 2 || got.body["temperature"] != float64(0) || got.body["max_tokens"] != float64(100) ||
+		got.body["response_format"].(map[string]any)["type"] != "json_object" {
 		t.Fatalf("body = %v", got.body)
 	}
 	if ledger.tokens[tenantA] != 50 {
@@ -282,11 +289,32 @@ func TestNoTenantIsRefused(t *testing.T) {
 func TestForCompletesForOneTenant(t *testing.T) {
 	p := &provider{responses: []*http.Response{reply(200, chatOK)}}
 	g, ledger := newGateway(t, only("mistral"), p)
-	if _, err := g.For(tenantA)(t.Context(), "s", "u"); err != nil {
+	if _, err := g.For(tenantA)(t.Context(), "s", "u", 0); err != nil {
 		t.Fatal(err)
 	}
 	if ledger.tokens[tenantA] != 50 {
 		t.Fatalf("charged %d tokens to tenant A", ledger.tokens[tenantA])
+	}
+}
+
+func TestThePipelineBoundsTheAnswerAndTheRouteTheWait(t *testing.T) {
+	cfg := only("mistral")
+	p := &provider{responses: []*http.Response{reply(200, chatOK), reply(200, chatOK)}}
+	g, _ := newGateway(t, cfg, p)
+	if _, err := g.For(tenantA)(t.Context(), "s", "u", 64); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Routes[0].TimeoutSeconds = 300
+	slow, _ := newGateway(t, cfg, p)
+	if _, err := slow.For(tenantA)(t.Context(), "s", "u", 0); err != nil {
+		t.Fatal(err)
+	}
+	first, second := p.requests[0], p.requests[1]
+	if first.body["max_tokens"] != float64(64) || second.body["max_tokens"] != float64(defaultMaxTokens) {
+		t.Fatalf("max_tokens %v and %v", first.body["max_tokens"], second.body["max_tokens"])
+	}
+	if first.timeout <= 80*time.Second || first.timeout > routeTimeout || second.timeout <= 290*time.Second || second.timeout > 300*time.Second {
+		t.Fatalf("timeouts %v and %v", first.timeout, second.timeout)
 	}
 }
 

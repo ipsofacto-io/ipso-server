@@ -485,6 +485,7 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 		{"proposals.approval", "approval_open_sys_period", 1 | 2 | 4},
 		{"registry.baseline", "baseline_fingerprints", 1 | 2 | 4},
 		{"registry.baseline", "baseline_open_sys_period", 1 | 2 | 4},
+		{"proposals.check_proposal", "check_proposal_open_sys_period", 1 | 2 | 4},
 		{"registry.decision_version", "decision_version_archive", 1 | 2 | 8 | 16},
 		{"registry.decision_version", "decision_version_clear_premise", 1 | 16},
 		{"registry.decision_version", "decision_version_open_sys_period", 1 | 2 | 4},

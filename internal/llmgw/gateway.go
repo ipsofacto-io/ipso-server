@@ -30,7 +30,9 @@ const (
 	maxPromptBytes   = 256 << 10
 	maxAnswerBytes   = 1 << 20
 	routeTimeout     = 90 * time.Second
-	settleTimeout    = 10 * time.Second
+	// maxRouteTimeoutSeconds is the longest a route may set, for a model served on CPU.
+	maxRouteTimeoutSeconds = 600
+	settleTimeout          = 10 * time.Second
 )
 
 var (
@@ -90,10 +92,11 @@ func New(cfg Config, ledger Ledger, client *http.Client, logger *slog.Logger) (*
 	return &Gateway{tenants: tenants, defaults: defaults, redact: patterns, ledger: ledger, client: &c, logger: logger, now: time.Now}, nil
 }
 
-// For returns a function that completes for one tenant, the shape the LLM pipelines take.
-func (g *Gateway) For(tenant uuid.UUID) func(ctx context.Context, system, user string) (Completion, error) {
-	return func(ctx context.Context, system, user string) (Completion, error) {
-		return g.Complete(ctx, Request{Tenant: tenant, System: system, User: user})
+// For returns a function that completes for one tenant, the shape the LLM pipelines take. Each
+// pipeline bounds its own answer with maxTokens, and 0 takes the default.
+func (g *Gateway) For(tenant uuid.UUID) func(ctx context.Context, system, user string, maxTokens int) (Completion, error) {
+	return func(ctx context.Context, system, user string, maxTokens int) (Completion, error) {
+		return g.Complete(ctx, Request{Tenant: tenant, System: system, User: user, MaxTokens: maxTokens})
 	}
 }
 
@@ -192,7 +195,7 @@ func retryable(err error) bool {
 }
 
 func (g *Gateway) call(ctx context.Context, route endpoint, system, user string, maxTokens int) (Completion, error) {
-	ctx, cancel := context.WithTimeout(ctx, routeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, route.timeout)
 	defer cancel()
 
 	var body any
@@ -254,13 +257,16 @@ type message struct {
 	Content string `json:"content"`
 }
 
-// chatRequest is the OpenAI chat completions shape that Mistral and Azure OpenAI also accept.
+// chatRequest is the OpenAI chat completions shape that Mistral and Azure OpenAI also accept. Every
+// prompt asks for one JSON object, so the route is asked to answer with valid JSON (ADR-0087).
+// Converse has no such switch, and the callers check every answer either way.
 func chatRequest(model, system, user string, maxTokens int) any {
 	return map[string]any{
-		"model":       model,
-		"messages":    []message{{Role: "system", Content: system}, {Role: "user", Content: user}},
-		"temperature": 0,
-		"max_tokens":  maxTokens,
+		"model":           model,
+		"messages":        []message{{Role: "system", Content: system}, {Role: "user", Content: user}},
+		"temperature":     0,
+		"max_tokens":      maxTokens,
+		"response_format": map[string]string{"type": "json_object"},
 	}
 }
 

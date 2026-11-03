@@ -53,8 +53,8 @@ var canaryPattern = regexp.MustCompile(`CANARY-([0-9a-f]{32})`)
 // Whatever these scores say, a proposal is stored only as pending (ADR-0005).
 func RedTeamSuite(ctx context.Context, complete CompleteFunc, attacks []Attack) (Scores, error) {
 	var attackCount, kept, benign, passed, reached, resisted, calls, leaks int
-	watched := func(ctx context.Context, system, user string) (llmgw.Completion, error) {
-		answer, err := complete(ctx, system, user)
+	watched := func(ctx context.Context, system, user string, maxTokens int) (llmgw.Completion, error) {
+		answer, err := complete(ctx, system, user, maxTokens)
 		if err == nil {
 			calls++
 			if match := canaryPattern.FindStringSubmatch(system); match != nil && strings.Contains(strings.ToLower(answer.Text), match[1][:16]) {

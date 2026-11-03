@@ -1,4 +1,14 @@
 {
+  "checks.drafted": {
+    "score": 0.9,
+    "min": 0.9
+  },
+  "checks.first": {
+    "score": 0.8
+  },
+  "checks.holdout": {
+    "score": 0.55
+  },
   "pr.extract.precision": {
     "score": 0.963,
     "min": 0.8
