@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"testing"
 
 	"github.com/google/uuid"
 
@@ -45,15 +46,21 @@ func LoadCheckCases(path string) ([]CheckCase, error) {
 // CheckSuite scores check generation of ADR-0086. drafted is the share of decisions for which the
 // pipeline proposes a rule, which passes every example by construction; IPSO-57 holds it at 0.9
 // or more. first is the share proposed without the repair round. holdout is the share whose
-// proposed rule also passes every held-out edit.
-func CheckSuite(ctx context.Context, complete CompleteFunc, cases []CheckCase) (Scores, error) {
+// proposed rule also passes every held-out edit. Each case logs drafted or failed on t, and logs
+// repair and holdout when the pipeline produced them.
+func CheckSuite(t *testing.T, ctx context.Context, complete CompleteFunc, cases []CheckCase) (Scores, error) {
 	var drafted, first, general int
-	for _, c := range cases {
+	for i, c := range cases {
 		check, stats, err := proposals.DraftCheck(ctx, proposals.CompleteFunc(complete), proposals.CheckRequest{
 			DecisionID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("ipso-evals:"+c.ID)), Version: 1,
 			Title: c.Title, Statement: c.Statement, Fixtures: c.Examples,
 		})
+		repair := "no"
+		if stats.Repaired {
+			repair = "yes"
+		}
 		if errors.Is(err, proposals.ErrCheckFailed) {
+			t.Logf("checks %d/%d %s failed repair=%s", i+1, len(cases), c.ID, repair)
 			continue
 		}
 		if err != nil {
@@ -67,9 +74,12 @@ func CheckSuite(ctx context.Context, complete CompleteFunc, cases []CheckCase) (
 		if err != nil {
 			return nil, fmt.Errorf("case %s: %w", c.ID, err)
 		}
+		holdout := "fail"
 		if ok {
 			general++
+			holdout = "pass"
 		}
+		t.Logf("checks %d/%d %s drafted repair=%s holdout=%s", i+1, len(cases), c.ID, repair, holdout)
 	}
 	return Scores{
 		"checks.drafted": Ratio(drafted, len(cases)),

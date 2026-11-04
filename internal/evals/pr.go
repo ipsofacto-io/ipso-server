@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"testing"
 
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
 	"github.com/ipsofacto-io/ipso-server/internal/proposals"
@@ -88,10 +89,10 @@ func LoadThreads(path string) ([]Thread, error) {
 // of what it sends that is an expected decision. Extraction is the whole pipeline, dedupe against
 // the thread's registry included: its precision is the share of proposals that match an expected
 // decision once, so a duplicate counts against it, and its recall is the share of expected
-// decisions some proposal matches.
-func PRSuite(ctx context.Context, complete CompleteFunc, threads []Thread) (Scores, error) {
+// decisions some proposal matches. Each thread logs its screen, extraction, and proposal count on t.
+func PRSuite(t *testing.T, ctx context.Context, complete CompleteFunc, threads []Thread) (Scores, error) {
 	var expected, screened, screenedHits, proposed, matched, asked, answered int
-	for _, thread := range threads {
+	for i, thread := range threads {
 		byID := map[string]Comment{}
 		for _, c := range thread.Comments {
 			byID[c.externalID()] = c
@@ -100,7 +101,8 @@ func PRSuite(ctx context.Context, complete CompleteFunc, threads []Thread) (Scor
 			}
 		}
 		comments := thread.comments()
-		for _, id := range proposals.Screen(thread.Repo, thread.Number, comments) {
+		sent := proposals.Screen(thread.Repo, thread.Number, comments)
+		for _, id := range sent {
 			screened++
 			if byID[id].Expected() {
 				screenedHits++
@@ -127,6 +129,15 @@ func PRSuite(ctx context.Context, complete CompleteFunc, threads []Thread) (Scor
 				matched++
 			}
 		}
+		extract := "ok"
+		if errors.Is(err, proposals.ErrAnswer) {
+			extract = "bad_answer"
+		}
+		screen := "kept"
+		if len(sent) > 0 {
+			screen = "sent"
+		}
+		t.Logf("pr %d/%d %s screen=%s extract=%s proposals=%d", i+1, len(threads), thread.ID, screen, extract, len(found))
 	}
 	return Scores{
 		"pr.screen.precision":  Ratio(screenedHits, screened),

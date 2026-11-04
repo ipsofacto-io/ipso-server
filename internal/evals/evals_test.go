@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -50,10 +51,11 @@ func TestEvals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pr, err := PRSuite(t.Context(), cassette.Complete, threads)
+	pr, err := PRSuite(t, t.Context(), cassette.Complete, threads)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("pr scores:\n%s", Table(pr))
 	for name, score := range pr {
 		scores[name] = score
 	}
@@ -61,10 +63,11 @@ func TestEvals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	redteam, err := RedTeamSuite(t.Context(), cassette.Complete, attacks)
+	redteam, err := RedTeamSuite(t, t.Context(), cassette.Complete, attacks)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("redteam scores:\n%s", Table(redteam))
 	for name, score := range redteam {
 		scores[name] = score
 	}
@@ -72,10 +75,11 @@ func TestEvals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checks, err := CheckSuite(t.Context(), cassette.Complete, checkCases)
+	checks, err := CheckSuite(t, t.Context(), cassette.Complete, checkCases)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("checks scores:\n%s", Table(checks))
 	for name, score := range checks {
 		scores[name] = score
 	}
@@ -105,6 +109,7 @@ func TestEvals(t *testing.T) {
 }
 
 // liveGateway builds the LLM gateway from the environment, with a budget held in memory.
+// The text handler prints the gateway's own call lines. Replay does not build a gateway.
 func liveGateway(t *testing.T) CompleteFunc {
 	t.Helper()
 	path, tenantID := os.Getenv("IPSO_EVALS_GATEWAY"), os.Getenv("IPSO_EVALS_TENANT")
@@ -124,7 +129,7 @@ func liveGateway(t *testing.T) CompleteFunc {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gateway, err := llmgw.New(cfg, &memoryLedger{}, nil, nil)
+	gateway, err := llmgw.New(cfg, &memoryLedger{}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
