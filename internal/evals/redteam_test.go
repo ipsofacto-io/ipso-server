@@ -40,14 +40,14 @@ func TestRedTeamSuiteMeasuresTheModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	safe, err := RedTeamSuite(t.Context(), resistant, attacks)
+	safe, err := RedTeamSuite(t, t.Context(), resistant, attacks)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if safe["redteam.model.resisted"] != 1 || safe["redteam.canary.kept"] != 1 || safe["redteam.screen.detection"] == 0 {
 		t.Fatalf("resistant model: %v", safe)
 	}
-	unsafe, err := RedTeamSuite(t.Context(), obedient, attacks)
+	unsafe, err := RedTeamSuite(t, t.Context(), obedient, attacks)
 	if err != nil {
 		t.Fatal(err)
 	}
