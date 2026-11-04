@@ -58,7 +58,7 @@ func newFixture(t *testing.T) fixture {
 	insert := func(query string, args ...any) uuid.UUID {
 		t.Helper()
 		var id uuid.UUID
-		if err := db.QueryRowContext(t.Context(), query, args...).Scan(&id); err != nil {
+		if err := pgtest.Scan(t.Context(), db, testTenant.String(), query, args, &id); err != nil {
 			t.Fatalf("%s: %v", query, err)
 		}
 		return id
@@ -69,7 +69,7 @@ func newFixture(t *testing.T) fixture {
 	org := insert(`INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1, NULL, 'org', 'acme') RETURNING id`, testTenant)
 	decision := func(id uuid.UUID, body string) {
 		t.Helper()
-		_, err := db.ExecContext(t.Context(), `
+		_, err := pgtest.Exec(t.Context(), db, testTenant.String(), `
 			INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 			VALUES ($1, 1, $2, $3::jsonb, $4::uuid[], '[2026-01-01,)')`, id, testTenant, body, []uuid.UUID{org})
 		if err != nil {
@@ -153,7 +153,7 @@ func TestBackendAProposalStaysPendingAndTheLogNamesTheSponsor(t *testing.T) {
 	}
 	var status string
 	var principal uuid.UUID
-	if err := f.db.QueryRowContext(ctx, `SELECT status, principal_id FROM proposals.agent_proposal WHERE tenant_id = $1 AND id = $2`, testTenant, out.ProposalID).Scan(&status, &principal); err != nil {
+	if err := pgtest.Scan(ctx, f.db, testTenant.String(), `SELECT status, principal_id FROM proposals.agent_proposal WHERE tenant_id = $1 AND id = $2`, []any{testTenant, out.ProposalID}, &status, &principal); err != nil {
 		t.Fatal(err)
 	}
 	if status != "pending" || principal != f.agent {
@@ -207,7 +207,7 @@ func TestBackendACallThatCannotBeLoggedDoesNotRun(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 	var rows int
-	if err := f.db.QueryRowContext(ctx, `SELECT count(*) FROM proposals.agent_proposal`).Scan(&rows); err != nil {
+	if err := pgtest.Scan(ctx, f.db, testTenant.String(), `SELECT count(*) FROM proposals.agent_proposal`, nil, &rows); err != nil {
 		t.Fatal(err)
 	}
 	if rows != 0 {
@@ -222,7 +222,7 @@ func TestBackendAnotherTenantSeesNothing(t *testing.T) {
 	f := newFixture(t)
 	ctx := t.Context()
 	var outsider uuid.UUID
-	if err := f.db.QueryRowContext(ctx, `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'Bea') RETURNING id`, otherTenant).Scan(&outsider); err != nil {
+	if err := pgtest.Scan(ctx, f.db, otherTenant.String(), `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'Bea') RETURNING id`, []any{otherTenant}, &outsider); err != nil {
 		t.Fatal(err)
 	}
 	b := f.backend(otherTenant, outsider)

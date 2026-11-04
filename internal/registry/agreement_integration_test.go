@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 )
 
 // The grammar of a selector is written twice: as CHECK constraints in migration 00003 and as
@@ -86,7 +88,7 @@ func TestSelectorGrammarAgreesWithPostgreSQL(t *testing.T) {
 func TestBaselineRepoGrammarAgreesWithPostgreSQL(t *testing.T) {
 	r := newRegistryDB(t)
 	decision := uuid.MustParse("00000000-0000-4000-8000-0000000000d9")
-	if _, err := r.app.ExecContext(t.Context(), `
+	if _, err := pgtest.Exec(t.Context(), r.app, tenantA.String(), `
 		INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period)
 		VALUES ($1, $2, '[2026-01-01,)')`, tenantA, decision); err != nil {
 		t.Fatal(err)
@@ -113,7 +115,7 @@ func TestBaselineRepoGrammarAgreesWithPostgreSQL(t *testing.T) {
 			continue
 		}
 		seen[input] = true
-		_, err := r.app.ExecContext(t.Context(), `
+		_, err := pgtest.Exec(t.Context(), r.app, tenantA.String(), `
 			INSERT INTO registry.baseline (tenant_id, decision_id, repo, fingerprints)
 			VALUES ($1, $2, $3, '{}'::bytea[])`, tenantA, decision, input)
 		goOK := literalRepoOK(input)

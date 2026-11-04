@@ -57,7 +57,7 @@ FROM registry.baseline b
 JOIN registry.grandfather_period g
   ON g.tenant_id = b.tenant_id AND g.decision_id = b.decision_id
 CROSS JOIN LATERAL unnest(b.fingerprints) AS u(f)
-WHERE b.tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+WHERE b.tenant_id = ipso.current_tenant()
   AND b.decision_id = $1
   AND b.repo = $2
   AND b.sys_period @> $3::timestamptz

@@ -130,7 +130,7 @@ func TestDatabaseCannotHoldAnApproval(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 	insert := func(status, link string) error {
-		_, err := db.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, db, tenantA.String(), `
 			INSERT INTO proposals.proposal
 				(tenant_id, status, payload, confidence, model_id, prompt_version, repo, pr_number,
 				 external_id, source_url, source_sha256, candidate_index)
@@ -170,7 +170,7 @@ func TestRedTeamEndToEndLeavesOnlyPending(t *testing.T) {
 		t.Fatalf("forged status: err %v calls %d", err, forged.calls)
 	}
 	var total, notPending int
-	if err := db.QueryRowContext(t.Context(), `SELECT count(*), count(*) FILTER (WHERE status <> 'pending') FROM proposals.proposal`).Scan(&total, &notPending); err != nil {
+	if err := pgtest.Scan(t.Context(), db, tenantA.String(), `SELECT count(*), count(*) FILTER (WHERE status <> 'pending') FROM proposals.proposal`, nil, &total, &notPending); err != nil {
 		t.Fatal(err)
 	}
 	if total != 1 || notPending != 0 {
@@ -184,12 +184,12 @@ func TestRedTeamEndToEndLeavesOnlyPending(t *testing.T) {
 func TestProcessDedupesAgainstTheRegistryAndPendingProposals(t *testing.T) {
 	db := newDB(t)
 	var scope uuid.UUID
-	if err := db.QueryRowContext(t.Context(), `
+	if err := pgtest.Scan(t.Context(), db, tenantA.String(), `
 		INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1, NULL, 'org', 'acme') RETURNING id`,
-		tenantA).Scan(&scope); err != nil {
+		[]any{tenantA}, &scope); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(t.Context(), `
+	if _, err := pgtest.Exec(t.Context(), db, tenantA.String(), `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 		VALUES (gen_random_uuid(), 1, $1, '{"title": "Use Postgres for new services"}', ARRAY[$2::uuid], '[2026-01-01,)')`,
 		tenantA, scope); err != nil {
@@ -214,12 +214,12 @@ func TestProcessDedupesAgainstTheRegistryAndPendingProposals(t *testing.T) {
 	}
 	// A decision in force in another org of the tenant does not apply to this repository.
 	var globex uuid.UUID
-	if err := db.QueryRowContext(t.Context(), `
+	if err := pgtest.Scan(t.Context(), db, tenantA.String(), `
 		INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1, NULL, 'org', 'globex') RETURNING id`,
-		tenantA).Scan(&globex); err != nil {
+		[]any{tenantA}, &globex); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(t.Context(), `
+	if _, err := pgtest.Exec(t.Context(), db, tenantA.String(), `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 		VALUES (gen_random_uuid(), 1, $1, '{"title": "Cache sessions in Redis"}', ARRAY[$2::uuid], '[2026-01-01,)')`,
 		tenantA, globex); err != nil {
@@ -271,15 +271,15 @@ func TestAgentProposalsAppearInTheirInbox(t *testing.T) {
 	agents := map[uuid.UUID]uuid.UUID{}
 	for _, tenant := range []uuid.UUID{tenantA, tenantB} {
 		var person, agent uuid.UUID
-		if err := db.QueryRowContext(t.Context(), `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'Ada') RETURNING id`, tenant).Scan(&person); err != nil {
+		if err := pgtest.Scan(t.Context(), db, tenant.String(), `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'Ada') RETURNING id`, []any{tenant}, &person); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.QueryRowContext(t.Context(), `INSERT INTO identity.principal (tenant_id, kind, name, sponsor_id) VALUES ($1, 'agent', 'claude-code', $2) RETURNING id`, tenant, person).Scan(&agent); err != nil {
+		if err := pgtest.Scan(t.Context(), db, tenant.String(), `INSERT INTO identity.principal (tenant_id, kind, name, sponsor_id) VALUES ($1, 'agent', 'claude-code', $2) RETURNING id`, []any{tenant, person}, &agent); err != nil {
 			t.Fatal(err)
 		}
 		agents[tenant] = agent
 		for _, title := range []string{"Use Postgres", "Cache sessions in Redis"} {
-			if _, err := db.ExecContext(t.Context(), `INSERT INTO proposals.agent_proposal (tenant_id, principal_id, payload) VALUES ($1, $2, jsonb_build_object('title', $3::text))`, tenant, agent, title); err != nil {
+			if _, err := pgtest.Exec(t.Context(), db, tenant.String(), `INSERT INTO proposals.agent_proposal (tenant_id, principal_id, payload) VALUES ($1, $2, jsonb_build_object('title', $3::text))`, tenant, agent, title); err != nil {
 				t.Fatal(err)
 			}
 		}

@@ -38,8 +38,8 @@ type Decision struct {
 	Body    json.RawMessage
 }
 
-// The tenant filter reads the setting that Resolve sets, so a session with no tenant matches no
-// row. It is the filter of section 2.3 Q1 and the one the row-level security policies use.
+// The tenant filter calls ipso.current_tenant(), the leakproof function the policies use.
+// A session with no tenant matches no row. It is the filter of section 2.3 Q1.
 const (
 	// selectingScopes reads the nodes that may select the subject: those of its org, with the
 	// literal repo or no literal repo, that were recorded by transaction time T. A domain and a
@@ -48,7 +48,7 @@ const (
 	selectingScopes = `
 SELECT id, match_repo, match_path, match_env
 FROM registry.scope_all
-WHERE tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+WHERE tenant_id = ipso.current_tenant()
   AND kind IN ('org', 'repo', 'path', 'env')
   AND match_org = $1
   AND repo_key IN ('', $2)
@@ -59,7 +59,7 @@ WHERE tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
 	ancestorsOfMatched = `
 SELECT descendant_id, ancestor_id
 FROM registry.scope_closure_all
-WHERE tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+WHERE tenant_id = ipso.current_tenant()
   AND descendant_id = ANY($1::uuid[])
   AND sys_period @> $2::timestamptz`
 
@@ -71,7 +71,7 @@ FROM registry.decision_version_all d
 WHERE d.scope_refs && $1::uuid[]
   AND d.valid_period @> $2::timestamptz
   AND d.sys_period @> $3::timestamptz
-  AND d.tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+  AND d.tenant_id = ipso.current_tenant()
 ORDER BY d.decision_id, d.version DESC`
 
 	// decisionsInForceForScopes is decisionsInForce plus each row's scope refs as text.
@@ -82,7 +82,7 @@ FROM registry.decision_version_all d
 WHERE d.scope_refs && $1::uuid[]
   AND d.valid_period @> $2::timestamptz
   AND d.sys_period @> $3::timestamptz
-  AND d.tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+  AND d.tenant_id = ipso.current_tenant()
 ORDER BY d.decision_id, d.version DESC`
 )
 

@@ -52,9 +52,9 @@ func migrated(t *testing.T) *sql.DB {
 func tryPrincipal(t *testing.T, db *sql.DB, tenant uuid.UUID, kind, name string, sponsor any) (uuid.UUID, error) {
 	t.Helper()
 	var id uuid.UUID
-	err := db.QueryRowContext(t.Context(), `
+	err := pgtest.Scan(t.Context(), db, tenant.String(), `
 		INSERT INTO identity.principal (tenant_id, kind, name, sponsor_id)
-		VALUES ($1, $2, $3, $4) RETURNING id`, tenant, kind, name, sponsor).Scan(&id)
+		VALUES ($1, $2, $3, $4) RETURNING id`, []any{tenant, kind, name, sponsor}, &id)
 	return id, err
 }
 
@@ -114,12 +114,12 @@ func TestAnAgentNeedsAHumanSponsorInItsTenant(t *testing.T) {
 func proposal(t *testing.T, db *sql.DB, tenant uuid.UUID) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
-	err := db.QueryRowContext(t.Context(), `
+	err := pgtest.Scan(t.Context(), db, tenant.String(), `
 		INSERT INTO proposals.proposal
 			(tenant_id, payload, confidence, model_id, prompt_version, repo, pr_number, external_id, source_url, source_sha256, candidate_index)
 		VALUES ($1, '{}'::jsonb, 0.5, 'model', 'v1', 'acme/app', 1, 'comment-1',
 		        'https://github.com/acme/app/pull/1', sha256('x'::bytea), 0)
-		RETURNING id`, tenant).Scan(&id)
+		RETURNING id`, []any{tenant}, &id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestAnAgentCannotApproveAProposal(t *testing.T) {
 	agent := principal(t, db, tenantA, identity.KindAgent, "claude-code", person)
 	item := proposal(t, db, tenantA)
 	approve := func(approver uuid.UUID) error {
-		_, err := db.ExecContext(t.Context(), `
+		_, err := pgtest.Exec(t.Context(), db, tenantA.String(), `
 			INSERT INTO proposals.approval (tenant_id, proposal_id, approver_id, outcome)
 			VALUES ($1, $2, $3, 'approved')`, tenantA, item, approver)
 		return err
@@ -155,7 +155,7 @@ func TestOneTenantsPersonCannotApproveInAnother(t *testing.T) {
 	db := migrated(t)
 	outsider := principal(t, db, tenantB, identity.KindHuman, "Bea", nil)
 	item := proposal(t, db, tenantA)
-	_, err := db.ExecContext(t.Context(), `
+	_, err := pgtest.Exec(t.Context(), db, tenantA.String(), `
 		INSERT INTO proposals.approval (tenant_id, proposal_id, approver_id, outcome)
 		VALUES ($1, $2, $3, 'approved')`, tenantA, item, outsider)
 	if err == nil {
@@ -182,9 +182,9 @@ func TestTheLogNamesTheSponsorWhateverTheCallerSends(t *testing.T) {
 	}
 
 	var forged uuid.UUID
-	if err := db.QueryRowContext(ctx, `
+	if err := pgtest.Scan(ctx, db, tenantA.String(), `
 		INSERT INTO identity.action_log (tenant_id, principal_id, responsible_id, action, subject)
-		VALUES ($1, $2, $3, 'decisions.get', 'x') RETURNING responsible_id`, tenantA, agent, someoneElse).Scan(&forged); err != nil {
+		VALUES ($1, $2, $3, 'decisions.get', 'x') RETURNING responsible_id`, []any{tenantA, agent, someoneElse}, &forged); err != nil {
 		t.Fatal(err)
 	}
 	if forged != person {

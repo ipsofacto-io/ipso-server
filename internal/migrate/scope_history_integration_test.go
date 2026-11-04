@@ -5,6 +5,8 @@ package migrate_test
 import (
 	"database/sql"
 	"testing"
+
+	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 )
 
 func closureDepths(t *testing.T, s schema, id string) map[string]int {
@@ -52,7 +54,7 @@ func TestReparentRewritesTheClosureAndKeepsTheOldChain(t *testing.T) {
 	repo := s.addScope(t, tenantA, payments, "repo", "acme/payments")
 	path := s.addScope(t, tenantA, repo, "path", "infra/**")
 
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
 		UPDATE registry.scope AS s SET parent_id = $3::uuid FROM cfg WHERE s.id = $2::uuid`, tenantA, repo, labs); err != nil {
 		t.Fatal(err)
@@ -100,7 +102,7 @@ func TestReparentRewritesAnInheritedSelector(t *testing.T) {
 	path := s.addScope(t, tenantA, from, "path", "infra/**")
 	env := s.addScope(t, tenantA, path, "env", "prod")
 
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
 		UPDATE registry.scope AS s SET parent_id = $3::uuid FROM cfg WHERE s.id = $2::uuid`, tenantA, path, to); err != nil {
 		t.Fatal(err)
@@ -142,19 +144,19 @@ func TestReparentRejectsACycleAnIllegalParentAndAForeignOrg(t *testing.T) {
 	other := s.addScope(t, tenantA, "", "org", "other")
 
 	t.Run("cycle", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
 			UPDATE registry.scope AS s SET parent_id = $3::uuid FROM cfg WHERE s.id = $2::uuid`, tenantA, repo, path)
 		requireCheck(t, err, "descendant")
 	})
 	t.Run("illegal parent", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
 			UPDATE registry.scope AS s SET parent_id = $3::uuid FROM cfg WHERE s.id = $2::uuid`, tenantA, path, domain)
 		requireCheck(t, err, "cannot sit under")
 	})
 	t.Run("repo owner", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
 			UPDATE registry.scope AS s SET parent_id = $3::uuid FROM cfg WHERE s.id = $2::uuid`, tenantA, domain, other)
 		requireCheck(t, err, "repo owner")
@@ -231,6 +233,9 @@ func TestScopeChangesRefuseRepeatableRead(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback() }()
+		if _, err := tx.ExecContext(ctx, `SELECT set_config('ipso.tenant', $1, true)`, tenantA); err != nil {
+			t.Fatal(err)
+		}
 		_, err = tx.ExecContext(ctx, `UPDATE registry.scope SET parent_id = $2::uuid WHERE id = $1::uuid`, repo, labs)
 		if pgError(t, err).Code != "0A000" {
 			t.Fatalf("want SQLSTATE 0A000, got %v", err)
@@ -243,7 +248,7 @@ func TestRetirementKeepsHistoryAndReleasesTheScopeId(t *testing.T) {
 	ctx := t.Context()
 	org := s.orgs[tenantA]
 	repo := s.addScope(t, tenantA, org, "repo", "acme/payments")
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 		VALUES ($1::uuid, 1, $2::uuid, '{}', ARRAY[$3::uuid], '[2026-01-01,2026-06-01)')`,
 		decision, tenantA, repo); err != nil {
@@ -253,7 +258,7 @@ func TestRetirementKeepsHistoryAndReleasesTheScopeId(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
 		DELETE FROM registry.scope AS s USING cfg WHERE s.id = $2::uuid`, tenantA, repo); err != nil {
 		t.Fatalf("a waiver blocked retirement: %v", err)
@@ -267,13 +272,13 @@ func TestRetirementKeepsHistoryAndReleasesTheScopeId(t *testing.T) {
 		t.Errorf("archived self edges = %d, want 1", n)
 	}
 
-	_, err := s.app.ExecContext(ctx, `
+	_, err := pgtest.Exec(ctx, s.app, tenantA, `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 		VALUES ('00000000-0000-4000-8000-0000000000d2'::uuid, 1, $1::uuid, '{}', ARRAY[$2::uuid], '[2026-01-01,)')`,
 		tenantA, repo)
 	requireSQLState(t, err, "23503")
 
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		UPDATE registry.decision_version SET version = 2 WHERE decision_id = $1::uuid`, decision); err != nil {
 		t.Fatalf("keeping the retired reference: %v", err)
 	}
@@ -288,7 +293,7 @@ func TestScopeChangeRefusesAnotherTenant(t *testing.T) {
 	labs := s.addScope(t, tenantA, org, "domain", "labs")
 	repo := s.addScope(t, tenantA, org, "repo", "acme/payments")
 
-	_, err := s.app.ExecContext(t.Context(), `
+	_, err := pgtest.Exec(t.Context(), s.app, tenantA, `
 		WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
 		UPDATE registry.scope AS s SET parent_id = $3::uuid FROM cfg WHERE s.id = $2::uuid`,
 		tenantB, repo, labs)

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 )
 
 // goldenFile is testdata/q1_golden.json: a timeline of writes and the answers to Q1 of section
@@ -142,7 +144,7 @@ func runGolden(t *testing.T, path string) {
 			if len(step.Scopes) > 0 {
 				refs = scopeIDs(step.Scopes)
 			}
-			_, err := r.app.ExecContext(ctx, `
+			_, err := pgtest.Exec(ctx, r.app, d.tenant.String(), `
 				UPDATE registry.decision_version
 				SET version = $3, valid_period = $4::text::tstzrange, scope_refs = coalesce($5::uuid[], scope_refs)
 				WHERE tenant_id = $1 AND decision_id = $2`, d.tenant, d.id, d.version, step.Valid, refs)
@@ -155,7 +157,7 @@ func runGolden(t *testing.T, path string) {
 			if d == nil {
 				t.Fatalf("step %d: unknown decision %q", i, step.Remove)
 			}
-			if _, err := r.app.ExecContext(ctx, `DELETE FROM registry.decision_version WHERE tenant_id = $1 AND decision_id = $2`, d.tenant, d.id); err != nil {
+			if _, err := pgtest.Exec(ctx, r.app, d.tenant.String(), `DELETE FROM registry.decision_version WHERE tenant_id = $1 AND decision_id = $2`, d.tenant, d.id); err != nil {
 				t.Fatalf("step %d: remove %s: %v", i, step.Remove, err)
 			}
 
@@ -165,7 +167,7 @@ func runGolden(t *testing.T, path string) {
 			if !ok || !parentOK {
 				t.Fatalf("step %d: move %q under %q", i, step.Move, step.Parent)
 			}
-			if _, err := r.app.ExecContext(ctx, `
+			if _, err := pgtest.Exec(ctx, r.app, tenantOf(step.Tenant).String(), `
 				WITH cfg AS (SELECT set_config('ipso.tenant', $1::text, true))
 				UPDATE registry.scope AS s SET parent_id = $3 FROM cfg
 				WHERE s.tenant_id = $1::uuid AND s.id = $2`,
@@ -178,7 +180,7 @@ func runGolden(t *testing.T, path string) {
 			if !ok {
 				t.Fatalf("step %d: unknown scope %q", i, step.Retire)
 			}
-			if _, err := r.app.ExecContext(ctx, `
+			if _, err := pgtest.Exec(ctx, r.app, tenantOf(step.Tenant).String(), `
 				WITH cfg AS (SELECT set_config('ipso.tenant', $1::text, true))
 				DELETE FROM registry.scope AS s USING cfg
 				WHERE s.tenant_id = $1::uuid AND s.id = $2`,

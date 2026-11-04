@@ -50,7 +50,7 @@ const waiverCovers = `
 SELECT EXISTS (
     SELECT 1
     FROM registry.waiver w
-    WHERE w.tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+    WHERE w.tenant_id = ipso.current_tenant()
       AND w.decision_id = $1
       AND w.scope_id = ANY($2::uuid[])
       AND w.valid_period @> $3::timestamptz

@@ -153,7 +153,7 @@ func compareDecision(a, b Decision) int {
 const incidentSupersessions = `
 SELECT id, from_decision, to_decision, effective_at
 FROM registry.supersession
-WHERE tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+WHERE tenant_id = ipso.current_tenant()
   AND sys_period @> $1::timestamptz
   AND (from_decision = ANY($2::uuid[]) OR to_decision = ANY($2::uuid[]))
   AND NOT (id = ANY(coalesce($3::uuid[], '{}'::uuid[])))`
@@ -162,7 +162,7 @@ const chainVersions = `
 SELECT decision_id, version, lower(valid_period),
        CASE WHEN upper_inf(valid_period) THEN NULL ELSE upper(valid_period) END
 FROM registry.decision_version_all
-WHERE tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+WHERE tenant_id = ipso.current_tenant()
   AND decision_id = ANY($1::uuid[])
   AND sys_period @> $2::timestamptz
 ORDER BY decision_id, version`
@@ -347,7 +347,7 @@ func readVersionSpans(ctx context.Context, tx *sql.Tx, nodes []uuid.UUID, knownA
 const expiringWaivers = `
 SELECT w.id, w.decision_id, w.scope_id, w.ticket_ref, upper(w.valid_period)
 FROM registry.waiver w
-WHERE w.tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+WHERE w.tenant_id = ipso.current_tenant()
   AND w.sys_period @> $1::timestamptz
   AND upper(w.valid_period) > $2::timestamptz
   AND upper(w.valid_period) <= $2::timestamptz + interval '14 days'

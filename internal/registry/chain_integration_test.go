@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 )
 
 func TestSupersessionChainCycle(t *testing.T) {
@@ -24,13 +26,13 @@ func TestSupersessionChainCycle(t *testing.T) {
 	}
 	at := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	for _, pair := range [][2]uuid.UUID{{a, b}, {b, a}} {
-		if _, err := r.app.ExecContext(ctx, `
+		if _, err := pgtest.Exec(ctx, r.app, tenantA.String(), `
 			INSERT INTO registry.supersession (tenant_id, from_decision, to_decision, effective_at)
 			VALUES ($1, $2, $3, $4)`, tenantA, pair[0], pair[1], at); err != nil {
 			t.Fatal(err)
 		}
 	}
-	_, err := SupersessionChain(ctx, r.app, tenantA, a, time.Now())
+	_, err := SupersessionChain(ctx, r.app, tenantA, a, mark(t, r.admin))
 	if !errors.Is(err, ErrDamagedChain) {
 		t.Fatalf("cycle: %v", err)
 	}
@@ -51,13 +53,13 @@ func TestSupersessionChainLimit(t *testing.T) {
 	}
 	at := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	for i := range 2 {
-		if _, err := r.app.ExecContext(ctx, `
+		if _, err := pgtest.Exec(ctx, r.app, tenantA.String(), `
 			INSERT INTO registry.supersession (tenant_id, from_decision, to_decision, effective_at)
 			VALUES ($1, $2, $3, $4)`, tenantA, ids[i], ids[i+1], at); err != nil {
 			t.Fatal(err)
 		}
 	}
-	_, err := SupersessionChain(ctx, r.app, tenantA, ids[0], time.Now())
+	_, err := SupersessionChain(ctx, r.app, tenantA, ids[0], mark(t, r.admin))
 	if !errors.Is(err, ErrDamagedChain) {
 		t.Fatalf("limit: %v", err)
 	}

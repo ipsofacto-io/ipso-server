@@ -216,10 +216,10 @@ func TestCallerCannotSetTheDerivedColumns(t *testing.T) {
 
 	before := dbNow(t, s.admin)
 	var id string
-	err := s.app.QueryRowContext(ctx, `
+	err := pgtest.Scan(ctx, s.app, tenantA, `
 		INSERT INTO registry.scope (tenant_id, parent_id, kind, selector, match_org, match_repo, match_path, match_env, sys_period)
 		VALUES ($1::uuid, $2::uuid, 'repo', 'acme/payments', 'evil', 'evil/x', '**', 'dev', '[2000-01-01,2000-02-01)')
-		RETURNING id`, tenantA, org).Scan(&id)
+		RETURNING id`, []any{tenantA, org}, &id)
 	if err != nil {
 		t.Fatalf("insert with supplied derived columns: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestCallerCannotSetTheDerivedColumns(t *testing.T) {
 	}
 
 	// The stored repo_key is generated, so a caller cannot write it.
-	_, err = s.app.ExecContext(ctx, `
+	_, err = pgtest.Exec(ctx, s.app, tenantA, `
 		INSERT INTO registry.scope (tenant_id, parent_id, kind, selector, repo_key)
 		VALUES ($1::uuid, $2::uuid, 'repo', 'acme/other', 'x')`, tenantA, org)
 	requireSQLState(t, err, "428C9")
@@ -337,13 +337,13 @@ func TestApplicationRoleScopePrivileges(t *testing.T) {
 	}
 	for name, statement := range denied {
 		t.Run(name, func(t *testing.T) {
-			_, err := s.app.ExecContext(ctx, statement)
+			_, err := pgtest.Exec(ctx, s.app, tenantA, statement)
 			requireSQLState(t, err, "42501")
 		})
 	}
 
 	t.Run("selector update", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
 			UPDATE registry.scope AS s SET selector = 'other' FROM cfg WHERE s.id = $2::uuid`, tenantA, leaf)
 		requireCheck(t, err, "only the parent")
@@ -352,7 +352,7 @@ func TestApplicationRoleScopePrivileges(t *testing.T) {
 		}
 	})
 	t.Run("delete a parent", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
 			DELETE FROM registry.scope AS s USING cfg WHERE s.id = $2::uuid`, tenantA, domain)
 		requireCheck(t, err, "children")
@@ -361,14 +361,14 @@ func TestApplicationRoleScopePrivileges(t *testing.T) {
 		}
 	})
 	t.Run("re-parent", func(t *testing.T) {
-		if _, err := s.app.ExecContext(ctx, `
+		if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 			WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
 			UPDATE registry.scope AS s SET parent_id = $3::uuid FROM cfg WHERE s.id = $2::uuid`, tenantA, leaf, other); err != nil {
 			t.Fatal(err)
 		}
 	})
 	t.Run("retire a leaf", func(t *testing.T) {
-		if _, err := s.app.ExecContext(ctx, `
+		if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 			WITH cfg AS (SELECT set_config('ipso.tenant', $1, true))
 			DELETE FROM registry.scope AS s USING cfg WHERE s.id = $2::uuid`, tenantA, leaf); err != nil {
 			t.Fatal(err)
@@ -376,7 +376,7 @@ func TestApplicationRoleScopePrivileges(t *testing.T) {
 		if n := count(t, s.admin, `SELECT count(*) FROM registry.scope WHERE id = $1::uuid`, leaf); n != 0 {
 			t.Errorf("the retired scope is still current")
 		}
-		if n := count(t, s.app, `SELECT count(*) FROM registry.scope_history WHERE id = $1::uuid AND upper(sys_period) IS NOT NULL`, leaf); n != 2 {
+		if n := countApp(t, s.app, `SELECT count(*) FROM registry.scope_history WHERE id = $1::uuid AND upper(sys_period) IS NOT NULL`, leaf); n != 2 {
 			t.Errorf("history rows = %d, want 2: the re-parent and the retirement", n)
 		}
 	})
@@ -434,7 +434,7 @@ func TestScopeRefsMustNameScopesOfTheSameTenant(t *testing.T) {
 	foreign := s.orgs[tenantB]
 
 	insert := func(refs []string) error {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 			VALUES ($1::uuid, 1, $2::uuid, '{}', $3::text[]::uuid[], '[2026-01-01,)')`, decision, tenantA, pgArray(refs))
 		return err
@@ -465,13 +465,13 @@ func TestScopeRefsMustNameScopesOfTheSameTenant(t *testing.T) {
 	}
 
 	// An update is checked too, and a refused update archives nothing.
-	_, err := s.app.ExecContext(ctx, `UPDATE registry.decision_version SET scope_refs = ARRAY[$1::uuid] WHERE decision_id = $2::uuid`, foreign, decision)
+	_, err := pgtest.Exec(ctx, s.app, tenantA, `UPDATE registry.decision_version SET scope_refs = ARRAY[$1::uuid] WHERE decision_id = $2::uuid`, foreign, decision)
 	requireSQLState(t, err, "23503")
 	if n := count(t, s.admin, `SELECT count(*) FROM registry.decision_version_history`); n != 0 {
 		t.Errorf("a refused update archived %d rows", n)
 	}
 	other := s.addScope(t, tenantA, own, "domain", "payments")
-	if _, err := s.app.ExecContext(ctx, `UPDATE registry.decision_version SET scope_refs = ARRAY[$1::uuid] WHERE decision_id = $2::uuid`, other, decision); err != nil {
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `UPDATE registry.decision_version SET scope_refs = ARRAY[$1::uuid] WHERE decision_id = $2::uuid`, other, decision); err != nil {
 		t.Fatalf("an update to a real scope: %v", err)
 	}
 	if n := count(t, s.admin, `SELECT count(*) FROM registry.decision_version_history`); n != 1 {
@@ -484,7 +484,7 @@ func TestScopeRefsOverlapUsesTheIndexes(t *testing.T) {
 	s := migrated(t)
 	ctx := t.Context()
 	s.insert(t, tenantA, 1, "[2026-01-01,)")
-	if _, err := s.app.ExecContext(ctx, `UPDATE registry.decision_version SET version = 2`); err != nil {
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `UPDATE registry.decision_version SET version = 2`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -569,7 +569,7 @@ func TestScopeRefsConstraintHoldsWhenTriggersAreOff(t *testing.T) {
 
 func TestScopeRefsAcceptsExactlyTheLimit(t *testing.T) {
 	s := migrated(t)
-	_, err := s.app.ExecContext(t.Context(), `
+	_, err := pgtest.Exec(t.Context(), s.app, tenantA, `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 		VALUES ($1::uuid, 1, $2::uuid, '{}', $3::text[]::uuid[], '[2026-01-01,)')`,
 		decision, tenantA, pgArray(repeat(s.orgs[tenantA], 100)))
@@ -589,7 +589,7 @@ func TestDecisionBodyIsCapped(t *testing.T) {
 		t.Fatal(err)
 	}
 	insert := func(id string, size int) error {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 			VALUES ($1::uuid, 1, $2::uuid, jsonb_build_object('x', repeat('a', $3::int)), ARRAY[$4::uuid], '[2026-01-01,)')`,
 			id, tenantA, size, s.orgs[tenantA])
@@ -605,7 +605,7 @@ func TestDecisionBodyIsCapped(t *testing.T) {
 		t.Errorf("constraint = %q, want decision_version_body_size", pgErr.ConstraintName)
 	}
 
-	_, err = s.app.ExecContext(ctx, `
+	_, err = pgtest.Exec(ctx, s.app, tenantA, `
 		UPDATE registry.decision_version SET body = jsonb_build_object('x', repeat('a', $1::int))
 		WHERE decision_id = '00000000-0000-4000-8000-0000000000e1'::uuid`, limit-overhead+1)
 	requireSQLState(t, err, "23514")
