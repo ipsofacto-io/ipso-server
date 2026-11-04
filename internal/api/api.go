@@ -2,9 +2,10 @@
 // behind one chain that authenticates the caller, takes the tenant from the token, and bounds every
 // request. api/openapi.yaml describes exactly the routes mounted here.
 //
-// The binary does not serve this handler. No deployment serves a tenant before row-level security
-// (IPSO-61, ADR-0050), and a token maps to a tenant and a principal only once login exists
-// (IPSO-65). Every route reads. No endpoint writes before authorization (IPSO-66).
+// The binary does not serve this handler. Row-level security is in place (IPSO-61, ADR-0050).
+// A token maps to a tenant and a principal only once login exists (IPSO-65), and IPSO-133
+// serves this handler with --role=api after internal/rls.Check. Every route reads. No endpoint
+// writes before authorization (IPSO-66).
 package api
 
 import (

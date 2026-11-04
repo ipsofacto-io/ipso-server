@@ -11,7 +11,7 @@ import (
 
 func (s schema) tryWaiver(t *testing.T, decision, scope, valid, reason, approver, ticket string) error {
 	t.Helper()
-	_, err := s.app.ExecContext(t.Context(), `
+	_, err := pgtest.Exec(t.Context(), s.app, tenantA, `
 		INSERT INTO registry.waiver
 			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
 		VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'), $6::text::tstzrange, $7)`,
@@ -26,7 +26,7 @@ func TestWaiverStaysInsideTheDecisionAndTheCap(t *testing.T) {
 	repo := s.addScope(t, tenantA, org, "repo", "acme/payments")
 	path := s.addScope(t, tenantA, repo, "path", "infra/**")
 	sibling := s.addScope(t, tenantA, org, "repo", "acme/billing")
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 		VALUES ($1::uuid, 1, $2::uuid, '{}', ARRAY[$3::uuid], '[2026-01-01,2026-06-01)')`,
 		oldDecision, tenantA, repo); err != nil {
@@ -58,7 +58,7 @@ func TestWaiverStaysInsideTheDecisionAndTheCap(t *testing.T) {
 		err := s.tryWaiver(t, oldDecision, s.orgs[tenantB], "[2026-02-01,2026-03-01)", "a real exception", "team:platform", "TICKET-3")
 		requireCheck(t, err, "outside the decision")
 	})
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 		VALUES ($1::uuid, 1, $2::uuid, '{}', ARRAY[$3::uuid],
 		        tstzrange(clock_timestamp() - interval '1 day', NULL, '[)'))`,
@@ -66,7 +66,7 @@ func TestWaiverStaysInsideTheDecisionAndTheCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Run("longer than 90 days", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			INSERT INTO registry.waiver
 				(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
 			VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
@@ -78,7 +78,7 @@ func TestWaiverStaysInsideTheDecisionAndTheCap(t *testing.T) {
 		}
 	})
 	t.Run("exactly 90 days", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			INSERT INTO registry.waiver
 				(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
 			VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
@@ -90,7 +90,7 @@ func TestWaiverStaysInsideTheDecisionAndTheCap(t *testing.T) {
 		}
 	})
 	t.Run("no end", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			INSERT INTO registry.waiver
 				(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
 			VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
@@ -147,13 +147,13 @@ func TestWaiverStaysInsideTheDecisionAndTheCap(t *testing.T) {
 	})
 
 	var recent bool
-	if err := s.app.QueryRowContext(ctx, `
+	if err := pgtest.Scan(ctx, s.app, tenantA, `
 		INSERT INTO registry.waiver
 			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref, sys_period)
 		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
 		        '[2026-03-01,2026-04-01)', 'TICKET-SYS', tstzrange('2000-01-01'::timestamptz, NULL))
 		RETURNING lower(sys_period) > '2001-01-01'::timestamptz`,
-		tenantA, oldDecision, repo).Scan(&recent); err != nil {
+		[]any{tenantA, oldDecision, repo}, &recent); err != nil {
 		t.Fatal(err)
 	}
 	if !recent {
@@ -189,7 +189,7 @@ func TestWaiverNoticesFollowTheDueRule(t *testing.T) {
 	s := migrated(t)
 	ctx := t.Context()
 	org := s.orgs[tenantA]
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 		VALUES ($1::uuid, 1, $2::uuid, '{}', ARRAY[$3::uuid],
 		        tstzrange(clock_timestamp() - interval '50 days', NULL, '[)'))`,
@@ -197,38 +197,38 @@ func TestWaiverNoticesFollowTheDueRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	var due, later string
-	if err := s.app.QueryRowContext(ctx, `
+	if err := pgtest.Scan(ctx, s.app, tenantA, `
 		INSERT INTO registry.waiver
 			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
 		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
 		        tstzrange(clock_timestamp() - interval '30 days', clock_timestamp() - interval '1 hour', '[)'),
 		        'TICKET-DUE')
-		RETURNING id`, tenantA, oldDecision, org).Scan(&due); err != nil {
+		RETURNING id`, []any{tenantA, oldDecision, org}, &due); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.app.QueryRowContext(ctx, `
+	if err := pgtest.Scan(ctx, s.app, tenantA, `
 		INSERT INTO registry.waiver
 			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
 		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
 		        tstzrange(clock_timestamp(), clock_timestamp() + interval '20 days', '[)'),
 		        'TICKET-LATER')
-		RETURNING id`, tenantA, oldDecision, org).Scan(&later); err != nil {
+		RETURNING id`, []any{tenantA, oldDecision, org}, &later); err != nil {
 		t.Fatal(err)
 	}
 	var shortID string
-	if err := s.app.QueryRowContext(ctx, `
+	if err := pgtest.Scan(ctx, s.app, tenantA, `
 		INSERT INTO registry.waiver
 			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
 		VALUES ($1::uuid, $2::uuid, $3::uuid, 'a real exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'),
 		        tstzrange(clock_timestamp() - interval '2 days', clock_timestamp() - interval '1 hour', '[)'),
 		        'TICKET-SHORT')
-		RETURNING id`, tenantA, oldDecision, org).Scan(&shortID); err != nil {
+		RETURNING id`, []any{tenantA, oldDecision, org}, &shortID); err != nil {
 		t.Fatal(err)
 	}
 
 	notice := func(waiver string, days int, ticket string) error {
 		t.Helper()
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			INSERT INTO registry.waiver_notice (tenant_id, waiver_id, days_before, ticket_ref)
 			VALUES ($1::uuid, $2::uuid, $3, $4)`, tenantA, waiver, days, ticket)
 		return err
@@ -250,10 +250,10 @@ func TestWaiverNoticesFollowTheDueRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ticket string
-	if err := s.app.QueryRowContext(ctx, `
+	if err := pgtest.Scan(ctx, s.app, tenantA, `
 		SELECT ticket_ref FROM registry.waiver_notice
 		WHERE tenant_id = $1::uuid AND waiver_id = $2::uuid AND days_before = 0`,
-		tenantA, due).Scan(&ticket); err != nil {
+		[]any{tenantA, due}, &ticket); err != nil {
 		t.Fatal(err)
 	}
 	if ticket != "TICKET-DUE" {
@@ -312,11 +312,11 @@ func TestApplicationRoleCannotChangeWaivers(t *testing.T) {
 	}
 	for _, statement := range statements {
 		t.Run(statement, func(t *testing.T) {
-			_, err := s.app.ExecContext(ctx, statement)
+			_, err := pgtest.Exec(ctx, s.app, tenantA, statement)
 			requireSQLState(t, err, "42501")
 		})
 	}
-	if n := count(t, s.app, `SELECT count(*) FROM registry.waiver`); n != 1 {
+	if n := countApp(t, s.app, `SELECT count(*) FROM registry.waiver`); n != 1 {
 		t.Errorf("waivers visible = %d, want 1", n)
 	}
 }

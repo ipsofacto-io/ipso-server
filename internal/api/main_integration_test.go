@@ -102,7 +102,7 @@ func newFixture(t *testing.T) *fixture {
 
 	decision := func(tenant, id uuid.UUID, slug, valid string, scope uuid.UUID) {
 		t.Helper()
-		_, err := f.db.ExecContext(t.Context(), `
+		_, err := pgtest.Exec(t.Context(), f.db, tenant.String(), `
 			INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 			VALUES ($1, 1, $2, jsonb_build_object('slug', $3::text, 'title', $3::text), ARRAY[$4::uuid], $5::text::tstzrange)`,
 			id, tenant, slug, scope, valid)
@@ -140,7 +140,8 @@ func newFixture(t *testing.T) *fixture {
 func (f *fixture) insert(t *testing.T, query string, args ...any) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
-	if err := f.db.QueryRowContext(t.Context(), query, args...).Scan(&id); err != nil {
+	tenant := args[0].(uuid.UUID).String()
+	if err := pgtest.Scan(t.Context(), f.db, tenant, query, args, &id); err != nil {
 		t.Fatalf("%s: %v", query, err)
 	}
 	return id
@@ -148,7 +149,8 @@ func (f *fixture) insert(t *testing.T, query string, args ...any) uuid.UUID {
 
 func (f *fixture) exec(t *testing.T, query string, args ...any) {
 	t.Helper()
-	if _, err := f.db.ExecContext(t.Context(), query, args...); err != nil {
+	tenant := args[0].(uuid.UUID).String()
+	if _, err := pgtest.Exec(t.Context(), f.db, tenant, query, args...); err != nil {
 		t.Fatalf("%s: %v", query, err)
 	}
 }

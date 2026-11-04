@@ -60,7 +60,7 @@ func Get(ctx context.Context, db *sql.DB, tenant, id uuid.UUID) (Principal, erro
 		return tx.QueryRowContext(ctx, `
 			SELECT id, kind, name, sponsor_id
 			FROM identity.principal
-			WHERE tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid AND id = $1`, id).
+			WHERE tenant_id = ipso.current_tenant() AND id = $1`, id).
 			Scan(&principal.ID, &principal.Kind, &principal.Name, &sponsor)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -105,7 +105,7 @@ func Actions(ctx context.Context, db *sql.DB, tenant uuid.UUID, limit int) ([]Ac
 			FROM identity.action_log a
 			JOIN identity.principal p ON p.tenant_id = a.tenant_id AND p.id = a.principal_id
 			JOIN identity.principal r ON r.tenant_id = a.tenant_id AND r.id = a.responsible_id
-			WHERE a.tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+			WHERE a.tenant_id = ipso.current_tenant()
 			ORDER BY a.id DESC
 			LIMIT $1`, limit)
 		if err != nil {

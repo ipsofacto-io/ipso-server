@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 )
 
 type checkInboxAnswer struct {
@@ -93,7 +95,7 @@ func TestDatabaseCannotHoldAFailingOrApprovedCheck(t *testing.T) {
 	db := newDB(t)
 	ctx := t.Context()
 	insert := func(status string, total, passed int, rego, digest string) error {
-		_, err := db.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, db, tenantA.String(), `
 			INSERT INTO proposals.check_proposal
 				(tenant_id, status, decision_id, decision_version, spec, rego, rego_sha256, fixtures,
 				 fixtures_total, fixtures_passed, repaired, model_id, prompt_version)

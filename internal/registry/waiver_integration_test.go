@@ -3,22 +3,25 @@
 package registry
 
 import (
+	"database/sql"
 	"errors"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 )
 
 func (r registryDB) addWaiver(t *testing.T, tenant, decision, scope uuid.UUID, valid, ticket string) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
-	err := r.app.QueryRowContext(t.Context(), `
+	err := pgtest.Scan(t.Context(), r.app, tenant.String(), `
 		INSERT INTO registry.waiver
 			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
 		VALUES ($1, $2, $3, 'synthetic exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'), $4::text::tstzrange, $5)
-		RETURNING id`, tenant, decision, scope, valid, ticket).Scan(&id)
+		RETURNING id`, []any{tenant, decision, scope, valid, ticket}, &id)
 	if err != nil {
 		t.Fatalf("waiver: %v", err)
 	}
@@ -28,11 +31,11 @@ func (r registryDB) addWaiver(t *testing.T, tenant, decision, scope uuid.UUID, v
 func (r registryDB) addWaiverBetween(t *testing.T, tenant, decision, scope uuid.UUID, start, end time.Time, ticket string) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
-	err := r.app.QueryRowContext(t.Context(), `
+	err := pgtest.Scan(t.Context(), r.app, tenant.String(), `
 		INSERT INTO registry.waiver
 			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
 		VALUES ($1, $2, $3, 'synthetic exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'), tstzrange($4, $5, '[)'), $6)
-		RETURNING id`, tenant, decision, scope, start, end, ticket).Scan(&id)
+		RETURNING id`, []any{tenant, decision, scope, start, end, ticket}, &id)
 	if err != nil {
 		t.Fatalf("waiver: %v", err)
 	}
@@ -204,7 +207,7 @@ func TestWaiverDoesNotApplyWhereTheDecisionNoLongerCovers(t *testing.T) {
 	stillCovered := now.Add(-20 * 24 * time.Hour)
 	stuckOut := now.Add(-2 * time.Hour)
 	beforeClose := mark(t, r.app)
-	if _, err := r.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, r.app, tenantA.String(), `
 		INSERT INTO registry.supersession (tenant_id, from_decision, to_decision, effective_at)
 		VALUES ($1, $2, $3, $4)`, tenantA, oldID, newID, effective); err != nil {
 		t.Fatalf("supersede: %v", err)
@@ -243,7 +246,7 @@ func TestWaiverDoesNotApplyWhereTheDecisionNoLongerCovers(t *testing.T) {
 
 func (r registryDB) decisionBetween(t *testing.T, tenant, id uuid.UUID, start, end time.Time, scopes ...uuid.UUID) {
 	t.Helper()
-	_, err := r.app.ExecContext(t.Context(), `
+	_, err := pgtest.Exec(t.Context(), r.app, tenant.String(), `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 		VALUES ($1, 1, $2, jsonb_build_object('id', $1::uuid::text), $3::uuid[], tstzrange($4, $5, '[)'))`,
 		id, tenant, scopes, start, end)
@@ -257,7 +260,7 @@ func TestNotifyRecordsEachDueOffsetOnce(t *testing.T) {
 	ctx := t.Context()
 	org := r.scope(t, tenantA, uuid.Nil, "org", "acme")
 	decision := uuid.MustParse("00000000-0000-4000-8000-0000000000d1")
-	if _, err := r.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, r.app, tenantA.String(), `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 		VALUES ($1, 1, $2, '{}', ARRAY[$3::uuid], tstzrange(clock_timestamp() - interval '50 days', NULL, '[)'))`,
 		decision, tenantA, org); err != nil {
@@ -267,11 +270,11 @@ func TestNotifyRecordsEachDueOffsetOnce(t *testing.T) {
 	insert := func(span, ticket string) uuid.UUID {
 		t.Helper()
 		var id uuid.UUID
-		err := r.app.QueryRowContext(ctx, `
+		err := pgtest.Scan(ctx, r.app, tenantA.String(), `
 			INSERT INTO registry.waiver
 				(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
 			VALUES ($1, $2, $3, 'synthetic exception', 'team:platform', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'), `+span+`, $4)
-			RETURNING id`, tenantA, decision, org, ticket).Scan(&id)
+			RETURNING id`, []any{tenantA, decision, org, ticket}, &id)
 		if err != nil {
 			t.Fatalf("waiver %s: %v", ticket, err)
 		}
@@ -306,23 +309,26 @@ func TestNotifyRecordsEachDueOffsetOnce(t *testing.T) {
 
 	offsets := func(id uuid.UUID) []int {
 		t.Helper()
-		rows, err := r.app.QueryContext(ctx, `
-			SELECT days_before FROM registry.waiver_notice
-			WHERE tenant_id = $1 AND waiver_id = $2
-			ORDER BY days_before`, tenantA, id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = rows.Close() }()
 		var got []int
-		for rows.Next() {
-			var days int
-			if err := rows.Scan(&days); err != nil {
-				t.Fatal(err)
+		err := pgtest.WithTenant(ctx, r.app, tenantA.String(), func(tx *sql.Tx) error {
+			rows, err := tx.QueryContext(ctx, `
+				SELECT days_before FROM registry.waiver_notice
+				WHERE tenant_id = $1 AND waiver_id = $2
+				ORDER BY days_before`, tenantA, id)
+			if err != nil {
+				return err
 			}
-			got = append(got, days)
-		}
-		if err := rows.Err(); err != nil {
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var days int
+				if err := rows.Scan(&days); err != nil {
+					return err
+				}
+				got = append(got, days)
+			}
+			return rows.Err()
+		})
+		if err != nil {
 			t.Fatal(err)
 		}
 		return got
@@ -337,9 +343,9 @@ func TestNotifyRecordsEachDueOffsetOnce(t *testing.T) {
 		t.Errorf("short waiver offsets = %v, want [0]", got)
 	}
 	var ticket string
-	if err := r.app.QueryRowContext(ctx, `
+	if err := pgtest.Scan(ctx, r.app, tenantA.String(), `
 		SELECT ticket_ref FROM registry.waiver_notice
-		WHERE tenant_id = $1 AND waiver_id = $2 AND days_before = 14`, tenantA, only14).Scan(&ticket); err != nil {
+		WHERE tenant_id = $1 AND waiver_id = $2 AND days_before = 14`, []any{tenantA, only14}, &ticket); err != nil {
 		t.Fatal(err)
 	}
 	if ticket != "TICKET-14" {
@@ -358,7 +364,7 @@ func TestApplyKeepsTheParentChainAsKnownBeforeAMove(t *testing.T) {
 	r.addWaiver(t, tenantA, decision, payments, "[2026-02-01,2026-04-01)", "TICKET-MOVE")
 
 	before := mark(t, r.admin)
-	if _, err := r.app.ExecContext(t.Context(), `
+	if _, err := pgtest.Exec(t.Context(), r.app, tenantA.String(), `
 		WITH cfg AS (SELECT set_config('ipso.tenant', $1::text, true))
 		UPDATE registry.scope AS s SET parent_id = $3 FROM cfg WHERE s.id = $2`, tenantA, repo, labs); err != nil {
 		t.Fatal(err)
@@ -392,7 +398,7 @@ func TestApplyStopsWaivingARetiredScope(t *testing.T) {
 	r.addWaiver(t, tenantA, decision, repo, "[2026-02-01,2026-04-01)", "TICKET-RETIRE")
 
 	before := mark(t, r.admin)
-	if _, err := r.app.ExecContext(t.Context(), `
+	if _, err := pgtest.Exec(t.Context(), r.app, tenantA.String(), `
 		WITH cfg AS (SELECT set_config('ipso.tenant', $1::text, true))
 		DELETE FROM registry.scope AS s USING cfg WHERE s.id = $2`, tenantA, repo); err != nil {
 		t.Fatal(err)

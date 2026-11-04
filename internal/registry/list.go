@@ -57,7 +57,7 @@ type Waiver struct {
 const decisionsPage = `
 SELECT DISTINCT ON (d.decision_id) d.decision_id, d.version, d.body
 FROM registry.decision_version_all d
-WHERE d.tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+WHERE d.tenant_id = ipso.current_tenant()
   AND d.valid_period @> $1::timestamptz
   AND d.sys_period @> $2::timestamptz
   AND ($3::uuid IS NULL OR d.decision_id < $3::uuid)
@@ -69,7 +69,7 @@ LIMIT $4`
 const scopesPage = `
 SELECT s.id, s.parent_id, s.kind, s.selector
 FROM registry.scope_all s
-WHERE s.tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+WHERE s.tenant_id = ipso.current_tenant()
   AND s.sys_period @> $1::timestamptz
   AND ($2::uuid IS NULL OR s.id < $2::uuid)
 ORDER BY s.id DESC
@@ -80,7 +80,7 @@ LIMIT $3`
 const waiversPage = `
 SELECT w.id, w.decision_id, w.scope_id, w.ticket_ref, lower(w.valid_period), upper(w.valid_period)
 FROM registry.waiver w
-WHERE w.tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+WHERE w.tenant_id = ipso.current_tenant()
   AND w.valid_period @> $1::timestamptz
   AND w.sys_period @> $2::timestamptz
   AND ($3::uuid IS NULL OR w.id < $3::uuid)

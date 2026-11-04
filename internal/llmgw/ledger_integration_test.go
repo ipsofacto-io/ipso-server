@@ -50,7 +50,7 @@ var november = time.Date(2026, time.November, 1, 0, 0, 0, 0, time.UTC)
 func usage(t *testing.T, db *sql.DB, tenant uuid.UUID, month time.Time) int64 {
 	t.Helper()
 	var tokens int64
-	err := db.QueryRowContext(t.Context(), `SELECT tokens FROM llm.usage WHERE tenant_id = $1 AND month = $2`, tenant, month).Scan(&tokens)
+	err := pgtest.Scan(t.Context(), db, tenant.String(), `SELECT tokens FROM llm.usage WHERE tenant_id = $1 AND month = $2`, []any{tenant, month}, &tokens)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0
 	}

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 )
 
 func fillDigest(b byte) (Fingerprint, string) {
@@ -40,7 +42,7 @@ func at(t *testing.T, r registryDB, literal string) time.Time {
 
 func (r registryDB) period(t *testing.T, tenant, decision uuid.UUID, valid string) {
 	t.Helper()
-	if _, err := r.app.ExecContext(t.Context(), `
+	if _, err := pgtest.Exec(t.Context(), r.app, tenant.String(), `
 		INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period)
 		VALUES ($1, $2, $3::text::tstzrange)`, tenant, decision, valid); err != nil {
 		t.Fatalf("period: %v", err)
@@ -49,7 +51,7 @@ func (r registryDB) period(t *testing.T, tenant, decision uuid.UUID, valid strin
 
 func (r registryDB) baseline(t *testing.T, tenant, decision uuid.UUID, repo string, hexes []string) {
 	t.Helper()
-	if _, err := r.app.ExecContext(t.Context(), `
+	if _, err := pgtest.Exec(t.Context(), r.app, tenant.String(), `
 		INSERT INTO registry.baseline (tenant_id, decision_id, repo, fingerprints)
 		VALUES ($1, $2, $3, (
 			SELECT coalesce(array_agg(decode(h, 'hex')), '{}'::bytea[])
@@ -213,7 +215,7 @@ func TestResolveFollowsASupersession(t *testing.T) {
 	r.decision(t, tenantA, newID, "[2026-01-01,)", org)
 
 	before := mark(t, r.admin)
-	if _, err := r.app.ExecContext(t.Context(), `
+	if _, err := pgtest.Exec(t.Context(), r.app, tenantA.String(), `
 		INSERT INTO registry.supersession (tenant_id, from_decision, to_decision, effective_at)
 		VALUES ($1, $2, $3, $4::timestamptz)`, tenantA, oldID, newID, "2026-06-01"); err != nil {
 		t.Fatal(err)

@@ -150,7 +150,7 @@ func TestAuditGolden(t *testing.T) {
 				t.Fatalf("step %d: unknown decision %q", i, step.Correct)
 			}
 			d.version++
-			if _, err := r.app.ExecContext(ctx, `
+			if _, err := pgtest.Exec(ctx, r.app, d.tenant.String(), `
 				UPDATE registry.decision_version
 				SET version = $3, valid_period = $4::text::tstzrange
 				WHERE tenant_id = $1 AND decision_id = $2`,
@@ -163,7 +163,7 @@ func TestAuditGolden(t *testing.T) {
 			if d == nil {
 				t.Fatalf("step %d: unknown decision %q", i, step.Remove)
 			}
-			if _, err := r.app.ExecContext(ctx, `
+			if _, err := pgtest.Exec(ctx, r.app, d.tenant.String(), `
 				DELETE FROM registry.decision_version
 				WHERE tenant_id = $1 AND decision_id = $2`, d.tenant, d.id); err != nil {
 				t.Fatalf("step %d: remove %s: %v", i, step.Remove, err)
@@ -179,7 +179,7 @@ func TestAuditGolden(t *testing.T) {
 			if err != nil {
 				t.Fatalf("step %d: at: %v", i, err)
 			}
-			if _, err := r.app.ExecContext(ctx, `
+			if _, err := pgtest.Exec(ctx, r.app, from.tenant.String(), `
 				INSERT INTO registry.supersession (tenant_id, from_decision, to_decision, effective_at)
 				VALUES ($1, $2, $3, $4)`, from.tenant, from.id, to.id, at); err != nil {
 				t.Fatalf("step %d: supersede: %v", i, err)
@@ -192,11 +192,11 @@ func TestAuditGolden(t *testing.T) {
 				t.Fatalf("step %d: unknown waiver %s", i, step.Waiver)
 			}
 			var id uuid.UUID
-			if err := r.app.QueryRowContext(ctx, `
+			if err := pgtest.Scan(ctx, r.app, d.tenant.String(), `
 				INSERT INTO registry.waiver
 					(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
 				VALUES ($1, $2, $3, 'fixture', 'team:payments', (SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND name = 'synthetic approver'), $4::text::tstzrange, $5)
-				RETURNING id`, d.tenant, d.id, scope, step.Valid, step.Ticket).Scan(&id); err != nil {
+				RETURNING id`, []any{d.tenant, d.id, scope, step.Valid, step.Ticket}, &id); err != nil {
 				t.Fatalf("step %d: waiver %s: %v", i, step.Waiver, err)
 			}
 			waivers[step.Waiver] = id
@@ -586,7 +586,7 @@ func newRegistryDB(t *testing.T) registryDB {
 	}
 	app := db.Open(t, pgtest.App)
 	for _, tenant := range []uuid.UUID{tenantA, tenantB} {
-		if _, err := app.ExecContext(t.Context(), `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'synthetic approver')`, tenant); err != nil {
+		if _, err := pgtest.Exec(t.Context(), app, tenant.String(), `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'synthetic approver')`, tenant); err != nil {
 			t.Fatalf("insert the approver: %v", err)
 		}
 	}
@@ -600,9 +600,9 @@ func (r registryDB) scope(t *testing.T, tenant, parent uuid.UUID, kind, selector
 		parentArg = parent
 	}
 	var id uuid.UUID
-	err := r.app.QueryRowContext(t.Context(), `
+	err := pgtest.Scan(t.Context(), r.app, tenant.String(), `
 		INSERT INTO registry.scope (tenant_id, parent_id, kind, selector)
-		VALUES ($1, $2, $3, $4) RETURNING id`, tenant, parentArg, kind, selector).Scan(&id)
+		VALUES ($1, $2, $3, $4) RETURNING id`, []any{tenant, parentArg, kind, selector}, &id)
 	if err != nil {
 		t.Fatalf("insert %s scope %q: %v", kind, selector, err)
 	}
@@ -611,7 +611,7 @@ func (r registryDB) scope(t *testing.T, tenant, parent uuid.UUID, kind, selector
 
 func (r registryDB) decision(t *testing.T, tenant, id uuid.UUID, valid string, scopes ...uuid.UUID) {
 	t.Helper()
-	_, err := r.app.ExecContext(t.Context(), `
+	_, err := pgtest.Exec(t.Context(), r.app, tenant.String(), `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 		VALUES ($1, 1, $2, jsonb_build_object('id', $1::uuid::text), $3::uuid[], $4::text::tstzrange)`,
 		id, tenant, scopes, valid)

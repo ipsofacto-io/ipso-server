@@ -28,14 +28,14 @@ func (s schema) addDecision(t *testing.T, id, valid string) {
 
 func (s schema) addDecisionVersion(t *testing.T, id string, version int, valid string) {
 	t.Helper()
-	if _, err := s.app.ExecContext(t.Context(), insertVersion, id, version, tenantA, valid, s.orgs[tenantA]); err != nil {
+	if _, err := pgtest.Exec(t.Context(), s.app, tenantA, insertVersion, id, version, tenantA, valid, s.orgs[tenantA]); err != nil {
 		t.Fatalf("insert %s %s: %v", id, valid, err)
 	}
 }
 
 func (s schema) trySupersede(t *testing.T, from, to, at string) error {
 	t.Helper()
-	_, err := s.app.ExecContext(t.Context(), `
+	_, err := pgtest.Exec(t.Context(), s.app, tenantA, `
 		INSERT INTO registry.supersession (tenant_id, from_decision, to_decision, effective_at)
 		VALUES ($1::uuid, $2::uuid, $3::uuid, $4::timestamptz)`, tenantA, from, to, at)
 	return err
@@ -50,7 +50,7 @@ func (s schema) supersede(t *testing.T, from, to, at string) {
 
 func (s schema) addPeriod(t *testing.T, id, valid string) {
 	t.Helper()
-	if _, err := s.app.ExecContext(t.Context(), `
+	if _, err := pgtest.Exec(t.Context(), s.app, tenantA, `
 		INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period)
 		VALUES ($1::uuid, $2::uuid, $3::text::tstzrange)`, tenantA, id, valid); err != nil {
 		t.Fatalf("period %s: %v", id, err)
@@ -60,7 +60,7 @@ func (s schema) addPeriod(t *testing.T, id, valid string) {
 // addBaseline records hex fingerprints. Each hex string is one digest.
 func (s schema) addBaseline(t *testing.T, id, repo string, hexes []string) error {
 	t.Helper()
-	_, err := s.app.ExecContext(t.Context(), `
+	_, err := pgtest.Exec(t.Context(), s.app, tenantA, `
 		INSERT INTO registry.baseline (tenant_id, decision_id, repo, fingerprints)
 		VALUES ($1::uuid, $2::uuid, $3, (
 			SELECT coalesce(array_agg(decode(h, 'hex')), '{}'::bytea[])
@@ -262,7 +262,7 @@ func TestSupersessionDoesNotCloseAnotherTenant(t *testing.T) {
 	s := migrated(t)
 	s.addDecision(t, oldDecision, "[2026-01-01,)")
 	s.addDecision(t, newDecision, "[2026-01-01,)")
-	if _, err := s.app.ExecContext(t.Context(), insertVersion, oldDecision, 1, tenantB, "[2026-01-01,)", s.orgs[tenantB]); err != nil {
+	if _, err := pgtest.Exec(t.Context(), s.app, tenantB, insertVersion, oldDecision, 1, tenantB, "[2026-01-01,)", s.orgs[tenantB]); err != nil {
 		t.Fatalf("tenant B: %v", err)
 	}
 	s.supersede(t, oldDecision, newDecision, atJune)
@@ -336,7 +336,7 @@ func TestConcurrentSupersessionsCannotCycle(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			_, errs[i] = s.app.ExecContext(ctx, `
+			_, errs[i] = pgtest.Exec(ctx, s.app, tenantA, `
 				INSERT INTO registry.supersession (tenant_id, from_decision, to_decision, effective_at)
 				VALUES ($1::uuid, $2::uuid, $3::uuid, $4::timestamptz)`,
 				tenantA, pairs[i][0], pairs[i][1], atJune)
@@ -389,6 +389,9 @@ func TestSerializableSupersessionsCannotCycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := conn.ExecContext(ctx, `BEGIN ISOLATION LEVEL SERIALIZABLE`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.ExecContext(ctx, `SELECT set_config('ipso.tenant', $1, true)`, tenantA); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -463,7 +466,7 @@ func TestCallerCannotBackdateTheNewTables(t *testing.T) {
 	// baseline the third. The supersession does not depend on them.
 	for _, ins := range inserts {
 		t.Run(ins.name, func(t *testing.T) {
-			if _, err := s.app.ExecContext(ctx, ins.query, ins.args...); err != nil {
+			if _, err := pgtest.Exec(ctx, s.app, tenantA, ins.query, ins.args...); err != nil {
 				t.Fatalf("insert: %v", err)
 			}
 		})
@@ -510,14 +513,14 @@ func TestApplicationRoleCannotChangeSupersessionOrBaselines(t *testing.T) {
 	}
 	for _, statement := range statements {
 		t.Run(statement, func(t *testing.T) {
-			_, err := s.app.ExecContext(ctx, statement)
+			_, err := pgtest.Exec(ctx, s.app, tenantA, statement)
 			requireSQLState(t, err, "42501")
 		})
 	}
-	if n := count(t, s.app, `SELECT count(*) FROM registry.supersession`); n != 1 {
+	if n := countApp(t, s.app, `SELECT count(*) FROM registry.supersession`); n != 1 {
 		t.Errorf("supersessions visible = %d, want 1", n)
 	}
-	if n := count(t, s.app, `SELECT count(*) FROM registry.baseline`); n != 1 {
+	if n := countApp(t, s.app, `SELECT count(*) FROM registry.baseline`); n != 1 {
 		t.Errorf("baselines visible = %d, want 1", n)
 	}
 }
@@ -569,13 +572,13 @@ func TestGrandfatherPeriodAndBaselineRules(t *testing.T) {
 	s.addPeriod(t, oldDecision, "[2026-01-01,2026-06-01)")
 
 	t.Run("a second period for one decision", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period)
 			VALUES ($1::uuid, $2::uuid, '[2026-02-01,)')`, tenantA, newDecision)
 		requireSQLState(t, err, "23505")
 	})
 	t.Run("an empty period", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period)
 			VALUES ($1::uuid, $2::uuid, '[2026-01-01,2026-01-01)')`, tenantA, thirdDecision)
 		requireSQLState(t, err, "23514")
@@ -584,7 +587,7 @@ func TestGrandfatherPeriodAndBaselineRules(t *testing.T) {
 		}
 	})
 	t.Run("a period with no start", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period)
 			VALUES ($1::uuid, $2::uuid, '[,)')`, tenantA, thirdDecision)
 		requireSQLState(t, err, "23514")
@@ -627,7 +630,7 @@ func TestGrandfatherPeriodAndBaselineRules(t *testing.T) {
 		requireCheck(t, s.addBaseline(t, oldDecision, "acme/payments", []string{digest, digest}), "repeated")
 	})
 	t.Run("a null fingerprint", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			INSERT INTO registry.baseline (tenant_id, decision_id, repo, fingerprints)
 			VALUES ($1::uuid, $2::uuid, 'acme/payments', ARRAY[decode($3, 'hex'), NULL]::bytea[])`,
 			tenantA, oldDecision, digest)
@@ -639,7 +642,7 @@ func TestBaselineHoldsAtMost100000Fingerprints(t *testing.T) {
 	s := migrated(t)
 	s.addPeriod(t, newDecision, "[2026-01-01,)")
 	insert := func(n int) error {
-		_, err := s.app.ExecContext(t.Context(), `
+		_, err := pgtest.Exec(t.Context(), s.app, tenantA, `
 			INSERT INTO registry.baseline (tenant_id, decision_id, repo, fingerprints)
 			SELECT $1::uuid, $2::uuid, 'acme/payments',
 			       array_agg(decode(lpad(to_hex(g), 64, '0'), 'hex'))
@@ -649,7 +652,7 @@ func TestBaselineHoldsAtMost100000Fingerprints(t *testing.T) {
 	if err := insert(100000); err != nil {
 		t.Fatalf("100000 fingerprints: %v", err)
 	}
-	_, err := s.app.ExecContext(t.Context(), `DELETE FROM registry.baseline`)
+	_, err := pgtest.Exec(t.Context(), s.app, tenantA, `DELETE FROM registry.baseline`)
 	// The application role cannot delete. Use the owner to make room for the over-limit insert.
 	if err == nil {
 		t.Fatal("the application role deleted a baseline")

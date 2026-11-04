@@ -83,6 +83,10 @@ func Start(ctx context.Context) (*Server, error) {
 		_ = s.Terminate()
 		return nil, err
 	}
+	if err := s.installTenantFunction(ctx); err != nil {
+		_ = s.Terminate()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -117,6 +121,32 @@ func (s *Server) createRoles(ctx context.Context) error {
 	} {
 		if _, err := admin.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("%s: %w", statement, err)
+		}
+	}
+	return nil
+}
+
+// installTenantFunction creates ipso.current_tenant() in template1. Only a superuser
+// can mark a function leakproof, and the migration role is not one. New databases
+// copy template1, so every test database has the function before migrate runs.
+func (s *Server) installTenantFunction(ctx context.Context) error {
+	admin, err := sql.Open("pgx", s.dsn(Admin, "template1", ""))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = admin.Close() }()
+	for _, statement := range []string{
+		`CREATE SCHEMA ipso`,
+		`CREATE FUNCTION ipso.current_tenant() RETURNS uuid
+		    LANGUAGE sql STABLE LEAKPROOF
+		    SET search_path = pg_catalog, pg_temp
+		 AS $$ SELECT nullif(current_setting('ipso.tenant', true), '')::uuid $$`,
+		`REVOKE ALL ON FUNCTION ipso.current_tenant() FROM PUBLIC`,
+		`GRANT USAGE ON SCHEMA ipso TO ipso_app, ipso_migrate`,
+		`GRANT EXECUTE ON FUNCTION ipso.current_tenant() TO ipso_app, ipso_migrate`,
+	} {
+		if _, err := admin.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("install tenant function: %w", err)
 		}
 	}
 	return nil

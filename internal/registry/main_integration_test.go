@@ -54,7 +54,7 @@ func newRegistryDB(t *testing.T) registryDB {
 	}
 	app := db.Open(t, pgtest.App)
 	for _, tenant := range []uuid.UUID{tenantA, tenantB} {
-		if _, err := app.ExecContext(t.Context(), `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'synthetic approver')`, tenant); err != nil {
+		if _, err := pgtest.Exec(t.Context(), app, tenant.String(), `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'synthetic approver')`, tenant); err != nil {
 			t.Fatalf("insert the approver: %v", err)
 		}
 	}
@@ -68,9 +68,9 @@ func (r registryDB) tryScope(ctx context.Context, tenant, parent uuid.UUID, kind
 		parentArg = parent
 	}
 	var id uuid.UUID
-	err := r.app.QueryRowContext(ctx, `
+	err := pgtest.Scan(ctx, r.app, tenant.String(), `
 		INSERT INTO registry.scope (tenant_id, parent_id, kind, selector)
-		VALUES ($1, $2, $3, $4) RETURNING id`, tenant, parentArg, kind, selector).Scan(&id)
+		VALUES ($1, $2, $3, $4) RETURNING id`, []any{tenant, parentArg, kind, selector}, &id)
 	return id, err
 }
 
@@ -87,7 +87,7 @@ func (r registryDB) scope(t *testing.T, tenant, parent uuid.UUID, kind, selector
 // tstzrange literal such as "[2026-01-01,)".
 func (r registryDB) decision(t *testing.T, tenant, id uuid.UUID, valid string, scopes ...uuid.UUID) {
 	t.Helper()
-	_, err := r.app.ExecContext(t.Context(), `
+	_, err := pgtest.Exec(t.Context(), r.app, tenant.String(), `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 		VALUES ($1, 1, $2, jsonb_build_object('id', $1::uuid::text), $3::uuid[], $4::text::tstzrange)`,
 		id, tenant, scopes, valid)

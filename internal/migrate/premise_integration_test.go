@@ -22,7 +22,7 @@ const (
 
 func (s schema) insertPremiseVersion(t *testing.T, decisionID, tenant string, version int, valid, body string) {
 	t.Helper()
-	if _, err := s.app.ExecContext(t.Context(), `
+	if _, err := pgtest.Exec(t.Context(), s.app, tenant, `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 		VALUES ($1::uuid, $2, $3::uuid, $4::jsonb, ARRAY[$5::uuid], $6::text::tstzrange)`,
 		decisionID, version, tenant, body, s.orgs[tenant], valid); err != nil {
@@ -49,13 +49,13 @@ func (s schema) tryEvaluation(t *testing.T, tenant, decisionID, premise, result,
 		hash = ""
 	}
 	var id string
-	err := s.app.QueryRowContext(t.Context(), `
+	err := pgtest.Scan(t.Context(), s.app, tenant, `
 		INSERT INTO registry.premise_evaluation
 			(tenant_id, decision_id, premise_id, result, url, pointer, expected, observed, body_sha256)
 		VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, '16'::jsonb,
 		        nullif($7, '')::jsonb, decode(nullif($8, ''), 'hex'))
 		RETURNING id::text`,
-		tenant, decisionID, premise, result, url, pointer, observed, hash).Scan(&id)
+		[]any{tenant, decisionID, premise, result, url, pointer, observed, hash}, &id)
 	return id, err
 }
 
@@ -71,17 +71,17 @@ func (s schema) insertReason(t *testing.T, tenant, decisionID, premise, evaluati
 func (s schema) tryReason(t *testing.T, tenant, decisionID, premise, evaluationID string) (string, error) {
 	t.Helper()
 	var id string
-	err := s.app.QueryRowContext(t.Context(), `
+	err := pgtest.Scan(t.Context(), s.app, tenant, `
 		INSERT INTO registry.premise_reason (tenant_id, decision_id, premise_id, evaluation_id)
 		VALUES ($1::uuid, $2::uuid, $3, $4::uuid)
 		RETURNING id::text`,
-		tenant, decisionID, premise, evaluationID).Scan(&id)
+		[]any{tenant, decisionID, premise, evaluationID}, &id)
 	return id, err
 }
 
 func (s schema) openReasons(t *testing.T, tenant, decisionID, premise string) int {
 	t.Helper()
-	return count(t, s.app, `
+	return countAs(t, s.app, tenant, `
 		SELECT count(*)
 		FROM registry.premise_reason r
 		WHERE r.tenant_id = $1::uuid
@@ -131,7 +131,7 @@ func TestPremiseObjectsExist(t *testing.T) {
 	if !match {
 		t.Error("a body with no premises key was not empty")
 	}
-	_, err := s.app.ExecContext(ctx, `SELECT registry.premise_ids('{"premises":{"id":"x"}}'::jsonb)`)
+	_, err := pgtest.Exec(ctx, s.app, tenantA, `SELECT registry.premise_ids('{"premises":{"id":"x"}}'::jsonb)`)
 	requireCheck(t, err, "not an array")
 }
 
@@ -141,12 +141,12 @@ func TestApplicationRoleCannotChangePremiseRows(t *testing.T) {
 	s.insertPremiseVersion(t, decision, tenantA, 1, "[2026-01-01,)", premisesBoth)
 	evaluationID := s.insertEvaluation(t, tenantA, decision, "postgres-major", "fail")
 	reasonID := s.insertReason(t, tenantA, decision, "postgres-major", evaluationID)
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		INSERT INTO registry.premise_clearance (tenant_id, reason_id, kind)
 		VALUES ($1::uuid, $2::uuid, 'human')`, tenantA, reasonID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		INSERT INTO registry.premise_host_allow (tenant_id, host, allowed)
 		VALUES ($1::uuid, 'example.com', true)`, tenantA); err != nil {
 		t.Fatal(err)
@@ -174,7 +174,7 @@ func TestApplicationRoleCannotChangePremiseRows(t *testing.T) {
 	}
 	for _, statement := range statements {
 		t.Run(statement, func(t *testing.T) {
-			_, err := s.app.ExecContext(ctx, statement)
+			_, err := pgtest.Exec(ctx, s.app, tenantA, statement)
 			requireSQLState(t, err, "42501")
 		})
 	}
@@ -182,7 +182,7 @@ func TestApplicationRoleCannotChangePremiseRows(t *testing.T) {
 		"registry.premise_evaluation", "registry.premise_reason",
 		"registry.premise_clearance", "registry.premise_host_allow",
 	} {
-		if n := count(t, s.app, `SELECT count(*) FROM `+table); n != 1 {
+		if n := countApp(t, s.app, `SELECT count(*) FROM `+table); n != 1 {
 			t.Errorf("%s visible = %d, want 1", table, n)
 		}
 	}
@@ -242,30 +242,30 @@ func TestCallerCannotBackdatePremiseRows(t *testing.T) {
 	before := dbNow(t, s.admin)
 
 	var evaluationID string
-	if err := s.app.QueryRowContext(ctx, `
+	if err := pgtest.Scan(ctx, s.app, tenantA, `
 		INSERT INTO registry.premise_evaluation
 			(tenant_id, decision_id, premise_id, result, url, pointer, expected, observed, body_sha256, sys_period)
 		VALUES ($1::uuid, $2::uuid, 'postgres-major', 'fail', $3, $4, '16'::jsonb, '15'::jsonb,
 		        decode($5, 'hex'), tstzrange('2000-01-01'::timestamptz, NULL))
 		RETURNING id::text`,
-		tenantA, decision, premiseURL, premisePointer, premiseSHA).Scan(&evaluationID); err != nil {
+		[]any{tenantA, decision, premiseURL, premisePointer, premiseSHA}, &evaluationID); err != nil {
 		t.Fatal(err)
 	}
 	var reasonID string
-	if err := s.app.QueryRowContext(ctx, `
+	if err := pgtest.Scan(ctx, s.app, tenantA, `
 		INSERT INTO registry.premise_reason
 			(tenant_id, decision_id, premise_id, evaluation_id, sys_period)
 		VALUES ($1::uuid, $2::uuid, 'postgres-major', $3::uuid, tstzrange('2000-01-01'::timestamptz, NULL))
-		RETURNING id::text`, tenantA, decision, evaluationID).Scan(&reasonID); err != nil {
+		RETURNING id::text`, []any{tenantA, decision, evaluationID}, &reasonID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		INSERT INTO registry.premise_clearance (tenant_id, reason_id, kind, sys_period)
 		VALUES ($1::uuid, $2::uuid, 'human', tstzrange('2000-01-01'::timestamptz, NULL))`,
 		tenantA, reasonID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		INSERT INTO registry.premise_host_allow (tenant_id, host, allowed, sys_period)
 		VALUES ($1::uuid, 'Example.COM', true, tstzrange('2000-01-01'::timestamptz, NULL))`,
 		tenantA); err != nil {
@@ -288,8 +288,8 @@ func TestCallerCannotBackdatePremiseRows(t *testing.T) {
 		}
 	}
 	var host string
-	if err := s.app.QueryRowContext(ctx, `
-		SELECT host FROM registry.premise_host_allow WHERE tenant_id = $1::uuid`, tenantA).Scan(&host); err != nil {
+	if err := pgtest.Scan(ctx, s.app, tenantA, `
+		SELECT host FROM registry.premise_host_allow WHERE tenant_id = $1::uuid`, []any{tenantA}, &host); err != nil {
 		t.Fatal(err)
 	}
 	if host != "example.com" {
@@ -316,7 +316,7 @@ func TestPremiseReasonRules(t *testing.T) {
 		if n := s.openReasons(t, tenantA, decision, "postgres-major"); n != 1 {
 			t.Errorf("open reasons = %d, want 1", n)
 		}
-		if n := count(t, s.app, `SELECT count(*) FROM registry.premise_clearance`); n != 0 {
+		if n := countApp(t, s.app, `SELECT count(*) FROM registry.premise_clearance`); n != 0 {
 			t.Errorf("clearances = %d, want 0", n)
 		}
 	})
@@ -340,13 +340,13 @@ func TestPremiseReasonRules(t *testing.T) {
 		requireCheck(t, err, "does not name a fail")
 	})
 	t.Run("premise-removed while the id remains", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			INSERT INTO registry.premise_clearance (tenant_id, reason_id, kind)
 			VALUES ($1::uuid, $2::uuid, 'premise-removed')`, tenantA, majorReason)
 		requireCheck(t, err, "still on a current version")
 	})
 
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		INSERT INTO registry.premise_clearance (tenant_id, reason_id, kind)
 		VALUES ($1::uuid, $2::uuid, 'human')`, tenantA, majorReason); err != nil {
 		t.Fatal(err)
@@ -362,7 +362,7 @@ func TestPremiseReasonRules(t *testing.T) {
 		requireCheck(t, err, "latest")
 	})
 	t.Run("a second clearance", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			INSERT INTO registry.premise_clearance (tenant_id, reason_id, kind)
 			VALUES ($1::uuid, $2::uuid, 'human')`, tenantA, majorReason)
 		requireSQLState(t, err, "23505")
@@ -392,9 +392,9 @@ func TestDroppingAPremiseClearsItsOpenReason(t *testing.T) {
 	windowReason := s.insertReason(t, tenantA, decision, "backup-window", windowFail)
 
 	var periodBefore string
-	if err := s.app.QueryRowContext(ctx, `
+	if err := pgtest.Scan(ctx, s.app, tenantA, `
 		SELECT valid_period::text FROM registry.decision_version
-		WHERE tenant_id = $1::uuid AND decision_id = $2::uuid`, tenantA, decision).Scan(&periodBefore); err != nil {
+		WHERE tenant_id = $1::uuid AND decision_id = $2::uuid`, []any{tenantA, decision}, &periodBefore); err != nil {
 		t.Fatal(err)
 	}
 
@@ -403,6 +403,9 @@ func TestDroppingAPremiseClearsItsOpenReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('ipso.tenant', $1, true)`, tenantA); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE registry.decision_version
 		SET body = $1::jsonb
@@ -454,7 +457,7 @@ func TestDroppingAPremiseAnotherRowStillHasKeepsTheReason(t *testing.T) {
 	s.insertReason(t, tenantA, decision, "postgres-major", majorFail)
 	windowReason := s.insertReason(t, tenantA, decision, "backup-window", windowFail)
 
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		UPDATE registry.decision_version
 		SET body = $1::jsonb
 		WHERE tenant_id = $2::uuid AND decision_id = $3::uuid AND version = 1`,
@@ -465,9 +468,9 @@ func TestDroppingAPremiseAnotherRowStillHasKeepsTheReason(t *testing.T) {
 		t.Errorf("postgres-major open reasons = %d, want 1", n)
 	}
 	var kind string
-	if err := s.app.QueryRowContext(ctx, `
+	if err := pgtest.Scan(ctx, s.app, tenantA, `
 		SELECT kind FROM registry.premise_clearance
-		WHERE tenant_id = $1::uuid AND reason_id = $2::uuid`, tenantA, windowReason).Scan(&kind); err != nil {
+		WHERE tenant_id = $1::uuid AND reason_id = $2::uuid`, []any{tenantA, windowReason}, &kind); err != nil {
 		t.Fatal(err)
 	}
 	if kind != "premise-removed" {
@@ -482,11 +485,11 @@ func TestEvaluationLeavesTheVersionUntouched(t *testing.T) {
 
 	var periodBefore string
 	var sameBefore bool
-	if err := s.app.QueryRowContext(ctx, `
+	if err := pgtest.Scan(ctx, s.app, tenantA, `
 		SELECT valid_period::text, body = $1::jsonb
 		FROM registry.decision_version
 		WHERE tenant_id = $2::uuid AND decision_id = $3::uuid`,
-		premisesBoth, tenantA, decision).Scan(&periodBefore, &sameBefore); err != nil {
+		[]any{premisesBoth, tenantA, decision}, &periodBefore, &sameBefore); err != nil {
 		t.Fatal(err)
 	}
 	if !sameBefore {
@@ -497,7 +500,7 @@ func TestEvaluationLeavesTheVersionUntouched(t *testing.T) {
 	reasonID := s.insertReason(t, tenantA, decision, "postgres-major", failID)
 	s.insertEvaluation(t, tenantA, decision, "postgres-major", "pass")
 	s.insertEvaluation(t, tenantA, decision, "backup-window", "error")
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		INSERT INTO registry.premise_clearance (tenant_id, reason_id, kind)
 		VALUES ($1::uuid, $2::uuid, 'human')`, tenantA, reasonID); err != nil {
 		t.Fatal(err)
@@ -505,11 +508,11 @@ func TestEvaluationLeavesTheVersionUntouched(t *testing.T) {
 
 	var periodAfter, status string
 	var sameAfter bool
-	if err := s.app.QueryRowContext(ctx, `
+	if err := pgtest.Scan(ctx, s.app, tenantA, `
 		SELECT valid_period::text, body = $1::jsonb, body->>'status'
 		FROM registry.decision_version
 		WHERE tenant_id = $2::uuid AND decision_id = $3::uuid`,
-		premisesBoth, tenantA, decision).Scan(&periodAfter, &sameAfter, &status); err != nil {
+		[]any{premisesBoth, tenantA, decision}, &periodAfter, &sameAfter, &status); err != nil {
 		t.Fatal(err)
 	}
 	if !sameAfter || periodAfter != periodBefore || status != "verified" {
@@ -550,7 +553,7 @@ func TestPremiseValueChecks(t *testing.T) {
 		})
 	}
 	t.Run("an observed value over 1024 bytes", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			INSERT INTO registry.premise_evaluation
 				(tenant_id, decision_id, premise_id, result, url, pointer, expected, observed, body_sha256)
 			VALUES ($1::uuid, $2::uuid, 'postgres-major', 'pass', $3, $4, '16'::jsonb,
@@ -570,15 +573,15 @@ func TestPremiseValueChecks(t *testing.T) {
 		}
 	})
 	t.Run("premises that are not an array", func(t *testing.T) {
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			UPDATE registry.decision_version
 			SET body = '{"status":"verified","premises":{"id":"postgres-major"}}'::jsonb
 			WHERE tenant_id = $1::uuid AND decision_id = $2::uuid`, tenantA, decision)
 		requireCheck(t, err, "not an array")
 		var status string
-		if err := s.app.QueryRowContext(ctx, `
+		if err := pgtest.Scan(ctx, s.app, tenantA, `
 			SELECT body->>'status' FROM registry.decision_version
-			WHERE tenant_id = $1::uuid AND decision_id = $2::uuid`, tenantA, decision).Scan(&status); err != nil {
+			WHERE tenant_id = $1::uuid AND decision_id = $2::uuid`, []any{tenantA, decision}, &status); err != nil {
 			t.Fatal(err)
 		}
 		if status != "verified" {
@@ -587,7 +590,7 @@ func TestPremiseValueChecks(t *testing.T) {
 	})
 	for _, host := range []string{"localhost", "1.2.3.4", "not a host"} {
 		t.Run("host "+host, func(t *testing.T) {
-			_, err := s.app.ExecContext(ctx, `
+			_, err := pgtest.Exec(ctx, s.app, tenantA, `
 				INSERT INTO registry.premise_host_allow (tenant_id, host, allowed)
 				VALUES ($1::uuid, $2, true)`, tenantA, host)
 			requireSQLState(t, err, "23514")
@@ -601,28 +604,28 @@ func TestPremiseValueChecks(t *testing.T) {
 func TestAllowlistKeepsEveryRowAndTheLatestWins(t *testing.T) {
 	s := migrated(t)
 	ctx := t.Context()
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		INSERT INTO registry.premise_host_allow (tenant_id, host, allowed)
 		VALUES ($1::uuid, 'Example.COM', true)`, tenantA); err != nil {
 		t.Fatal(err)
 	}
 	sleep(t, s.admin)
-	if _, err := s.app.ExecContext(ctx, `
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `
 		INSERT INTO registry.premise_host_allow (tenant_id, host, allowed)
 		VALUES ($1::uuid, 'example.com', false)`, tenantA); err != nil {
 		t.Fatal(err)
 	}
-	if n := count(t, s.app, `
+	if n := countApp(t, s.app, `
 		SELECT count(*) FROM registry.premise_host_allow
 		WHERE tenant_id = $1::uuid AND host = 'example.com'`, tenantA); n != 2 {
 		t.Fatalf("rows = %d, want 2", n)
 	}
 	var allowed bool
-	if err := s.app.QueryRowContext(ctx, `
+	if err := pgtest.Scan(ctx, s.app, tenantA, `
 		SELECT allowed FROM registry.premise_host_allow
 		WHERE tenant_id = $1::uuid AND host = 'example.com'
 		ORDER BY lower(sys_period) DESC, id DESC
-		LIMIT 1`, tenantA).Scan(&allowed); err != nil {
+		LIMIT 1`, []any{tenantA}, &allowed); err != nil {
 		t.Fatal(err)
 	}
 	if allowed {

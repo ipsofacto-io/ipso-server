@@ -14,7 +14,7 @@ import (
 const decisionByRef = `
 SELECT DISTINCT ON (d.decision_id) d.decision_id, d.version, d.body
 FROM registry.decision_version_all d
-WHERE d.tenant_id = nullif(current_setting('ipso.tenant', true), '')::uuid
+WHERE d.tenant_id = ipso.current_tenant()
   AND (d.decision_id::text = $1 OR d.body->>'slug' = $1)
   AND d.valid_period @> $2::timestamptz
   AND d.sys_period @> $3::timestamptz

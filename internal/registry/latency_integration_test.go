@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 )
 
 const (
@@ -66,7 +68,7 @@ func seedTenant(t *testing.T, r registryDB, tenant uuid.UUID) seeded {
 	}
 
 	// Two scopes per decision, spread over the whole tree.
-	_, err := r.app.ExecContext(t.Context(), `
+	_, err := pgtest.Exec(t.Context(), r.app, tenant.String(), `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
 		SELECT gen_random_uuid(), 1, $1::uuid, jsonb_build_object('n', g),
 		       ARRAY[($2::uuid[])[1 + (g * 7) % cardinality($2::uuid[])],
@@ -76,7 +78,7 @@ func seedTenant(t *testing.T, r registryDB, tenant uuid.UUID) seeded {
 	if err != nil {
 		t.Fatalf("seed decisions: %v", err)
 	}
-	if _, err := r.app.ExecContext(t.Context(), `UPDATE registry.decision_version SET body = body || '{"revised": true}' WHERE tenant_id = $1`, tenant); err != nil {
+	if _, err := pgtest.Exec(t.Context(), r.app, tenant.String(), `UPDATE registry.decision_version SET body = body || '{"revised": true}' WHERE tenant_id = $1`, tenant); err != nil {
 		t.Fatalf("seed history: %v", err)
 	}
 	return s

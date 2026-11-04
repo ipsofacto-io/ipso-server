@@ -42,6 +42,7 @@ func TestPropertyCurrentValidPeriodsDoNotOverlap(t *testing.T) {
 		defer func() { _ = tx.Rollback() }()
 
 		tenant := rapid.SampledFrom([]string{tenantA, tenantB}).Draw(rt, "tenant")
+		propTenant(rt, tx, tenant)
 		start := rapid.IntRange(0, 800).Draw(rt, "start")
 		length := rapid.IntRange(1, 30).Draw(rt, "length")
 		offset := rapid.IntRange(0, length-1).Draw(rt, "offset")
@@ -99,6 +100,7 @@ func TestPropertyScopeRefsDifferAcrossVersions(t *testing.T) {
 		defer func() { _ = tx.Rollback() }()
 
 		tenant := rapid.SampledFrom([]string{tenantA, tenantB}).Draw(rt, "tenant")
+		propTenant(rt, tx, tenant)
 		firstMask := rapid.SampledFrom(scopeMasks).Draw(rt, "firstRefs")
 		secondMask := propOtherMask(rt, "secondRefs", firstMask)
 		correctedMask := propOtherMask(rt, "correctedRefs", firstMask)
@@ -155,6 +157,7 @@ func TestPropertyTransactionTimeMovesForward(t *testing.T) {
 		defer func() { _ = tx.Rollback() }()
 
 		tenant := rapid.SampledFrom([]string{tenantA, tenantB}).Draw(rt, "tenant")
+		propTenant(rt, tx, tenant)
 		insertPast := propPast(rt, "insert")
 		updatePast := propPast(rt, "update")
 		if updatePast == insertPast {
@@ -212,6 +215,7 @@ func TestPropertyAsOfReadIsStable(t *testing.T) {
 		defer func() { _ = tx.Rollback() }()
 
 		tenant := rapid.SampledFrom([]string{tenantA, tenantB}).Draw(rt, "tenant")
+		propTenant(rt, tx, tenant)
 		start := rapid.IntRange(0, 800).Draw(rt, "start")
 		lead := rapid.IntRange(0, 30).Draw(rt, "lead")
 		statement := "changed" + rapid.StringMatching(`[a-z]{1,8}`).Draw(rt, "statement")
@@ -267,6 +271,7 @@ func TestPropertySupersessionChainsAreAcyclic(t *testing.T) {
 		defer func() { _ = tx.Rollback() }()
 
 		tenant := rapid.SampledFrom([]string{tenantA, tenantB}).Draw(rt, "tenant")
+		propTenant(rt, tx, tenant)
 		length := rapid.IntRange(2, 3).Draw(rt, "chain")
 		start := rapid.IntRange(0, 400).Draw(rt, "start")
 		// The close sits strictly after the period start, so the superseded decision still
@@ -346,6 +351,7 @@ func TestPropertyWaiverNeverExtendsBeyondTheDecision(t *testing.T) {
 		defer func() { _ = tx.Rollback() }()
 
 		tenant := rapid.SampledFrom([]string{tenantA, tenantB}).Draw(rt, "tenant")
+		propTenant(rt, tx, tenant)
 		start := rapid.IntRange(10, 400).Draw(rt, "start")
 		decisionLen := rapid.IntRange(150, 200).Draw(rt, "decisionLen")
 		insideLen := rapid.IntRange(1, 60).Draw(rt, "insideLen")
@@ -404,6 +410,12 @@ func assertWaiversInside(rt *rapid.T, tx *sql.Tx, tenant string) {
 		        AND d.valid_period @> w.valid_period)`, tenant)
 	if n != 0 {
 		rt.Fatalf("%d waivers extend beyond the decision", n)
+	}
+}
+
+func propTenant(rt *rapid.T, tx *sql.Tx, tenant string) {
+	if _, err := tx.ExecContext(rt.Context(), `SELECT set_config('ipso.tenant', $1, true)`, tenant); err != nil {
+		rt.Fatalf("tenant: %v", err)
 	}
 }
 

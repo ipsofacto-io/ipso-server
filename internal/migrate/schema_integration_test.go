@@ -44,7 +44,7 @@ func migrated(t *testing.T) schema {
 	s := schema{app: db.Open(t, pgtest.App), admin: db.Open(t, pgtest.Admin), orgs: make(map[string]string)}
 	for _, tenant := range []string{tenantA, tenantB} {
 		s.orgs[tenant] = s.addScope(t, tenant, "", "org", "acme")
-		if _, err := s.app.ExecContext(t.Context(), `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1::uuid, 'human', 'synthetic approver')`, tenant); err != nil {
+		if _, err := pgtest.Exec(t.Context(), s.app, tenant, `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1::uuid, 'human', 'synthetic approver')`, tenant); err != nil {
 			t.Fatalf("insert the approver: %v", err)
 		}
 	}
@@ -65,16 +65,16 @@ func (s schema) addScope(t *testing.T, tenant, parent, kind, selector string) st
 func (s schema) tryScope(t *testing.T, tenant, parent, kind, selector string) (string, error) {
 	t.Helper()
 	var id string
-	err := s.app.QueryRowContext(t.Context(), `
+	err := pgtest.Scan(t.Context(), s.app, tenant, `
 		INSERT INTO registry.scope (tenant_id, parent_id, kind, selector)
 		VALUES ($1::uuid, nullif($2, '')::uuid, $3, $4)
-		RETURNING id`, tenant, parent, kind, selector).Scan(&id)
+		RETURNING id`, []any{tenant, parent, kind, selector}, &id)
 	return id, err
 }
 
 func (s schema) insert(t *testing.T, tenant string, version int, validPeriod string) {
 	t.Helper()
-	if _, err := s.app.ExecContext(t.Context(), insertVersion, decision, version, tenant, validPeriod, s.orgs[tenant]); err != nil {
+	if _, err := pgtest.Exec(t.Context(), s.app, tenant, insertVersion, decision, version, tenant, validPeriod, s.orgs[tenant]); err != nil {
 		t.Fatalf("insert version %d: %v", version, err)
 	}
 }
@@ -103,6 +103,22 @@ func count(t *testing.T, db *sql.DB, query string, args ...any) int {
 		t.Fatalf("%s: %v", query, err)
 	}
 	return n
+}
+
+// countAs counts rows the application role can see for one tenant.
+func countAs(t *testing.T, db *sql.DB, tenant, query string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := pgtest.Scan(t.Context(), db, tenant, query, args, &n); err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
+	return n
+}
+
+// countApp counts rows the application role can see for tenant A.
+func countApp(t *testing.T, db *sql.DB, query string, args ...any) int {
+	t.Helper()
+	return countAs(t, db, tenantA, query, args...)
 }
 
 // pgError returns the PostgreSQL error in err, and fails the test when err is not one.
@@ -158,7 +174,7 @@ func TestPrimaryKeyRejectsAnOverlappingPeriod(t *testing.T) {
 	s := migrated(t)
 	s.insert(t, tenantA, 1, "[2026-01-01,2026-06-01)")
 
-	_, err := s.app.ExecContext(t.Context(), insertVersion, decision, 2, tenantA, "[2026-03-01,2026-09-01)", s.orgs[tenantA])
+	_, err := pgtest.Exec(t.Context(), s.app, tenantA, insertVersion, decision, 2, tenantA, "[2026-03-01,2026-09-01)", s.orgs[tenantA])
 	requireSQLState(t, err, "23P01")
 
 	s.insert(t, tenantA, 2, "[2026-06-01,2026-09-01)") // adjacent, no overlap
@@ -170,11 +186,11 @@ func TestUpdateArchivesTheOldRow(t *testing.T) {
 	ctx := t.Context()
 	s.insert(t, tenantA, 1, "[2026-01-01,)")
 
-	if _, err := s.app.ExecContext(ctx, `UPDATE registry.decision_version SET version = 2, body = '{"statement":"changed"}' WHERE tenant_id = $1 AND decision_id = $2`, tenantA, decision); err != nil {
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `UPDATE registry.decision_version SET version = 2, body = '{"statement":"changed"}' WHERE tenant_id = $1 AND decision_id = $2`, tenantA, decision); err != nil {
 		t.Fatalf("the application role must be able to update decision_version: %v", err)
 	}
 
-	if n := count(t, s.app, `SELECT count(*) FROM registry.decision_version WHERE decision_id = $1`, decision); n != 1 {
+	if n := countApp(t, s.app, `SELECT count(*) FROM registry.decision_version WHERE decision_id = $1`, decision); n != 1 {
 		t.Fatalf("current rows = %d, want 1", n)
 	}
 	var (
@@ -182,7 +198,7 @@ func TestUpdateArchivesTheOldRow(t *testing.T) {
 		currentOpen    bool
 		currentFrom    time.Time
 	)
-	err := s.app.QueryRowContext(ctx, `SELECT version, upper(sys_period) IS NULL, lower(sys_period) FROM registry.decision_version WHERE decision_id = $1`, decision).Scan(&currentVersion, &currentOpen, &currentFrom)
+	err := pgtest.Scan(ctx, s.app, tenantA, `SELECT version, upper(sys_period) IS NULL, lower(sys_period) FROM registry.decision_version WHERE decision_id = $1`, []any{decision}, &currentVersion, &currentOpen, &currentFrom)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +206,7 @@ func TestUpdateArchivesTheOldRow(t *testing.T) {
 		t.Errorf("current row: version %d, open %v, want version 2 and open", currentVersion, currentOpen)
 	}
 
-	if n := count(t, s.app, `SELECT count(*) FROM registry.decision_version_history WHERE decision_id = $1`, decision); n != 1 {
+	if n := countApp(t, s.app, `SELECT count(*) FROM registry.decision_version_history WHERE decision_id = $1`, decision); n != 1 {
 		t.Fatalf("history rows = %d, want 1", n)
 	}
 	var (
@@ -198,7 +214,7 @@ func TestUpdateArchivesTheOldRow(t *testing.T) {
 		archivedTo      time.Time
 		archivedBody    string
 	)
-	err = s.app.QueryRowContext(ctx, `SELECT version, upper(sys_period), body->>'statement' FROM registry.decision_version_history WHERE decision_id = $1`, decision).Scan(&archivedVersion, &archivedTo, &archivedBody)
+	err = pgtest.Scan(ctx, s.app, tenantA, `SELECT version, upper(sys_period), body->>'statement' FROM registry.decision_version_history WHERE decision_id = $1`, []any{decision}, &archivedVersion, &archivedTo, &archivedBody)
 	if err != nil {
 		t.Fatalf("history row must be closed: %v", err)
 	}
@@ -217,7 +233,7 @@ func TestUpdateThatChangesNothingArchivesNothing(t *testing.T) {
 	s.insert(t, tenantA, 1, "[2026-01-01,)")
 
 	var openedAt time.Time
-	if err := s.app.QueryRowContext(ctx, `SELECT lower(sys_period) FROM registry.decision_version WHERE decision_id = $1`, decision).Scan(&openedAt); err != nil {
+	if err := pgtest.Scan(ctx, s.app, tenantA, `SELECT lower(sys_period) FROM registry.decision_version WHERE decision_id = $1`, []any{decision}, &openedAt); err != nil {
 		t.Fatal(err)
 	}
 	sleep(t, s.admin)
@@ -226,16 +242,16 @@ func TestUpdateThatChangesNothingArchivesNothing(t *testing.T) {
 		`UPDATE registry.decision_version SET version = version WHERE decision_id = $1`,
 		`UPDATE registry.decision_version SET body = '{"statement": "synthetic"}' WHERE decision_id = $1`, // same JSON, other spacing
 	} {
-		if _, err := s.app.ExecContext(ctx, statement, decision); err != nil {
+		if _, err := pgtest.Exec(ctx, s.app, tenantA, statement, decision); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	if n := count(t, s.app, `SELECT count(*) FROM registry.decision_version_history`); n != 0 {
+	if n := countApp(t, s.app, `SELECT count(*) FROM registry.decision_version_history`); n != 0 {
 		t.Errorf("history rows = %d, want 0", n)
 	}
 	var from time.Time
-	if err := s.app.QueryRowContext(ctx, `SELECT lower(sys_period) FROM registry.decision_version WHERE decision_id = $1`, decision).Scan(&from); err != nil {
+	if err := pgtest.Scan(ctx, s.app, tenantA, `SELECT lower(sys_period) FROM registry.decision_version WHERE decision_id = $1`, []any{decision}, &from); err != nil {
 		t.Fatal(err)
 	}
 	if !from.Equal(openedAt) {
@@ -250,17 +266,17 @@ func TestUpdateOfOnlySysPeriodStillCannotBackdate(t *testing.T) {
 	s.insert(t, tenantA, 1, "[2026-01-01,)")
 
 	before := dbNow(t, s.admin)
-	if _, err := s.app.ExecContext(ctx, `UPDATE registry.decision_version SET sys_period = '[2000-01-01,)'::tstzrange WHERE decision_id = $1`, decision); err != nil {
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `UPDATE registry.decision_version SET sys_period = '[2000-01-01,)'::tstzrange WHERE decision_id = $1`, decision); err != nil {
 		t.Fatal(err)
 	}
 	var from time.Time
-	if err := s.app.QueryRowContext(ctx, `SELECT lower(sys_period) FROM registry.decision_version WHERE decision_id = $1`, decision).Scan(&from); err != nil {
+	if err := pgtest.Scan(ctx, s.app, tenantA, `SELECT lower(sys_period) FROM registry.decision_version WHERE decision_id = $1`, []any{decision}, &from); err != nil {
 		t.Fatal(err)
 	}
 	if from.Before(before) {
 		t.Errorf("sys_period opens at %v, before the update ran at %v", from, before)
 	}
-	if n := count(t, s.app, `SELECT count(*) FROM registry.decision_version_history`); n != 1 {
+	if n := countApp(t, s.app, `SELECT count(*) FROM registry.decision_version_history`); n != 1 {
 		t.Errorf("history rows = %d, want 1", n)
 	}
 }
@@ -271,11 +287,11 @@ func TestUpdateCannotBackdateTransactionTime(t *testing.T) {
 	s.insert(t, tenantA, 1, "[2026-01-01,)")
 
 	before := dbNow(t, s.admin)
-	if _, err := s.app.ExecContext(ctx, `UPDATE registry.decision_version SET version = 2, sys_period = '[2000-01-01,)'::tstzrange WHERE decision_id = $1`, decision); err != nil {
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `UPDATE registry.decision_version SET version = 2, sys_period = '[2000-01-01,)'::tstzrange WHERE decision_id = $1`, decision); err != nil {
 		t.Fatal(err)
 	}
 	var from time.Time
-	if err := s.app.QueryRowContext(ctx, `SELECT lower(sys_period) FROM registry.decision_version WHERE decision_id = $1`, decision).Scan(&from); err != nil {
+	if err := pgtest.Scan(ctx, s.app, tenantA, `SELECT lower(sys_period) FROM registry.decision_version WHERE decision_id = $1`, []any{decision}, &from); err != nil {
 		t.Fatal(err)
 	}
 	if from.Before(before) {
@@ -288,10 +304,10 @@ func TestDeleteArchivesAndLeavesNoCurrentRow(t *testing.T) {
 	ctx := t.Context()
 	s.insert(t, tenantA, 1, "[2026-01-01,)")
 
-	if _, err := s.app.ExecContext(ctx, `DELETE FROM registry.decision_version WHERE tenant_id = $1 AND decision_id = $2`, tenantA, decision); err != nil {
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `DELETE FROM registry.decision_version WHERE tenant_id = $1 AND decision_id = $2`, tenantA, decision); err != nil {
 		t.Fatalf("the application role must be able to delete from decision_version: %v", err)
 	}
-	if n := count(t, s.app, `SELECT count(*) FROM registry.decision_version WHERE decision_id = $1`, decision); n != 0 {
+	if n := countApp(t, s.app, `SELECT count(*) FROM registry.decision_version WHERE decision_id = $1`, decision); n != 0 {
 		t.Errorf("current rows = %d, want 0", n)
 	}
 	var (
@@ -299,7 +315,7 @@ func TestDeleteArchivesAndLeavesNoCurrentRow(t *testing.T) {
 		from    time.Time
 		to      time.Time
 	)
-	err := s.app.QueryRowContext(ctx, `SELECT version, lower(sys_period), upper(sys_period) FROM registry.decision_version_history WHERE decision_id = $1`, decision).Scan(&version, &from, &to)
+	err := pgtest.Scan(ctx, s.app, tenantA, `SELECT version, lower(sys_period), upper(sys_period) FROM registry.decision_version_history WHERE decision_id = $1`, []any{decision}, &version, &from, &to)
 	if err != nil {
 		t.Fatalf("want one closed history row: %v", err)
 	}
@@ -312,7 +328,7 @@ func TestApplicationRoleCannotWriteHistory(t *testing.T) {
 	s := migrated(t)
 	ctx := t.Context()
 	s.insert(t, tenantA, 1, "[2026-01-01,)")
-	if _, err := s.app.ExecContext(ctx, `UPDATE registry.decision_version SET version = 2 WHERE decision_id = $1`, decision); err != nil {
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `UPDATE registry.decision_version SET version = 2 WHERE decision_id = $1`, decision); err != nil {
 		t.Fatal(err)
 	}
 
@@ -323,11 +339,11 @@ func TestApplicationRoleCannotWriteHistory(t *testing.T) {
 	}
 	for name, statement := range writes {
 		t.Run(name, func(t *testing.T) {
-			_, err := s.app.ExecContext(ctx, statement)
+			_, err := pgtest.Exec(ctx, s.app, tenantA, statement)
 			requireSQLState(t, err, "42501")
 		})
 	}
-	if n := count(t, s.app, `SELECT count(*) FROM registry.decision_version_history`); n != 1 {
+	if n := countApp(t, s.app, `SELECT count(*) FROM registry.decision_version_history`); n != 1 {
 		t.Errorf("the application role must still read history: rows = %d, want 1", n)
 	}
 }
@@ -341,7 +357,7 @@ func TestInsertSetsTransactionTime(t *testing.T) {
 	// Both a backdated open period and a closed period are replaced by the trigger.
 	for i, supplied := range []string{"[2000-01-01,)", "[2000-01-01,2000-02-01)"} {
 		before := dbNow(t, s.admin)
-		_, err := s.app.ExecContext(ctx, `
+		_, err := pgtest.Exec(ctx, s.app, tenantA, `
 			INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period, sys_period)
 			VALUES ($1::uuid, $2::int, $3::uuid, '{}', ARRAY[$6::uuid], $4::text::tstzrange, $5::text::tstzrange)`,
 			decision, i+1, tenantA, validPeriods[i], supplied, s.orgs[tenantA])
@@ -354,7 +370,7 @@ func TestInsertSetsTransactionTime(t *testing.T) {
 			from time.Time
 			open bool
 		)
-		err = s.app.QueryRowContext(ctx, `SELECT lower(sys_period), upper(sys_period) IS NULL FROM registry.decision_version WHERE decision_id = $1 AND version = $2`, decision, i+1).Scan(&from, &open)
+		err = pgtest.Scan(ctx, s.app, tenantA, `SELECT lower(sys_period), upper(sys_period) IS NULL FROM registry.decision_version WHERE decision_id = $1 AND version = $2`, []any{decision, i + 1}, &from, &open)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -400,7 +416,7 @@ func TestApplicationRoleCannotSwitchTheTriggersOff(t *testing.T) {
 	}
 	for name, statement := range statements {
 		t.Run(name, func(t *testing.T) {
-			_, err := s.app.ExecContext(ctx, statement)
+			_, err := pgtest.Exec(ctx, s.app, tenantA, statement)
 			requireSQLState(t, err, "42501")
 		})
 	}
@@ -549,25 +565,28 @@ func TestApplicationRoleHasNoPowerOverTheSchema(t *testing.T) {
 // asOf is the Q1 shape of section 2.3 without the scope join, which IPSO-23 defines.
 func asOf(t *testing.T, db *sql.DB, validAt string, knownAt time.Time) []int {
 	t.Helper()
-	rows, err := db.QueryContext(t.Context(), `
-		SELECT version FROM registry.decision_version_all
-		WHERE tenant_id = $1::uuid AND decision_id = $2::uuid
-		  AND valid_period @> $3::timestamptz
-		  AND sys_period @> $4::timestamptz
-		ORDER BY version`, tenantA, decision, validAt, knownAt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = rows.Close() }()
 	var versions []int
-	for rows.Next() {
-		var v int
-		if err := rows.Scan(&v); err != nil {
-			t.Fatal(err)
+	err := pgtest.WithTenant(t.Context(), db, tenantA, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(), `
+			SELECT version FROM registry.decision_version_all
+			WHERE tenant_id = $1::uuid AND decision_id = $2::uuid
+			  AND valid_period @> $3::timestamptz
+			  AND sys_period @> $4::timestamptz
+			ORDER BY version`, tenantA, decision, validAt, knownAt)
+		if err != nil {
+			return err
 		}
-		versions = append(versions, v)
-	}
-	if err := rows.Err(); err != nil {
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var v int
+			if err := rows.Scan(&v); err != nil {
+				return err
+			}
+			versions = append(versions, v)
+		}
+		return rows.Err()
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	return versions
@@ -582,7 +601,7 @@ func TestAsOfQueryReadsBothTables(t *testing.T) {
 	knownThen := dbNow(t, s.admin)
 	sleep(t, s.admin)
 	// Retroactive correction: the decision applied from 1 March, and ipso learns that now.
-	if _, err := s.app.ExecContext(ctx, `UPDATE registry.decision_version SET version = 2, valid_period = '[2026-03-01,)' WHERE decision_id = $1`, decision); err != nil {
+	if _, err := pgtest.Exec(ctx, s.app, tenantA, `UPDATE registry.decision_version SET version = 2, valid_period = '[2026-03-01,)' WHERE decision_id = $1`, decision); err != nil {
 		t.Fatal(err)
 	}
 	knownNow := dbNow(t, s.admin)

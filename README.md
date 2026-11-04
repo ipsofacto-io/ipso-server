@@ -4,7 +4,7 @@
 
 Source-available ipso control plane: bitemporal decision registry, API, web app and PR checks.
 
-> Status: early. The binary has three commands. `ipso-server migrate` applies the PostgreSQL 18 schema. `ipso-server webhooks` serves the GitHub App webhook, holds no tenant data, and opens no database connection ([ADR-0061](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0061-github-app.md)). `ipso-server runtasks` serves an HCP Terraform run task on the same terms ([ADR-0065](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0065-hcp-terraform-run-task.md)). The control plane API exists in `internal/api` and is not served until row-level security and login exist ([ADR-0090](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0090-control-plane-api.md)).
+> Status: early. The binary has three commands. `ipso-server migrate` applies the PostgreSQL 18 schema. `ipso-server webhooks` serves the GitHub App webhook, holds no tenant data, and opens no database connection ([ADR-0061](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0061-github-app.md)). `ipso-server runtasks` serves an HCP Terraform run task on the same terms ([ADR-0065](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0065-hcp-terraform-run-task.md)). The control plane API exists in `internal/api`. Row-level security is in place. The binary serves it once login exists and IPSO-133 adds `--role=api` ([ADR-0090](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0090-control-plane-api.md)).
 
 One Go modular monolith ships the registry API, the web SPA, the entitlement contract, the Helm chart and the Compose bundle, plus a separate Python worker for LLM extraction. The binary is `ipso-server`, which will start with `--role` once the control plane lands.
 
@@ -25,6 +25,18 @@ An administrator prepares the database once, before the first run, because creat
 - `ipso_migrate`: a login role that is not a superuser and has neither `BYPASSRLS` nor `CREATEROLE`. It owns the database, the schemas, the tables, the views and the `SECURITY DEFINER` functions.
 - `ipso_app`: a login role with the same restrictions. It owns nothing and holds only the grants the migrations write.
 - An empty database owned by `ipso_migrate`.
+- `ipso.current_tenant()`, created by that same superuser. Only a superuser can mark a function leakproof, and the migration role is not one. The policies call it so the planner can use indexes. Its body is `nullif(current_setting('ipso.tenant', true), '')::uuid`.
+
+```sql
+CREATE SCHEMA ipso;
+CREATE FUNCTION ipso.current_tenant() RETURNS uuid
+    LANGUAGE sql STABLE LEAKPROOF
+    SET search_path = pg_catalog, pg_temp
+AS $$ SELECT nullif(current_setting('ipso.tenant', true), '')::uuid $$;
+REVOKE ALL ON FUNCTION ipso.current_tenant() FROM PUBLIC;
+GRANT USAGE ON SCHEMA ipso TO ipso_app, ipso_migrate;
+GRANT EXECUTE ON FUNCTION ipso.current_tenant() TO ipso_app, ipso_migrate;
+```
 
 `ipso-server migrate` exits non-zero before it runs a statement when its session role or its current role is a superuser or has `BYPASSRLS`. PostgreSQL providers must allow `btree_gist` for the database owner. If yours does not, an administrator creates the extension before the first run.
 
@@ -40,7 +52,7 @@ The registry schema holds the bitemporal decision tables, the scope tree and its
 
 A request needs a bearer token in the `Authorization` header. `internal/authn` checks its signature, issuer, audience, and expiry, the same checks remote MCP makes. The tenant and the principal come from the token only, so a query key `tenant` or `tenant_id` is 400. A token that speaks for no principal of the tenant is 403, and an unknown route is 404 only after that, so routes cannot be listed without a token. An agent's call is logged with its human sponsor before it runs, and a call that cannot be logged does not run. Each request has a 10 second deadline, a 1 MiB body cap, and a 4 MiB answer cap. An answer over the cap is refused whole with 500 and never sent cut short. Each tenant may make 10 requests a second, with a burst of 20, on each process.
 
-The binary does not serve this API yet. No deployment serves a tenant before row-level security (IPSO-61), and a token maps to a tenant and a principal only once login exists (IPSO-65). IPSO-133 serves it.
+The binary does not serve this API yet. Row-level security is forced on every tenant table, and `internal/rls.Check` refuses a superuser, a `BYPASSRLS` role, the owner of a table, or a `tenant_id` table that is not forced (IPSO-61, ADR-0050). IPSO-133 calls that check before `--role=api` serves the handler. The API connection, like `migrate`, has to be a session connection and not a transaction-mode pooler, because `ipso.tenant` is set for one transaction. A token maps to a tenant and a principal only once login exists (IPSO-65).
 
 The contract tests check that the document is valid OpenAPI 3.1, that it lists exactly the routes `internal/api` mounts, that every route but `POST /v1/resolve` is a GET, and that every request and answer of the integration tests matches it. [api/pacts/ipso-web-ipso-server.json](api/pacts/ipso-web-ipso-server.json) is the pact of the web app, consumer `ipso-web`. A pact-go consumer test writes it, and `ci / pact` verifies it against the handler on PostgreSQL and fails when the committed file differs ([ADR-0091](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0091-api-contract-tests-and-pact.md)).
 
