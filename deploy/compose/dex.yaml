@@ -1,0 +1,46 @@
+# Dex is the local OIDC provider of the Compose stack. It holds nothing between runs.
+# The issuer must equal IPSO_OIDC_ISSUER in compose.yaml and the issuer the seed binds the login to.
+# The secrets and the test user come from the environment: secretEnv for the clients, and variable
+# expansion in the connector block (DEX_EXPAND_ENV).
+issuer: https://dex:5556/dex
+
+storage:
+  type: memory
+
+web:
+  https: 0.0.0.0:5556
+  tlsCert: /certs/dex.crt
+  tlsKey: /certs/dex.key
+
+telemetry:
+  http: 0.0.0.0:5558
+
+oauth2:
+  # The resource owner password grant, so a person or a smoke test gets a token with curl.
+  passwordConnector: dev
+  skipApprovalScreen: true
+
+staticClients:
+  # The API's own client. Its id is the audience of the tokens it mints, and the API requires it.
+  - id: ipso-api
+    name: ipso API
+    secretEnv: IPSO_API_CLIENT_SECRET
+    redirectURIs:
+      - http://localhost:8000/callback
+  # Another application of the same provider. Its tokens name another audience, so the API refuses
+  # them, and the smoke test proves it.
+  - id: other-app
+    name: Another application
+    secretEnv: IPSO_OTHER_CLIENT_SECRET
+    redirectURIs:
+      - http://localhost:8000/callback
+
+connectors:
+  # One test user. Dex gives it a fixed user id, so its subject never changes (see IPSO_SEED_SUBJECT
+  # in .env.example).
+  - type: mockPassword
+    id: dev
+    name: Local developer
+    config:
+      username: $IPSO_DEX_USER
+      password: $IPSO_DEX_PASSWORD

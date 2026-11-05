@@ -6,12 +6,14 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"database/sql"
 	"encoding/pem"
 	"errors"
 	"net"
 	"strings"
 	"testing"
 
+	"github.com/ipsofacto-io/ipso-server/internal/controlplane"
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
 	"github.com/ipsofacto-io/ipso-server/internal/migrate"
 )
@@ -80,8 +82,8 @@ func TestMigrateNeedsTheDatabaseURL(t *testing.T) {
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
-	if !strings.Contains(stderr, databaseURLEnv) {
-		t.Errorf("stderr = %q, want it to name %s", stderr, databaseURLEnv)
+	if !strings.Contains(stderr, migrateDatabaseEnv) {
+		t.Errorf("stderr = %q, want it to name %s", stderr, migrateDatabaseEnv)
 	}
 	if called {
 		t.Error("migrate ran without a database URL")
@@ -91,7 +93,7 @@ func TestMigrateNeedsTheDatabaseURL(t *testing.T) {
 func TestMigratePassesTheURLFromTheEnvironment(t *testing.T) {
 	var got string
 	d := deps{
-		getenv: env(map[string]string{databaseURLEnv: "postgres://example/db"}),
+		getenv: env(map[string]string{migrateDatabaseEnv: "postgres://example/db"}),
 		migrate: func(_ context.Context, databaseURL string) ([]string, error) {
 			got = databaseURL
 			return []string{"00001_a.sql", "00002_b.sql"}, nil
@@ -111,7 +113,7 @@ func TestMigratePassesTheURLFromTheEnvironment(t *testing.T) {
 
 func TestMigrateReportsNothingToDo(t *testing.T) {
 	d := deps{
-		getenv:  env(map[string]string{databaseURLEnv: "postgres://example/db"}),
+		getenv:  env(map[string]string{migrateDatabaseEnv: "postgres://example/db"}),
 		migrate: func(context.Context, string) ([]string, error) { return nil, nil },
 	}
 	code, stdout, _ := invoke(t, d, "migrate")
@@ -125,7 +127,7 @@ func TestMigrateReportsNothingToDo(t *testing.T) {
 
 func TestMigrateFailureExitsNonZero(t *testing.T) {
 	d := deps{
-		getenv: env(map[string]string{databaseURLEnv: "postgres://example/db"}),
+		getenv: env(map[string]string{migrateDatabaseEnv: "postgres://example/db"}),
 		migrate: func(context.Context, string) ([]string, error) {
 			return nil, errors.Join(migrate.ErrPrivilegedRole, errors.New("boom"))
 		},
@@ -150,7 +152,7 @@ func TestMigrateNeverPrintsThePassword(t *testing.T) {
 		"host=127.0.0.1 port=notaport user=ipso_migrate password=" + secret,
 		"postgres://ipso_migrate:" + secret + "@127.0.0.1:1/ipso?sslmode=disable&connect_timeout=2",
 	} {
-		d := deps{getenv: env(map[string]string{databaseURLEnv: url}), migrate: migrate.Run}
+		d := deps{getenv: env(map[string]string{migrateDatabaseEnv: url}), migrate: migrate.Run}
 		code, stdout, stderr := invoke(t, d, "migrate")
 		if code != 1 {
 			t.Errorf("%q: exit code = %d, want 1", url, code)
@@ -289,4 +291,103 @@ func TestRunTasksReadsItsConfiguration(t *testing.T) {
 			t.Fatalf("config %+v", got)
 		}
 	})
+}
+
+const testTenant = "00000000-0000-4000-8000-00000000000a"
+
+func apiEnv(extra map[string]string) func(string) string {
+	values := map[string]string{
+		"IPSO_DATABASE_URL": "postgres://ipso_app@db.example.test/ipso",
+		"IPSO_TENANT_ID":    testTenant,
+		"IPSO_OIDC_ISSUER":  "https://idp.example.test",
+		"IPSO_API_AUDIENCE": "ipso-api",
+		"IPSO_LISTEN_ADDR":  "127.0.0.1:0",
+	}
+	for k, v := range extra {
+		values[k] = v
+	}
+	return env(values)
+}
+
+func apiDeps(getenv func(string) string, got *controlplane.Config) deps {
+	return deps{
+		getenv: getenv,
+		openDB: func(string) (*sql.DB, error) { return sql.Open("pgx", "postgres://nobody@127.0.0.1:1/none") },
+		controlPlane: func(_ context.Context, listener net.Listener, cfg controlplane.Config) error {
+			_ = listener.Close()
+			*got = cfg
+			return nil
+		},
+	}
+}
+
+func TestRoleAPIStartsTheControlPlaneFromTheEnvironment(t *testing.T) {
+	var got controlplane.Config
+	code, _, stderr := invoke(t, apiDeps(apiEnv(map[string]string{
+		"IPSO_MCP_ISSUER":       "https://mcp-idp.example.test",
+		"IPSO_MCP_RESOURCE_URL": "https://ipso.example.test/mcp",
+	}), &got), "--role=api")
+	if code != 0 {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if got.Tenant.String() != testTenant || got.Issuer != "https://idp.example.test" || got.Audience != "ipso-api" ||
+		got.MCPIssuer != "https://mcp-idp.example.test" || got.MCPResourceURL != "https://ipso.example.test/mcp" || got.DB == nil {
+		t.Errorf("config = %+v", got)
+	}
+}
+
+func TestRoleAPIAcceptsTheRoleAsASeparateArgument(t *testing.T) {
+	var got controlplane.Config
+	if code, _, stderr := invoke(t, apiDeps(apiEnv(nil), &got), "--role", "api"); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+}
+
+func TestRoleAPIRefusesWhatItCannotServe(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		extra    map[string]string
+		wantCode int
+		wantErr  string
+	}{
+		{"the worker", []string{"--role=worker"}, nil, 2, "IPSO-132"},
+		{"all", []string{"--role=all"}, nil, 2, "IPSO-132"},
+		{"an unknown role", []string{"--role=web"}, nil, 2, `unknown role "web"`},
+		{"no role", []string{"--role="}, nil, 2, "unknown role"},
+		{"an extra argument", []string{"--role=api", "now"}, nil, 2, "usage: ipso-server --role=api"},
+		{"the migration credential", []string{"--role=api"}, map[string]string{"IPSO_MIGRATE_DATABASE_URL": "postgres://ipso_migrate@db.example.test/ipso"}, 1, "migration credential"},
+		{"no database", []string{"--role=api"}, map[string]string{"IPSO_DATABASE_URL": ""}, 1, "IPSO_DATABASE_URL is not set"},
+		{"no issuer", []string{"--role=api"}, map[string]string{"IPSO_OIDC_ISSUER": ""}, 1, "IPSO_OIDC_ISSUER is not set"},
+		{"no audience", []string{"--role=api"}, map[string]string{"IPSO_API_AUDIENCE": ""}, 1, "IPSO_API_AUDIENCE is not set"},
+		{"a bad tenant", []string{"--role=api"}, map[string]string{"IPSO_TENANT_ID": "acme"}, 1, "not a tenant id"},
+		{"a nil tenant", []string{"--role=api"}, map[string]string{"IPSO_TENANT_ID": "00000000-0000-0000-0000-000000000000"}, 1, "not a tenant id"},
+		{"half of the MCP pair", []string{"--role=api"}, map[string]string{"IPSO_MCP_ISSUER": "https://mcp-idp.example.test"}, 1, "together or not at all"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got controlplane.Config
+			code, _, stderr := invoke(t, apiDeps(apiEnv(tt.extra), &got), tt.args...)
+			if code != tt.wantCode {
+				t.Errorf("exit code = %d, want %d: %s", code, tt.wantCode, stderr)
+			}
+			if !strings.Contains(stderr, tt.wantErr) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr, tt.wantErr)
+			}
+			if got.DB != nil {
+				t.Error("the control plane was started")
+			}
+		})
+	}
+}
+
+func TestRoleAPIReportsAFailedStart(t *testing.T) {
+	d := apiDeps(apiEnv(nil), new(controlplane.Config))
+	d.controlPlane = func(context.Context, net.Listener, controlplane.Config) error {
+		return errors.New("refusing to start")
+	}
+	code, _, stderr := invoke(t, d, "--role=api")
+	if code != 1 || !strings.Contains(stderr, "refusing to start") {
+		t.Errorf("exit code = %d, stderr = %q", code, stderr)
+	}
 }

@@ -198,3 +198,50 @@ func TestBearerReadsOnlyTheBearerScheme(t *testing.T) {
 		}
 	}
 }
+
+func TestVerifyReportsTheIssuerAndEveryAudience(t *testing.T) {
+	auth := authntest.NewServer(t)
+	verifier, _, err := Discover(t.Context(), auth.Server.Client(), auth.Server.URL, testAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+	both := auth.Token(testAudience, nil, func(b *jwt.Builder) *jwt.Builder {
+		return b.Audience([]string{testAudience, "https://mcp.example.test/mcp"})
+	})
+	claims, err := verifier.Verify(t.Context(), both)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.Issuer != auth.Server.URL || claims.Subject != "agent-1" {
+		t.Errorf("issuer %q subject %q", claims.Issuer, claims.Subject)
+	}
+	if len(claims.Audiences) != 2 {
+		t.Errorf("audiences = %v, want both", claims.Audiences)
+	}
+}
+
+func TestExclusiveRefusesATokenThatNamesAnotherResource(t *testing.T) {
+	const other = "https://mcp.example.test/mcp"
+	auth := authntest.NewServer(t)
+	verifier, _, err := Discover(t.Context(), auth.Server.Client(), auth.Server.URL, testAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exclusive := Exclusive(verifier, other)
+
+	if _, err := exclusive.Verify(t.Context(), auth.Token(testAudience, nil)); err != nil {
+		t.Errorf("a token for this resource only was refused: %v", err)
+	}
+	both := auth.Token(testAudience, nil, func(b *jwt.Builder) *jwt.Builder {
+		return b.Audience([]string{testAudience, other})
+	})
+	if _, err := verifier.Verify(t.Context(), both); err != nil {
+		t.Fatalf("the plain verifier should accept a token that names this resource: %v", err)
+	}
+	if _, err := exclusive.Verify(t.Context(), both); err == nil {
+		t.Error("a token for both resources was accepted")
+	}
+	if _, err := exclusive.Verify(t.Context(), auth.Token(other, nil)); err == nil {
+		t.Error("a token for the other resource only was accepted")
+	}
+}

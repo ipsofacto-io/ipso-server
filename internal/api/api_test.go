@@ -352,37 +352,14 @@ func TestGuardLimitsEachTenantOnItsOwn(t *testing.T) {
 	}
 }
 
-func TestLimiterRefillsAndForgetsIdleTenants(t *testing.T) {
-	limiter := newTenantLimiter(1, 1)
-	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	if _, ok := limiter.allow(tenantA, start); !ok {
-		t.Fatal("the first call was refused")
-	}
-	wait, ok := limiter.allow(tenantA, start)
-	if ok || wait <= 0 || wait > time.Second {
-		t.Fatalf("an empty bucket: wait %v, ok %v", wait, ok)
-	}
-	// A refused call takes nothing, so the bucket is full again a second later.
-	if _, ok := limiter.allow(tenantA, start.Add(time.Second)); !ok {
-		t.Fatal("the bucket did not refill")
-	}
-	later := start.Add(idleTenant + time.Minute)
-	if _, ok := limiter.allow(tenantB, later); !ok {
-		t.Fatal("another tenant was refused")
-	}
-	if _, kept := limiter.tenants[tenantA]; kept || len(limiter.tenants) != 1 {
-		t.Fatalf("an idle tenant was kept: %d buckets", len(limiter.tenants))
-	}
-}
-
 func TestLimitsDefaults(t *testing.T) {
-	got := Limits{}.withDefaults()
+	got := Limits{}.WithDefaults()
 	want := Limits{Timeout: 10 * time.Second, RequestBytes: 1 << 20, ResponseBytes: 4 << 20, Rate: 10, Burst: 20}
 	if got != want {
 		t.Fatalf("defaults %+v, want %+v", got, want)
 	}
 	set := Limits{Timeout: time.Second, RequestBytes: 1, ResponseBytes: 2, Rate: 3, Burst: 4}
-	if got := set.withDefaults(); got != set {
+	if got := set.WithDefaults(); got != set {
 		t.Fatalf("a set limit changed: %+v", got)
 	}
 }

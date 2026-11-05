@@ -6,63 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sync"
-	"time"
-
-	"github.com/google/uuid"
-	"golang.org/x/time/rate"
 )
-
-// idleTenant is how long a tenant's bucket is kept without a request. A bucket idle that long has
-// refilled, so dropping it changes no answer and keeps the map to the tenants that are calling.
-const idleTenant = 10 * time.Minute
-
-// tenantLimiter is a token bucket for each tenant on this process. A deployment with several api
-// processes adds the shared limit at its front (ADR-0090).
-type tenantLimiter struct {
-	rate  rate.Limit
-	burst int
-
-	mu      sync.Mutex
-	tenants map[uuid.UUID]*tenantBucket
-	swept   time.Time
-}
-
-type tenantBucket struct {
-	limiter *rate.Limiter
-	seen    time.Time
-}
-
-func newTenantLimiter(r rate.Limit, burst int) *tenantLimiter {
-	return &tenantLimiter{rate: r, burst: burst, tenants: map[uuid.UUID]*tenantBucket{}}
-}
-
-// allow takes one call from the tenant's bucket. When the bucket is empty, it returns how long until
-// the next call would be allowed.
-func (l *tenantLimiter) allow(tenant uuid.UUID, now time.Time) (time.Duration, bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if now.Sub(l.swept) > idleTenant {
-		for id, bucket := range l.tenants {
-			if now.Sub(bucket.seen) > idleTenant {
-				delete(l.tenants, id)
-			}
-		}
-		l.swept = now
-	}
-	bucket, ok := l.tenants[tenant]
-	if !ok {
-		bucket = &tenantBucket{limiter: rate.NewLimiter(l.rate, l.burst)}
-		l.tenants[tenant] = bucket
-	}
-	bucket.seen = now
-	reservation := bucket.limiter.ReserveN(now, 1)
-	if wait := reservation.DelayFrom(now); wait > 0 {
-		reservation.CancelAt(now)
-		return wait, false
-	}
-	return 0, true
-}
 
 // bounded gives every request a deadline and holds every answer until it is complete. An answer
 // over the cap is refused whole with 500 and never sent cut short, so an audit answer cannot be

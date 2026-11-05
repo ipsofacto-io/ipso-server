@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"time"
+
+	"github.com/ipsofacto-io/ipso-server/internal/httpserve"
 )
 
 // minSecretBytes refuses a webhook secret short enough to guess.
@@ -55,34 +56,5 @@ func listen(ctx context.Context, listener net.Listener, mux *http.ServeMux, run 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	server := &http.Server{
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    1 << 16,
-	}
-
-	workers := make(chan struct{})
-	go func() {
-		run(ctx)
-		close(workers)
-	}()
-	served := make(chan error, 1)
-	go func() { served <- server.Serve(listener) }()
-
-	var serveErr error
-	select {
-	case serveErr = <-served:
-	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		serveErr = errors.Join(server.Shutdown(shutdown), <-served)
-	}
-	if !errors.Is(serveErr, http.ErrServerClosed) && serveErr != nil && ctx.Err() == nil {
-		return serveErr
-	}
-	<-workers
-	return nil
+	return httpserve.Serve(ctx, listener, mux, run)
 }

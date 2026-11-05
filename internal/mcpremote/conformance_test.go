@@ -37,7 +37,7 @@ func TestConformance(t *testing.T) {
 	}
 	resource := "http://" + listener.Addr().String() + "/mcp"
 	auth := authntest.NewServer(t)
-	handler, err := NewHandler(Config{ResourceURL: resource, AuthorizationServers: []string{auth.Server.URL}, Version: "conformance"},
+	handler, err := NewHandler(Config{ResourceURL: resource, AuthorizationServers: []string{auth.Server.URL}, Version: "conformance", Rate: 1000, Burst: 1000},
 		verifierFor(t, auth, resource),
 		func(context.Context, authn.Claims) (Caller, bool) {
 			return Caller{Tenant: testTenant, Principal: testPrincipal}, true

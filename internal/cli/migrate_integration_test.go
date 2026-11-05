@@ -17,7 +17,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 )
 
-var embeddedFiles = []string{"00001_btree_gist.sql", "00002_registry_decision_version.sql", "00003_registry_scope.sql", "00004_registry_supersession.sql", "00005_registry_waiver.sql", "00006_registry_premise.sql", "00007_registry_scope_history.sql", "00008_proposals.sql", "00009_identity.sql", "00010_agent_proposals.sql", "00011_llm_usage.sql", "00012_check_proposals.sql", "00013_row_level_security.sql"}
+var embeddedFiles = []string{"00001_btree_gist.sql", "00002_registry_decision_version.sql", "00003_registry_scope.sql", "00004_registry_supersession.sql", "00005_registry_waiver.sql", "00006_registry_premise.sql", "00007_registry_scope_history.sql", "00008_proposals.sql", "00009_identity.sql", "00010_agent_proposals.sql", "00011_llm_usage.sql", "00012_check_proposals.sql", "00013_row_level_security.sql", "00014_tenant_and_login.sql"}
 
 func scalar(t *testing.T, db *sql.DB, query string) int {
 	t.Helper()
@@ -44,7 +44,7 @@ func untouched(t *testing.T, admin *sql.DB) bool {
 
 func TestMigrateAppliesTheMigrationsAsTheMigrationRole(t *testing.T) {
 	db := server.NewDatabase(t)
-	t.Setenv(databaseURLEnv, db.DSN(pgtest.Migrate))
+	t.Setenv(migrateDatabaseEnv, db.DSN(pgtest.Migrate))
 
 	var stdout, stderr bytes.Buffer
 	if code := Run([]string{"migrate"}, &stdout, &stderr); code != 0 {
@@ -181,7 +181,7 @@ func TestMigrateRefusesAPrivilegedRole(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db := server.NewDatabase(t)
-			t.Setenv(databaseURLEnv, tt.dsn(db))
+			t.Setenv(migrateDatabaseEnv, tt.dsn(db))
 
 			var stdout, stderr bytes.Buffer
 			if code := Run([]string{"migrate"}, &stdout, &stderr); code == 0 {
@@ -201,7 +201,7 @@ func TestMigrateRefusesAPrivilegedRole(t *testing.T) {
 // closed instead of applying part of the stream.
 func TestMigrateAsTheApplicationRoleFailsClosed(t *testing.T) {
 	db := server.NewDatabase(t)
-	t.Setenv(databaseURLEnv, db.DSN(pgtest.App))
+	t.Setenv(migrateDatabaseEnv, db.DSN(pgtest.App))
 
 	var stdout, stderr bytes.Buffer
 	if code := Run([]string{"migrate"}, &stdout, &stderr); code == 0 {
