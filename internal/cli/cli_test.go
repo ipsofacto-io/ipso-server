@@ -13,9 +13,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/ipsofacto-io/ipso-server/internal/controlplane"
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
 	"github.com/ipsofacto-io/ipso-server/internal/migrate"
+	"github.com/ipsofacto-io/ipso-server/internal/worker"
 )
 
 func env(values map[string]string) func(string) string {
@@ -351,8 +354,7 @@ func TestRoleAPIRefusesWhatItCannotServe(t *testing.T) {
 		wantCode int
 		wantErr  string
 	}{
-		{"the worker", []string{"--role=worker"}, nil, 2, "IPSO-132"},
-		{"all", []string{"--role=all"}, nil, 2, "IPSO-132"},
+		{"all", []string{"--role=all"}, nil, 2, "not built yet"},
 		{"an unknown role", []string{"--role=web"}, nil, 2, `unknown role "web"`},
 		{"no role", []string{"--role="}, nil, 2, "unknown role"},
 		{"an extra argument", []string{"--role=api", "now"}, nil, 2, "usage: ipso-server --role=api"},
@@ -389,5 +391,118 @@ func TestRoleAPIReportsAFailedStart(t *testing.T) {
 	code, _, stderr := invoke(t, d, "--role=api")
 	if code != 1 || !strings.Contains(stderr, "refusing to start") {
 		t.Errorf("exit code = %d, stderr = %q", code, stderr)
+	}
+}
+
+func workerEnv(extra map[string]string) func(string) string {
+	values := map[string]string{
+		"IPSO_DATABASE_URL": "postgres://ipso_app@db.example.test/ipso",
+		"IPSO_TENANT_ID":    testTenant,
+	}
+	for k, v := range extra {
+		values[k] = v
+	}
+	return env(values)
+}
+
+func workerDeps(getenv func(string) string, got *worker.Config) deps {
+	return deps{
+		getenv: getenv,
+		// pgxpool connects on first use, so a pool for an address nobody serves never dials.
+		openPool: func(ctx context.Context, _ string) (*pgxpool.Pool, error) {
+			return pgxpool.New(ctx, "postgres://nobody@127.0.0.1:1/none")
+		},
+		runWorker: func(_ context.Context, cfg worker.Config) error {
+			*got = cfg
+			return nil
+		},
+	}
+}
+
+func TestRoleWorkerStartsTheWorkerForTheTenantOfTheEnvironment(t *testing.T) {
+	var got worker.Config
+	code, _, stderr := invoke(t, workerDeps(workerEnv(nil), &got), "--role=worker")
+	if code != 0 {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if got.Tenant.String() != testTenant || got.Pool == nil || got.Log == nil {
+		t.Errorf("config = %+v", got)
+	}
+}
+
+func TestRoleWorkerAcceptsTheRoleAsASeparateArgument(t *testing.T) {
+	var got worker.Config
+	if code, _, stderr := invoke(t, workerDeps(workerEnv(nil), &got), "--role", "worker"); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+}
+
+func TestRoleWorkerRefusesWhatItCannotServe(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		extra    map[string]string
+		wantCode int
+		wantErr  string
+	}{
+		{"an extra argument", []string{"--role=worker", "now"}, nil, 2, "usage: ipso-server --role=api|worker"},
+		{"the migration credential", []string{"--role=worker"}, map[string]string{"IPSO_MIGRATE_DATABASE_URL": "postgres://ipso_migrate@db.example.test/ipso"}, 1, "migration credential"},
+		{"no database", []string{"--role=worker"}, map[string]string{"IPSO_DATABASE_URL": ""}, 1, "IPSO_DATABASE_URL is not set"},
+		{"no tenant", []string{"--role=worker"}, map[string]string{"IPSO_TENANT_ID": ""}, 1, "IPSO_TENANT_ID is not set"},
+		{"a bad tenant", []string{"--role=worker"}, map[string]string{"IPSO_TENANT_ID": "acme"}, 1, "not a tenant id"},
+		{"a nil tenant", []string{"--role=worker"}, map[string]string{"IPSO_TENANT_ID": "00000000-0000-0000-0000-000000000000"}, 1, "not a tenant id"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got worker.Config
+			code, _, stderr := invoke(t, workerDeps(workerEnv(tt.extra), &got), tt.args...)
+			if code != tt.wantCode {
+				t.Errorf("exit code = %d, want %d: %s", code, tt.wantCode, stderr)
+			}
+			if !strings.Contains(stderr, tt.wantErr) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr, tt.wantErr)
+			}
+			if got.Pool != nil {
+				t.Error("the worker was started")
+			}
+		})
+	}
+}
+
+func TestRoleWorkerOpensNoConnectionWithTheMigrationCredential(t *testing.T) {
+	d := workerDeps(workerEnv(map[string]string{"IPSO_MIGRATE_DATABASE_URL": "postgres://ipso_migrate@db.example.test/ipso"}), new(worker.Config))
+	d.openPool = func(context.Context, string) (*pgxpool.Pool, error) {
+		t.Error("a connection was opened with the migration credential in the environment")
+		return nil, errors.New("not reached")
+	}
+	if code, _, _ := invoke(t, d, "--role=worker"); code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+}
+
+func TestRoleWorkerReportsAFailedStart(t *testing.T) {
+	d := workerDeps(workerEnv(nil), new(worker.Config))
+	d.runWorker = func(context.Context, worker.Config) error { return errors.New("refusing to start") }
+	code, _, stderr := invoke(t, d, "--role=worker")
+	if code != 1 || !strings.Contains(stderr, "worker: refusing to start") {
+		t.Errorf("exit code = %d, stderr = %q", code, stderr)
+	}
+}
+
+func TestRoleWorkerNeverPrintsThePassword(t *testing.T) {
+	const password = "s3cret-pass-word"
+	d := deps{
+		getenv: workerEnv(map[string]string{"IPSO_DATABASE_URL": "postgres://ipso_app:" + password + "@db.example.test:notaport/ipso"}),
+		openPool: func(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
+			return pgxpool.New(ctx, databaseURL)
+		},
+		runWorker: func(context.Context, worker.Config) error { return errors.New("not reached") },
+	}
+	code, _, stderr := invoke(t, d, "--role=worker")
+	if code != 1 || !strings.Contains(stderr, "open the database") {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr)
+	}
+	if strings.Contains(stderr, password) {
+		t.Errorf("stderr shows the password: %q", stderr)
 	}
 }

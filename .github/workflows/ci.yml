@@ -161,6 +161,47 @@ jobs:
             exit 1
           fi
           echo "${out}" | grep -q "refusing to start"
+      # The worker serves no request, so its sweep is the proof that it runs: it connected as the
+      # application role, passed its start gates, and used River's tables. A job of the hourly kind
+      # completes when the worker starts, whether or not a notice is due.
+      - name: The worker completes its first sweep
+        run: |
+          set -euo pipefail
+          set -a
+          . ./.env.example
+          set +a
+          for attempt in $(seq 1 45); do
+            completed="$(${COMPOSE} exec -T -e PGPASSWORD="${IPSO_APP_PASSWORD}" postgres \
+              psql --host=127.0.0.1 --username=ipso_app --dbname=ipso --tuples-only --no-align \
+              --command="SELECT count(*) FROM river.river_job WHERE kind = 'waiver_notices' AND state = 'completed'")"
+            if [ "${completed}" -ge 1 ]; then
+              ${COMPOSE} ps --status running --services > "${RUNNER_TEMP}/running.txt"
+              grep -qx worker "${RUNNER_TEMP}/running.txt"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::the worker did not complete a waiver notice sweep within 90 seconds"
+          exit 1
+      # The worker must refuse the migration role, which owns the tables, like the api.
+      - name: Refuse to run the worker as the migration role
+        run: |
+          # The runner's shell has -e, and the exit status of the worker is what this step looks at.
+          set +e
+          set -uo pipefail
+          set -a
+          . ./.env.example
+          set +a
+          out="$(${COMPOSE} run --rm --no-deps \
+            -e "IPSO_DATABASE_URL=postgres://ipso_migrate:${IPSO_MIGRATE_PASSWORD}@postgres:5432/ipso?sslmode=disable" \
+            worker 2>&1)"
+          code=$?
+          echo "${out}"
+          if [ "${code}" -eq 0 ]; then
+            echo "::error::the worker started as the migration role"
+            exit 1
+          fi
+          echo "${out}" | grep -q "refusing to start"
       - name: Show the logs of the stack
         if: failure()
         run: ${COMPOSE} logs --no-color
@@ -199,5 +240,23 @@ jobs:
       - run: go install github.com/google/go-licenses/v2@v2.0.1
       # This repository is FSL-1.1-ALv2, which go-licenses cannot classify, so its own packages
       # are ignored. Every dependency is still checked against the allowlist. The binary serves
-      # ./internal/api since IPSO-133, so the one package covers it.
-      - run: go-licenses check ./cmd/ipso-server --ignore github.com/ipsofacto-io/ipso-server --allowed_licenses=Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC
+      # ./internal/api since IPSO-133, so the one package covers it. MPL-2.0 is on the list for River
+      # (ADR-0096), and the next step keeps it there for River alone.
+      - run: go-licenses check ./cmd/ipso-server --ignore github.com/ipsofacto-io/ipso-server --allowed_licenses=Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC,MPL-2.0
+      - name: Allow MPL-2.0 for River only
+        run: |
+          set -euo pipefail
+          go-licenses report ./cmd/ipso-server --ignore github.com/ipsofacto-io/ipso-server > "${RUNNER_TEMP}/licenses.csv"
+          # The filter below reads the license name from the third column and fails only when it finds
+          # a module. It would pass for any other shape of report, so first require the row it is meant
+          # to see: River under MPL-2.0.
+          river="$(awk -F, '$3 == "MPL-2.0" && $1 ~ /^github.com\/riverqueue\// { n++ } END { print n + 0 }' "${RUNNER_TEMP}/licenses.csv")"
+          if [ "${river}" -eq 0 ]; then
+            echo "::error::the report lists no River package under MPL-2.0, so its format may have changed"
+            exit 1
+          fi
+          other="$(awk -F, '$3 == "MPL-2.0" && $1 !~ /^github.com\/riverqueue\// { print $1 }' "${RUNNER_TEMP}/licenses.csv")"
+          if [ -n "${other}" ]; then
+            echo "::error::MPL-2.0 is allowed for River only (ADR-0097). Also MPL-2.0: ${other}"
+            exit 1
+          fi
