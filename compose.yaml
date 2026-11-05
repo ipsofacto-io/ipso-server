@@ -67,6 +67,9 @@ services:
     volumes:
       - certs:/certs:ro
       - ./deploy/compose/dex.yaml:/etc/dex/dex.yaml:ro
+    tmpfs:
+      # The image entrypoint writes the configuration it runs with here.
+      - /tmp
     ports:
       # So a person can ask for a token. Published on the loopback address only.
       - "127.0.0.1:5556:5556"
