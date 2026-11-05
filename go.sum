@@ -101,8 +101,8 @@ github.com/hashicorp/logutils v1.0.0 h1:dLEQVugN8vlakKOUE3ihGLTZJRB4j+M2cdTm/ORI
 github.com/hashicorp/logutils v1.0.0/go.mod h1:QIAnNjmIWmVIIkWDTG1z5v++HQmx9WQRO+LraFDTW64=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
-github.com/ipsofacto-io/ipso v0.4.1-0.20261102181304-ee627522be57 h1:vr+vDZL8ozOu3bcoOtq0ZXkF0zwNKEfK1FGkmfVgyTQ=
-github.com/ipsofacto-io/ipso v0.4.1-0.20261102181304-ee627522be57/go.mod h1:Flw8suRws0OweBqsdJmtQBtCqowyc//QO0vLok2+xOI=
+github.com/ipsofacto-io/ipso v0.4.1-0.20261105183009-d21c3756d314 h1:a5bEbkVZP4u8g8Ifi/MqTD5W6ivzCXTnMVzRtKEYsXI=
+github.com/ipsofacto-io/ipso v0.4.1-0.20261105183009-d21c3756d314/go.mod h1:Flw8suRws0OweBqsdJmtQBtCqowyc//QO0vLok2+xOI=
 github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438 h1:Dj0L5fhJ9F82ZJyVOmBx6msDp/kfd1t9GRfny/mfJA0=
 github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438/go.mod h1:a/s9Lp5W7n/DD0VrVoyJ00FbP2ytTPDVOivvn2bMlds=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=

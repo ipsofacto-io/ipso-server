@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/ipsofacto-io/ipso v0.4.1-0.20261102181304-ee627522be57
+	github.com/ipsofacto-io/ipso v0.4.1-0.20261105183009-d21c3756d314
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/lestrrat-go/jwx/v3 v3.3.0
 	github.com/pact-foundation/pact-go/v2 v2.8.0 // pact tests only

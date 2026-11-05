@@ -167,7 +167,7 @@ credential.
 
 --role=worker works the jobs of the control plane on River, in the registry's PostgreSQL, as the
 application role. It reads ` + databaseEnv + ` and ` + tenantEnv + `, serves no request, and runs the waiver notice
-sweep every hour. It refuses to start as a role that can bypass row-level security, for a tenant with no
+sweep and the premise sweep every hour. It refuses to start as a role that can bypass row-level security, for a tenant with no
 row, before the schema is migrated, or when it holds the migration credential. The role all is not built
 yet.
 
