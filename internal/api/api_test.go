@@ -427,3 +427,17 @@ func TestLoggedSubjectIsOneBoundedLine(t *testing.T) {
 		t.Fatalf("subject %q", got)
 	}
 }
+
+// A worker evaluation is a system action (ADR-0053, ADR-0098). No route runs a probe or writes an
+// evaluation, a reason, a clearance, or an allowlist row, and none can until the role policy of IPSO-66
+// is in place. A route named for one of these is a decision to make there, so this test fails first.
+func TestNoRouteRunsOrRecordsAPremise(t *testing.T) {
+	for _, rt := range routes(nil, time.Now) {
+		named := strings.ToLower(rt.pattern + " " + rt.op)
+		for _, word := range []string{"premise", "probe", "evaluation", "reason", "clearance", "allowlist"} {
+			if strings.Contains(named, word) {
+				t.Errorf("%s (%s) is named for %q: no route may run or record a premise before IPSO-66", rt.pattern, rt.op, word)
+			}
+		}
+	}
+}

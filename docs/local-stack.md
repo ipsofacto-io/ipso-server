@@ -22,12 +22,21 @@ The values in `.env.example` are test-only, and they are the only place a creden
 - `worker`: `ipso-server --role=worker` as the application role. It serves no request and has no port. It refuses to start as a role that owns a table or can bypass row-level security, for a tenant with no row, when River's tables are missing, and when it holds the migration credential.
 - `front`: nginx, the only way in. It allows each client address 20 requests a second with a burst of 40, before a request reaches the API, so a request with no valid token is limited too.
 
-The worker runs the waiver notice sweep when it starts and then every hour, as a River job in the same database ([ADR-0097](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0097-the-worker-role.md)). The registry is empty here, so a sweep records nothing. To see the jobs it ran:
+The worker runs the waiver notice sweep and the premise sweep when it starts and then every hour, as River jobs in the same database ([ADR-0097](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0097-the-worker-role.md), [ADR-0098](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0098-the-premise-sweep.md)). The registry is empty here, so a sweep records nothing. To see the jobs it ran:
 
 ```sh
 set -a; . ./.env; set +a
 docker compose exec -e PGPASSWORD="$IPSO_APP_PASSWORD" postgres psql --host=127.0.0.1 --username=ipso_app --dbname=ipso \
   --command="SELECT id, kind, state, finalized_at FROM river.river_job ORDER BY id DESC LIMIT 5"
+```
+
+A premise is probed only on a host the tenant has allowed, and the allowlist is empty here, so a premise on a decision is recorded as an `error` until you add its host. There is no route for that yet. Insert a row as the application role, with the tenant set for the transaction. A premise that was recorded as an error is probed again when its `every` days have passed:
+
+```sh
+set -a; . ./.env; set +a
+docker compose exec -e PGPASSWORD="$IPSO_APP_PASSWORD" postgres psql --host=127.0.0.1 --username=ipso_app --dbname=ipso --single-transaction \
+  --command="SELECT set_config('ipso.tenant', '$IPSO_TENANT_ID', true)" \
+  --command="INSERT INTO registry.premise_host_allow (tenant_id, host, allowed) VALUES ('$IPSO_TENANT_ID', 'status.example.com', true)"
 ```
 
 ## Call the API

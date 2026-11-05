@@ -1,6 +1,6 @@
 // Package worker runs the job runtime of ADR-0096 for one tenant: River on the registry's PostgreSQL,
 // started only after the gates of the api role (ADR-0097). The one job built so far is the hourly waiver
-// notice sweep.
+// notice sweep and the premise sweep with its probes.
 package worker
 
 import (
@@ -21,6 +21,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
+	"github.com/ipsofacto-io/ipso/pkg/premisecheck"
 )
 
 const (
@@ -47,6 +48,12 @@ type Config struct {
 // connected role could bypass row-level security, when the tenant has no row, or when River's tables are
 // missing. When ctx ends, running jobs get softStop to finish.
 func Run(ctx context.Context, cfg Config) error {
+	return run(ctx, cfg, premisecheck.Client{})
+}
+
+// run is Run with the client that probes premises, which the integration tests replace with one that
+// reaches a test server.
+func run(ctx context.Context, cfg Config, probe prober) error {
 	if err := cfg.validate(); err != nil {
 		return err
 	}
@@ -67,7 +74,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 
-	client, err := newClient(cfg, db, registry.Notify)
+	client, err := newClient(cfg, db, registry.Notify, probe)
 	if err != nil {
 		return err
 	}
@@ -94,18 +101,26 @@ func (c Config) validate() error {
 // newClient builds the River client: one queue and one worker for each job kind, the periodic jobs, and
 // no reindexer. The reindexer needs the table owner or MAINTAIN, and the application role has neither, so
 // reindexing river_job is operations work (ADR-0097).
-func newClient(cfg Config, db *sql.DB, notify notifyFunc) (*river.Client[pgx.Tx], error) {
+func newClient(cfg Config, db *sql.DB, notify notifyFunc, probe prober) (*river.Client[pgx.Tx], error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &waiverNotices{db: db, tenant: cfg.Tenant, log: cfg.Log, notify: notify})
+	river.AddWorker(workers, &premiseSweep{db: db, tenant: cfg.Tenant, log: cfg.Log, due: registry.DuePremises, insert: insertProbes})
+	river.AddWorker(workers, &premiseProbe{
+		db: db, tenant: cfg.Tenant, log: cfg.Log,
+		due: registry.DuePremise, allowed: registry.HostAllowed, probe: probe, record: registry.RecordEvaluation,
+	})
 	return river.NewClient(riverpgxv5.New(cfg.Pool), &river.Config{
 		Logger:  cfg.Log,
 		Schema:  riverSchema,
 		Workers: workers,
 		Queues: map[string]river.QueueConfig{
 			waiverNoticesQueue: {MaxWorkers: 1},
+			premiseSweepQueue:  {MaxWorkers: 1},
+			premiseProbeQueue:  {MaxWorkers: premiseProbeWorkers},
 		},
 		PeriodicJobs: []*river.PeriodicJob{
 			waiverNoticesPeriodic(cfg.Tenant),
+			premiseSweepPeriodic(cfg.Tenant),
 		},
 		ReindexerSchedule: river.NeverSchedule(),
 		SoftStopTimeout:   softStop,

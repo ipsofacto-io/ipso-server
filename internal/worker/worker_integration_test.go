@@ -23,6 +23,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
+	"github.com/ipsofacto-io/ipso/pkg/premisecheck"
 )
 
 var server *pgtest.Server
@@ -139,6 +140,12 @@ func (l *testLog) close() {
 // that Run ended without an error. The test cleanup calls it too.
 func (s *stack) start(t *testing.T, tenant uuid.UUID) (stop func()) {
 	t.Helper()
+	return s.startProbing(t, tenant, premisecheck.Client{})
+}
+
+// startProbing is start with the client that probes premises, so a test can reach a server of its own.
+func (s *stack) startProbing(t *testing.T, tenant uuid.UUID, probe prober) (stop func()) {
+	t.Helper()
 	pool, err := pgxpool.New(t.Context(), s.database.DSN(pgtest.App))
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +154,7 @@ func (s *stack) start(t *testing.T, tenant uuid.UUID) (stop func()) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, Config{Pool: pool, Tenant: tenant, Log: slog.New(slog.NewTextHandler(logs, nil))})
+		done <- run(ctx, Config{Pool: pool, Tenant: tenant, Log: slog.New(slog.NewTextHandler(logs, nil))}, probe)
 	}()
 	var once sync.Once
 	stop = func() {

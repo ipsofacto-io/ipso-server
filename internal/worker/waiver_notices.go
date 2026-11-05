@@ -26,6 +26,19 @@ const (
 	waiverNoticesAttempts = 3
 )
 
+// activeStates are the states in which a job of the same kind and arguments is not inserted again. A
+// completed job is left out, so the next tick can insert one; River's default would hold the next tick
+// back until its cleaner removed the completed job. Each job gets a slice of its own.
+func activeStates() []rivertype.JobState {
+	return []rivertype.JobState{
+		rivertype.JobStateAvailable,
+		rivertype.JobStatePending,
+		rivertype.JobStateRetryable,
+		rivertype.JobStateRunning,
+		rivertype.JobStateScheduled,
+	}
+}
+
 // errOtherTenant is the whole text River stores when a job names a tenant this process does not serve.
 var errOtherTenant = errors.New("the job names another tenant")
 
@@ -41,21 +54,14 @@ type WaiverNoticesArgs struct {
 func (WaiverNoticesArgs) Kind() string { return waiverNoticesKind }
 
 // InsertOpts puts the job in its own queue and makes it unique for its kind and tenant while it waits,
-// runs, or is due a retry. A completed job is left out of the states, so the next tick can insert one;
-// River's default would hold the next tick back until its cleaner removed the completed job.
+// runs, or is due a retry.
 func (WaiverNoticesArgs) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{
 		MaxAttempts: waiverNoticesAttempts,
 		Queue:       waiverNoticesQueue,
 		UniqueOpts: river.UniqueOpts{
-			ByArgs: true,
-			ByState: []rivertype.JobState{
-				rivertype.JobStateAvailable,
-				rivertype.JobStatePending,
-				rivertype.JobStateRetryable,
-				rivertype.JobStateRunning,
-				rivertype.JobStateScheduled,
-			},
+			ByArgs:  true,
+			ByState: activeStates(),
 		},
 	}
 }
