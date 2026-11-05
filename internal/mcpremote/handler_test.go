@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -494,5 +496,92 @@ func TestErrorsLeakNothing(t *testing.T) {
 	raw, _ := io.ReadAll(rec.Body)
 	if strings.Contains(string(raw), "jwt") || strings.Contains(string(raw), "signature") {
 		t.Fatalf("a verifier error reached the client: %s", raw)
+	}
+}
+
+// limitedRig serves a handler with a small limit and a short deadline. Subject agent-2 speaks for
+// another tenant.
+func limitedRig(t *testing.T, cfg Config, backend mcptools.Backend) (*authntest.Server, http.Handler) {
+	t.Helper()
+	auth := authntest.NewServer(t)
+	cfg.ResourceURL, cfg.AuthorizationServers, cfg.Version = testResource, []string{auth.Server.URL}, "test"
+	handler, err := NewHandler(cfg, verifierFor(t, auth, testResource),
+		func(_ context.Context, claims authn.Claims) (Caller, bool) {
+			if claims.Subject == "agent-2" {
+				return Caller{Tenant: uuid.MustParse("00000000-0000-4000-8000-00000000000b"), Principal: testPrincipal}, true
+			}
+			return Caller{Tenant: testTenant, Principal: testPrincipal}, true
+		},
+		func(Caller) mcptools.Backend { return backend })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return auth, handler
+}
+
+func callTool(handler http.Handler, token string) *httptest.ResponseRecorder {
+	body, headers := toolCall(mcptools.ToolApplicable)
+	req := httptest.NewRequest(http.MethodPost, testResource, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestATenantPastItsLimitIsRefused(t *testing.T) {
+	backend := &recordingBackend{}
+	auth, handler := limitedRig(t, Config{Rate: 0.001, Burst: 2}, backend)
+	token := auth.Token(testResource, []string{ScopeRead})
+	for i := range 2 {
+		if rec := callTool(handler, token); rec.Code != http.StatusOK {
+			t.Fatalf("call %d: status %d: %s", i, rec.Code, rec.Body)
+		}
+	}
+	rec := callTool(handler, token)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status %d, want 429: %s", rec.Code, rec.Body)
+	}
+	if retry, err := strconv.Atoi(rec.Header().Get("Retry-After")); err != nil || retry < 1 {
+		t.Errorf("Retry-After = %q", rec.Header().Get("Retry-After"))
+	}
+	if len(backend.callers) != 2 {
+		t.Errorf("the tool ran %d times, want 2", len(backend.callers))
+	}
+	// Another tenant has its own bucket.
+	other := auth.Token(testResource, []string{ScopeRead}, func(b *jwt.Builder) *jwt.Builder { return b.Subject("agent-2") })
+	if rec := callTool(handler, other); rec.Code != http.StatusOK {
+		t.Errorf("another tenant: status %d: %s", rec.Code, rec.Body)
+	}
+	// A caller with no valid token is refused before it is charged to any tenant.
+	if rec := callTool(handler, "garbage"); rec.Code != http.StatusUnauthorized {
+		t.Errorf("a bad token: status %d, want 401", rec.Code)
+	}
+}
+
+// slowBackend waits until its request ends.
+type slowBackend struct{ recordingBackend }
+
+func (b *slowBackend) Applicable(ctx context.Context, _ mcptools.ApplicableInput) (mcptools.ApplicableOutput, error) {
+	<-ctx.Done()
+	return mcptools.ApplicableOutput{}, ctx.Err()
+}
+
+func TestARequestPastItsDeadlineIs503(t *testing.T) {
+	auth, handler := limitedRig(t, Config{Timeout: 50 * time.Millisecond}, &slowBackend{})
+	rec := callTool(handler, auth.Token(testResource, []string{ScopeRead}))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestConfigPathsNameTheEndpointAndItsMetadata(t *testing.T) {
+	got := Config{ResourceURL: testResource}.Paths()
+	want := []string{"/mcp", "/.well-known/oauth-protected-resource/mcp"}
+	if !slices.Equal(got, want) {
+		t.Errorf("Paths = %v, want %v", got, want)
 	}
 }

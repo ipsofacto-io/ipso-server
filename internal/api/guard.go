@@ -5,11 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
-	"math"
 	"net/http"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -18,6 +16,7 @@ import (
 
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
+	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 )
 
 // maxLoggedSubject bounds the request a log entry records.
@@ -30,7 +29,7 @@ type guard struct {
 	db       *sql.DB
 	verifier authn.Verifier
 	callers  CallerFunc
-	limiter  *tenantLimiter
+	limiter  *ratelimit.Limiter
 	maxBody  int64
 	now      func() time.Time
 	log      *slog.Logger
@@ -55,8 +54,8 @@ func (g *guard) wrap(op string, keys []string, next http.Handler) http.Handler {
 			writeError(w, http.StatusForbidden, errForbidden)
 			return
 		}
-		if wait, ok := g.limiter.allow(caller.Tenant, g.now()); !ok {
-			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
+		if wait, ok := g.limiter.Allow(caller.Tenant, g.now()); !ok {
+			w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
 			writeError(w, http.StatusTooManyRequests, errRateLimited)
 			return
 		}

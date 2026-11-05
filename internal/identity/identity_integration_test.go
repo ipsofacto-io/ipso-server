@@ -238,3 +238,111 @@ func TestApplicationRoleCannotRewriteIdentity(t *testing.T) {
 		}
 	}
 }
+
+const idp = "https://idp.example.test"
+
+func bind(t *testing.T, db *sql.DB, tenant, principal uuid.UUID, issuer, subject string) error {
+	t.Helper()
+	_, err := pgtest.Exec(t.Context(), db, tenant.String(), `
+		INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1, $2, $3, $4)`,
+		tenant, principal, issuer, subject)
+	return err
+}
+
+func addTenant(t *testing.T, db *sql.DB, tenant uuid.UUID) {
+	t.Helper()
+	if _, err := pgtest.Exec(t.Context(), db, tenant.String(), `INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1, 'synthetic tenant')`, tenant); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPrincipalForReadsOnlyTheTenantsOwnLogins(t *testing.T) {
+	db := migrated(t)
+	addTenant(t, db, tenantA)
+	addTenant(t, db, tenantB)
+	ada, err := tryPrincipal(t, db, tenantA, "human", "Ada", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bea, err := tryPrincipal(t, db, tenantB, "human", "Bea", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bind(t, db, tenantA, ada, idp, "subject-ada"); err != nil {
+		t.Fatal(err)
+	}
+	if err := bind(t, db, tenantB, bea, idp, "subject-ada"); err != nil {
+		t.Fatalf("the same subject in another tenant: %v", err)
+	}
+
+	got, err := identity.PrincipalFor(t.Context(), db, tenantA, idp, "subject-ada")
+	if err != nil || got != ada {
+		t.Fatalf("PrincipalFor = %v, %v, want %v", got, err, ada)
+	}
+	got, err = identity.PrincipalFor(t.Context(), db, tenantB, idp, "subject-ada")
+	if err != nil || got != bea {
+		t.Fatalf("PrincipalFor in tenant B = %v, %v, want %v", got, err, bea)
+	}
+	for name, args := range map[string][2]string{
+		"another subject": {idp, "subject-bea"},
+		"another issuer":  {"https://other.example.test", "subject-ada"},
+	} {
+		if _, err := identity.PrincipalFor(t.Context(), db, tenantA, args[0], args[1]); !errors.Is(err, identity.ErrUnknownLogin) {
+			t.Errorf("%s: err = %v, want ErrUnknownLogin", name, err)
+		}
+	}
+	if _, err := identity.PrincipalFor(t.Context(), db, uuid.New(), idp, "subject-ada"); !errors.Is(err, identity.ErrUnknownLogin) {
+		t.Errorf("an unknown tenant: err = %v, want ErrUnknownLogin", err)
+	}
+	if _, err := identity.PrincipalFor(t.Context(), db, tenantA, "", "subject-ada"); !errors.Is(err, identity.ErrInvalidQuery) {
+		t.Errorf("no issuer: err = %v, want ErrInvalidQuery", err)
+	}
+}
+
+func TestALoginCannotNameAPrincipalOfAnotherTenantOrBeRebound(t *testing.T) {
+	db := migrated(t)
+	addTenant(t, db, tenantA)
+	addTenant(t, db, tenantB)
+	ada, err := tryPrincipal(t, db, tenantA, "human", "Ada", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bind(t, db, tenantB, ada, idp, "subject-ada"); err == nil {
+		t.Error("tenant B bound a principal of tenant A")
+	}
+	if err := bind(t, db, tenantA, ada, idp, "subject-ada"); err != nil {
+		t.Fatal(err)
+	}
+	if err := bind(t, db, tenantA, ada, idp, "subject-ada"); err == nil {
+		t.Error("the same issuer and subject were bound twice")
+	}
+	for name, args := range map[string][2]string{
+		"an http issuer":        {"http://idp.example.test", "s"},
+		"an empty subject":      {idp, ""},
+		"a padded subject":      {idp, " s"},
+		"a subject with a line": {idp, "a\nb"},
+		"a long subject":        {idp, strings.Repeat("s", 256)},
+	} {
+		if err := bind(t, db, tenantA, ada, args[0], args[1]); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	// The application role only adds logins: it cannot change or remove one.
+	if _, err := pgtest.Exec(t.Context(), db, tenantA.String(), `UPDATE identity.login SET subject = 'other'`); err == nil {
+		t.Error("a login was updated")
+	}
+	if _, err := pgtest.Exec(t.Context(), db, tenantA.String(), `DELETE FROM identity.login`); err == nil {
+		t.Error("a login was deleted")
+	}
+}
+
+func TestALoginNeedsATenantRow(t *testing.T) {
+	db := migrated(t)
+	ada, err := tryPrincipal(t, db, tenantA, "human", "Ada", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bind(t, db, tenantA, ada, idp, "subject-ada"); err == nil {
+		t.Error("a login was bound in a tenant that has no row")
+	}
+}

@@ -119,6 +119,55 @@ jobs:
           path: api/pacts/ipso-web-ipso-server.json
           if-no-files-found: error
 
+  # The local stack (ADR-0095): started from a clean checkout with the test-only values of
+  # .env.example, then asked questions the way a person would. The images are pinned by digest.
+  compose:
+    name: ci / compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COMPOSE: docker compose --env-file .env.example
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Start the stack
+        run: ${COMPOSE} up --build --detach
+      - name: Smoke test the API
+        run: |
+          set -euo pipefail
+          ${COMPOSE} cp certs:/certs/ca.pem "${RUNNER_TEMP}/ca.pem"
+          set -a
+          . ./.env.example
+          set +a
+          IPSO_SMOKE_CA="${RUNNER_TEMP}/ca.pem" go test -tags compose -count=1 -v ./deploy/compose
+      # The api role must refuse the migration role, which owns the tables.
+      - name: Refuse to serve as the migration role
+        run: |
+          # The runner's shell has -e, and the exit status of the api is what this step looks at.
+          set +e
+          set -uo pipefail
+          set -a
+          . ./.env.example
+          set +a
+          out="$(${COMPOSE} run --rm --no-deps             -e "IPSO_DATABASE_URL=postgres://ipso_migrate:${IPSO_MIGRATE_PASSWORD}@postgres:5432/ipso?sslmode=disable"             api 2>&1)"
+          code=$?
+          echo "${out}"
+          if [ "${code}" -eq 0 ]; then
+            echo "::error::the api started as the migration role"
+            exit 1
+          fi
+          echo "${out}" | grep -q "refusing to start"
+      - name: Show the logs of the stack
+        if: failure()
+        run: ${COMPOSE} logs --no-color
+      - name: Stop the stack
+        if: always()
+        run: ${COMPOSE} down --volumes
+
   lint:
     name: ci / lint
     runs-on: ubuntu-latest
@@ -134,7 +183,7 @@ jobs:
         with:
           version: v2.15.0
           install-mode: goinstall
-          args: --build-tags=integration
+          args: --build-tags=integration,compose
 
   licenses:
     name: ci / licenses
@@ -149,6 +198,6 @@ jobs:
           go-version-file: go.mod
       - run: go install github.com/google/go-licenses/v2@v2.0.1
       # This repository is FSL-1.1-ALv2, which go-licenses cannot classify, so its own packages
-      # are ignored. Every dependency is still checked against the allowlist. ./internal/api is
-      # checked before the binary serves it (IPSO-133).
-      - run: go-licenses check ./cmd/ipso-server ./internal/api --ignore github.com/ipsofacto-io/ipso-server --allowed_licenses=Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC
+      # are ignored. Every dependency is still checked against the allowlist. The binary serves
+      # ./internal/api since IPSO-133, so the one package covers it.
+      - run: go-licenses check ./cmd/ipso-server --ignore github.com/ipsofacto-io/ipso-server --allowed_licenses=Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC

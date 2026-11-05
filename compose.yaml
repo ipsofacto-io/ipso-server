@@ -1,0 +1,157 @@
+# The control plane on a laptop (ADR-0095): PostgreSQL 18, the migrations, the API as the application
+# role, and Dex as the OIDC provider. `docker compose up --build` starts it. Every image is pinned by
+# digest. The values in .env.example are test-only; no secret is committed.
+name: ipso-local
+
+x-hardened: &hardened
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+x-ipso-server: &ipso-server
+  build:
+    context: .
+  image: ipso-server:local
+
+services:
+  postgres:
+    <<: *hardened
+    image: postgres:18.6@sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4
+    # The entrypoint starts as root, fixes the ownership of the data directory, and drops to postgres.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?copy .env.example to .env}
+      IPSO_MIGRATE_PASSWORD: ${IPSO_MIGRATE_PASSWORD:?copy .env.example to .env}
+      IPSO_APP_PASSWORD: ${IPSO_APP_PASSWORD:?copy .env.example to .env}
+    volumes:
+      # PostgreSQL 18 images keep the data under /var/lib/postgresql/18/docker.
+      - postgres-data:/var/lib/postgresql
+      - ./deploy/compose/postgres-init.sh:/docker-entrypoint-initdb.d/10-ipso.sh:ro
+    tmpfs:
+      - /tmp
+      - /run/postgresql
+    healthcheck:
+      # Over TCP, because the server that initializes the database listens on the socket only.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d ipso"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  certs:
+    <<: *hardened
+    # Any image with openssl: this one is already pulled for the database.
+    image: postgres:18.6@sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4
+    entrypoint: ["/bin/sh", "/certs.sh"]
+    volumes:
+      - certs:/certs
+      - ./deploy/compose/certs.sh:/certs.sh:ro
+    restart: "no"
+
+  dex:
+    <<: *hardened
+    image: ghcr.io/dexidp/dex:v2.41.1@sha256:bc7cfce7c17f52864e2bb2a4dc1d2f86a41e3019f6d42e81d92a301fad0c8a1d
+    command: ["dex", "serve", "/etc/dex/dex.yaml"]
+    environment:
+      DEX_EXPAND_ENV: "true"
+      IPSO_API_CLIENT_SECRET: ${IPSO_API_CLIENT_SECRET:?copy .env.example to .env}
+      IPSO_OTHER_CLIENT_SECRET: ${IPSO_OTHER_CLIENT_SECRET:?copy .env.example to .env}
+      IPSO_DEX_USER: ${IPSO_DEX_USER:?copy .env.example to .env}
+      IPSO_DEX_PASSWORD: ${IPSO_DEX_PASSWORD:?copy .env.example to .env}
+    volumes:
+      - certs:/certs:ro
+      - ./deploy/compose/dex.yaml:/etc/dex/dex.yaml:ro
+    tmpfs:
+      # The image entrypoint writes the configuration it runs with here.
+      - /tmp
+    ports:
+      # So a person can ask for a token. Published on the loopback address only.
+      - "127.0.0.1:5556:5556"
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:5558/healthz"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    <<: [*hardened, *ipso-server]
+    command: ["migrate"]
+    environment:
+      # The only service that holds the migration credential.
+      IPSO_MIGRATE_DATABASE_URL: postgres://ipso_migrate:${IPSO_MIGRATE_PASSWORD:?copy .env.example to .env}@postgres:5432/ipso?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  seed:
+    <<: *hardened
+    image: postgres:18.6@sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4
+    entrypoint: ["psql"]
+    command:
+      - --host=postgres
+      - --username=ipso_app
+      - --dbname=ipso
+      - --set=ON_ERROR_STOP=1
+      - --set=tenant=${IPSO_TENANT_ID:?copy .env.example to .env}
+      - --set=person=${IPSO_SEED_PRINCIPAL_ID:?copy .env.example to .env}
+      - --set=issuer=https://dex:5556/dex
+      - --set=subject=${IPSO_SEED_SUBJECT:?copy .env.example to .env}
+      - --file=/seed.sql
+    environment:
+      PGPASSWORD: ${IPSO_APP_PASSWORD:?copy .env.example to .env}
+    volumes:
+      - ./deploy/compose/seed.sql:/seed.sql:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  api:
+    <<: [*hardened, *ipso-server]
+    command: ["--role=api"]
+    environment:
+      # The application role. The api refuses to start as any role that owns a table, and refuses to
+      # start when it holds the migration credential.
+      IPSO_DATABASE_URL: postgres://ipso_app:${IPSO_APP_PASSWORD:?copy .env.example to .env}@postgres:5432/ipso?sslmode=disable
+      IPSO_TENANT_ID: ${IPSO_TENANT_ID:?copy .env.example to .env}
+      IPSO_OIDC_ISSUER: https://dex:5556/dex
+      # Dex puts the id of the client in the audience, so the API accepts the ipso-api client only.
+      IPSO_API_AUDIENCE: ipso-api
+      IPSO_LISTEN_ADDR: ":8080"
+      # The throwaway CA of the local provider is the only authority this process trusts.
+      SSL_CERT_FILE: /certs/ca.pem
+    volumes:
+      - certs:/certs:ro
+    depends_on:
+      dex:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  front:
+    <<: *hardened
+    image: nginxinc/nginx-unprivileged:1.31.7-alpine3.24@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e
+    volumes:
+      - ./deploy/compose/nginx.conf:/etc/nginx/nginx.conf:ro
+    tmpfs:
+      - /tmp
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - api
+    restart: on-failure
+
+volumes:
+  postgres-data:
+  certs:

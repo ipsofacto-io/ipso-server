@@ -295,6 +295,7 @@ func seed(t *testing.T, app *sql.DB, tenant string) {
 	}
 
 	var person, org, payments, labs, repo string
+	mustExec(`INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1::uuid, 'synthetic tenant')`, tenant)
 	mustScan(`INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1::uuid, 'human', 'Ada') RETURNING id`,
 		[]any{tenant}, &person)
 	mustScan(`INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1::uuid, NULL, 'org', 'acme') RETURNING id`,
@@ -375,6 +376,9 @@ func seed(t *testing.T, app *sql.DB, tenant string) {
 		VALUES ($1::uuid, $2::uuid, 1, '{}'::jsonb, 'package p', sha256(convert_to('package p', 'UTF8')),
 		        '[{},{}]'::jsonb, 2, 2, false, 'm', 'v1')`, tenant, decisionKeep)
 	mustExec(`
+		INSERT INTO identity.login (tenant_id, principal_id, issuer, subject)
+		VALUES ($1::uuid, $2::uuid, 'https://idp.example.test', 'subject-1')`, tenant, person)
+	mustExec(`
 		INSERT INTO identity.action_log (tenant_id, principal_id, responsible_id, action, subject)
 		VALUES ($1::uuid, $2::uuid, $2::uuid, 'api.read', 'registry')`, tenant, person)
 	mustExec(`INSERT INTO llm.usage (tenant_id, month, tokens) VALUES ($1::uuid, '2026-01-01', 1)`, tenant)
@@ -392,6 +396,8 @@ func smuggleInserts() []smuggle {
 		{"registry.scope", `INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1::uuid, NULL, 'org', 'smuggled')`, []any{tenantA}, true},
 		{"identity.principal", `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1::uuid, 'human', 'Bea')`, []any{tenantA}, true},
 		{"llm.usage", `INSERT INTO llm.usage (tenant_id, month, tokens) VALUES ($1::uuid, '2026-02-01', 1)`, []any{tenantA}, true},
+		{"tenancy.tenant", `INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1::uuid, 'smuggled')`, []any{tenantA}, true},
+		{"identity.login", `INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1::uuid, $1::uuid, 'https://idp.example.test', 'smuggled')`, []any{tenantA}, true},
 		{"registry.premise_host_allow", `INSERT INTO registry.premise_host_allow (tenant_id, host, allowed) VALUES ($1::uuid, 'smuggled.example', true)`, []any{tenantA}, true},
 		{"registry.grandfather_period", `INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period) VALUES ($1::uuid, $2::uuid, '[2021-01-01,)')`, []any{tenantA, decisionTo}, true},
 		{"proposals.proposal", `
@@ -513,6 +519,7 @@ func policies(ctx context.Context, db *sql.DB) ([]string, error) {
 func policyTables() []string {
 	tables := []string{
 		"identity.action_log",
+		"identity.login",
 		"identity.principal",
 		"llm.usage",
 		"proposals.agent_proposal",
@@ -534,6 +541,7 @@ func policyTables() []string {
 		"registry.supersession",
 		"registry.waiver",
 		"registry.waiver_notice",
+		"tenancy.tenant",
 	}
 	sort.Strings(tables)
 	return tables
@@ -542,6 +550,7 @@ func policyTables() []string {
 func expectedPolicies() []string {
 	app := map[string]string{
 		"identity.action_log":               "SELECT INSERT",
+		"identity.login":                    "SELECT INSERT",
 		"identity.principal":                "SELECT INSERT",
 		"llm.usage":                         "SELECT INSERT UPDATE",
 		"proposals.agent_proposal":          "SELECT INSERT",
@@ -563,6 +572,7 @@ func expectedPolicies() []string {
 		"registry.supersession":             "SELECT INSERT",
 		"registry.waiver":                   "SELECT INSERT",
 		"registry.waiver_notice":            "SELECT INSERT",
+		"tenancy.tenant":                    "SELECT INSERT",
 	}
 	migrate := map[string]string{
 		"registry.decision_version_history": "INSERT",

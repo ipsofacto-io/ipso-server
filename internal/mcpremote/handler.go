@@ -1,7 +1,8 @@
 // Package mcpremote serves the MCP tools over Streamable HTTP as an OAuth 2.1 resource server
 // (ADR-0077). The tool contract and the JSON-RPC layer come from ipso's pkg/mcptools, so a client
-// sees what the local server offers. The binary does not mount this handler: it needs a tenant from
-// the authenticated token, and no deployment may serve a tenant before row-level security (ADR-0050).
+// sees what the local server offers. ipso-server --role=api mounts this handler when an MCP issuer is
+// configured, after the row-level security check, with the principal of the login for the token's
+// issuer and subject (ADR-0094).
 package mcpremote
 
 import (
@@ -16,12 +17,15 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/time/rate"
 
 	"github.com/ipsofacto-io/ipso/pkg/mcptools"
 
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
+	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 )
 
 // Scopes a token can hold. Reading and proposing are separate, so a client can ask for the least.
@@ -50,8 +54,8 @@ type Caller struct {
 	Principal uuid.UUID
 }
 
-// CallerFunc maps verified claims to a caller. The mapping belongs to the login work (IPSO-65). The
-// tenant comes from here and never from the request. A false result is 403.
+// CallerFunc maps verified claims to a caller. internal/controlplane supplies it from the stored
+// logins (ADR-0093). The tenant comes from here and never from the request. A false result is 403.
 type CallerFunc func(context.Context, authn.Claims) (Caller, bool)
 
 // BackendFunc returns the tools for one caller.
@@ -63,6 +67,29 @@ type Config struct {
 	ResourceURL          string
 	AuthorizationServers []string
 	Version              string
+	// Timeout bounds a whole request, the database calls of a tool included. Default 10 seconds.
+	Timeout time.Duration
+	// Rate is the calls per second one tenant may make on this process. Default 10.
+	Rate rate.Limit
+	// Burst is how many calls one tenant may make at once. Default 20.
+	Burst int
+}
+
+const (
+	defaultTimeout = 10 * time.Second
+	defaultRate    = 10
+	defaultBurst   = 20
+)
+
+// Paths are the URL paths NewHandler answers on: the endpoint and its Protected Resource Metadata. A
+// caller that mounts the handler on a larger mux registers both. A resource URL that does not parse
+// has none.
+func (c Config) Paths() []string {
+	resource, err := url.Parse(c.ResourceURL)
+	if err != nil || resource.Path == "" {
+		return nil
+	}
+	return []string{resource.Path, metadataPrefix + resource.Path}
 }
 
 type handler struct {
@@ -72,6 +99,8 @@ type handler struct {
 	verifier    authn.Verifier
 	callers     CallerFunc
 	backends    BackendFunc
+	limiter     *ratelimit.Limiter
+	now         func() time.Time
 }
 
 // NewHandler returns the MCP endpoint and its Protected Resource Metadata (RFC 9728).
@@ -92,7 +121,18 @@ func NewHandler(cfg Config, verifier authn.Verifier, callers CallerFunc, backend
 	if verifier == nil || callers == nil || backends == nil {
 		return nil, errors.New("a verifier, a caller function, and a backend function are required")
 	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = defaultTimeout
+	}
+	if cfg.Rate <= 0 {
+		cfg.Rate = defaultRate
+	}
+	if cfg.Burst <= 0 {
+		cfg.Burst = defaultBurst
+	}
 	h := &handler{
+		limiter:     ratelimit.New(cfg.Rate, cfg.Burst),
+		now:         time.Now,
 		cfg:         cfg,
 		resource:    resource,
 		metadataURL: resource.Scheme + "://" + resource.Host + metadataPrefix + resource.Path,
@@ -110,7 +150,9 @@ func NewHandler(cfg Config, verifier authn.Verifier, callers CallerFunc, backend
 	}
 	mux.HandleFunc("GET "+resource.Path, notAllowed)
 	mux.HandleFunc("DELETE "+resource.Path, notAllowed)
-	return mux, nil
+	// The deadline reaches the database through the request context, and a request that is still
+	// running at the deadline is answered 503.
+	return http.TimeoutHandler(mux, cfg.Timeout, `{"error":"the request took too long"}`), nil
 }
 
 func isLoopback(host string) bool {
@@ -156,6 +198,12 @@ func (h *handler) post(w http.ResponseWriter, r *http.Request) {
 	caller, ok := h.callers(r.Context(), claims)
 	if !ok || caller.Tenant == uuid.Nil || caller.Principal == uuid.Nil {
 		writeFailure(w, http.StatusForbidden, "this token speaks for no principal here")
+		return
+	}
+	// The tenant is known, so the call is charged to it before the body is read.
+	if wait, ok := h.limiter.Allow(caller.Tenant, h.now()); !ok {
+		w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
+		writeFailure(w, http.StatusTooManyRequests, "this tenant is making too many calls")
 		return
 	}
 	mediaType, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";")

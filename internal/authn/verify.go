@@ -1,6 +1,6 @@
 // Package authn checks the bearer tokens the control plane accepts: signed JWTs from one
 // authorization server for one resource (RFC 8707). Which tenant and principal a token speaks for is
-// the login work's to decide (IPSO-65), so nothing here reads a tenant.
+// decided by the stored logins (ADR-0093), so nothing here reads a tenant.
 package authn
 
 import (
@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -47,14 +48,45 @@ type JWTVerifier struct {
 
 // Claims is what a verified token says.
 type Claims struct {
-	Subject  string
-	ClientID string
-	Scopes   []string
+	// Issuer is the authorization server that signed the token. Verify checked it against the
+	// configured one, so it is not the token's own word.
+	Issuer string
+	// Subject is the issuer's identifier for the user or client. It is unique only within the issuer.
+	Subject string
+	// Audiences is every resource the token names, not only the one that checked it.
+	Audiences []string
+	ClientID  string
+	Scopes    []string
 }
 
 // Verifier checks a bearer token. JWTVerifier is the implementation.
 type Verifier interface {
 	Verify(ctx context.Context, raw string) (Claims, error)
+}
+
+// Exclusive returns a Verifier that also refuses a token whose audience names any of others. A token
+// minted for two resources is valid at both, so each resource refuses one that names the other
+// (ADR-0094). A token for one resource only is already refused by the other's audience check.
+func Exclusive(verifier Verifier, others ...string) Verifier {
+	return exclusive{verifier: verifier, others: others}
+}
+
+type exclusive struct {
+	verifier Verifier
+	others   []string
+}
+
+func (e exclusive) Verify(ctx context.Context, raw string) (Claims, error) {
+	claims, err := e.verifier.Verify(ctx, raw)
+	if err != nil {
+		return Claims{}, err
+	}
+	for _, audience := range claims.Audiences {
+		if slices.Contains(e.others, audience) {
+			return Claims{}, errors.New("the token also names another resource")
+		}
+	}
+	return claims, nil
 }
 
 // Metadata is what the authorization server says it offers clients. A resource server that needs
@@ -250,7 +282,9 @@ func (v *JWTVerifier) refresh(ctx context.Context) (jwk.Set, bool) {
 
 func claimsOf(token jwt.Token) Claims {
 	claims := Claims{}
+	claims.Issuer, _ = token.Issuer()
 	claims.Subject, _ = token.Subject()
+	claims.Audiences, _ = token.Audience()
 	_ = token.Get("client_id", &claims.ClientID)
 	var scope string
 	if err := token.Get("scope", &scope); err == nil {

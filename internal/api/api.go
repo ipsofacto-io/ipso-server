@@ -2,10 +2,9 @@
 // behind one chain that authenticates the caller, takes the tenant from the token, and bounds every
 // request. api/openapi.yaml describes exactly the routes mounted here.
 //
-// The binary does not serve this handler. Row-level security is in place (IPSO-61, ADR-0050).
-// A token maps to a tenant and a principal only once login exists (IPSO-65), and IPSO-133
-// serves this handler with --role=api after internal/rls.Check. Every route reads. No endpoint
-// writes before authorization (IPSO-66).
+// ipso-server --role=api serves this handler after internal/rls.Check and the tenant check
+// (ADR-0094). A token maps to a tenant and a principal only through a stored login for its issuer
+// and subject (ADR-0093). Every route reads. No endpoint writes before authorization (IPSO-66).
 package api
 
 import (
@@ -22,6 +21,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/audit"
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/proposals"
+	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 )
 
 // Caller is who a verified token speaks for. A nil tenant or principal is refused.
@@ -30,8 +30,8 @@ type Caller struct {
 	Principal uuid.UUID
 }
 
-// CallerFunc maps verified claims to a caller. The mapping belongs to the login work (IPSO-65). The
-// tenant comes from here and never from the request. A false result is 403.
+// CallerFunc maps verified claims to a caller. internal/controlplane supplies it from the stored
+// logins (ADR-0093). The tenant comes from here and never from the request. A false result is 403.
 type CallerFunc func(context.Context, authn.Claims) (Caller, bool)
 
 // Limits bound every request. A zero field takes its default.
@@ -48,7 +48,8 @@ type Limits struct {
 	Burst int
 }
 
-func (l Limits) withDefaults() Limits {
+// WithDefaults returns the limits with every zero field set to its default.
+func (l Limits) WithDefaults() Limits {
 	if l.Timeout <= 0 {
 		l.Timeout = 10 * time.Second
 	}
@@ -101,12 +102,12 @@ func New(cfg Config) (http.Handler, error) {
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.DiscardHandler)
 	}
-	limits := cfg.Limits.withDefaults()
+	limits := cfg.Limits.WithDefaults()
 	g := &guard{
 		db:       cfg.DB,
 		verifier: cfg.Verifier,
 		callers:  cfg.Callers,
-		limiter:  newTenantLimiter(limits.Rate, limits.Burst),
+		limiter:  ratelimit.New(limits.Rate, limits.Burst),
 		maxBody:  limits.RequestBytes,
 		now:      time.Now,
 		log:      cfg.Log,

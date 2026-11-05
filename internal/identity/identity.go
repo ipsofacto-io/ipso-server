@@ -25,6 +25,9 @@ var ErrInvalidQuery = errors.New("invalid query")
 // ErrUnknownPrincipal is returned when the tenant has no such principal.
 var ErrUnknownPrincipal = errors.New("unknown principal")
 
+// ErrUnknownLogin is returned when the tenant has no login for the issuer and subject.
+var ErrUnknownLogin = errors.New("unknown login")
+
 // maxActions bounds one read of the log.
 const maxActions = 1000
 
@@ -47,6 +50,30 @@ type Action struct {
 	Action          string
 	Subject         string
 	At              time.Time
+}
+
+// PrincipalFor returns the principal that a verified token speaks for: the one the tenant bound to the
+// token's issuer and subject. Nothing else maps a token to a principal, so a subject the tenant never
+// bound is ErrUnknownLogin, whatever else the token says (ADR-0093). The tenant must be the one this
+// process serves, because PrincipalFor trusts it.
+func PrincipalFor(ctx context.Context, db *sql.DB, tenant uuid.UUID, issuer, subject string) (uuid.UUID, error) {
+	if tenant == uuid.Nil || issuer == "" || subject == "" {
+		return uuid.Nil, fmt.Errorf("%w: a tenant, an issuer, and a subject are required", ErrInvalidQuery)
+	}
+	var principal uuid.UUID
+	err := inTenant(ctx, db, tenant, true, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
+			SELECT principal_id
+			FROM identity.login
+			WHERE tenant_id = $1 AND issuer = $2 AND subject = $3`, tenant, issuer, subject).Scan(&principal)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return uuid.Nil, ErrUnknownLogin
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("read the login: %w", err)
+	}
+	return principal, nil
 }
 
 // Get reads one principal. The tenant must be the authenticated one, because Get trusts it.
