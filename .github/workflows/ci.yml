@@ -147,6 +147,8 @@ jobs:
       # The api role must refuse the migration role, which owns the tables.
       - name: Refuse to serve as the migration role
         run: |
+          # The runner's shell has -e, and the exit status of the api is what this step looks at.
+          set +e
           set -uo pipefail
           set -a
           . ./.env.example
