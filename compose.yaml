@@ -1,5 +1,5 @@
-# The control plane on a laptop (ADR-0095): PostgreSQL 18, the migrations, the API as the application
-# role, and Dex as the OIDC provider. `docker compose up --build` starts it. Every image is pinned by
+# The control plane on a laptop (ADR-0095): PostgreSQL 18, the migrations, the API and the worker as the
+# application role, and Dex as the OIDC provider. `docker compose up --build` starts it. Every image is pinned by
 # digest. The values in .env.example are test-only; no secret is committed.
 name: ipso-local
 
@@ -135,6 +135,20 @@ services:
     depends_on:
       dex:
         condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  worker:
+    <<: [*hardened, *ipso-server]
+    command: ["--role=worker"]
+    environment:
+      # The application role, like the api. The worker refuses to start as any role that owns a table or
+      # can bypass row-level security, for a tenant with no row, and when it holds the migration
+      # credential. It serves no request, so it has no port.
+      IPSO_DATABASE_URL: postgres://ipso_app:${IPSO_APP_PASSWORD:?copy .env.example to .env}@postgres:5432/ipso?sslmode=disable
+      IPSO_TENANT_ID: ${IPSO_TENANT_ID:?copy .env.example to .env}
+    depends_on:
       seed:
         condition: service_completed_successfully
     restart: on-failure
