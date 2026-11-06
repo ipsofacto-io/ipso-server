@@ -29,6 +29,7 @@ An administrator prepares the database once, before the first run, because creat
 - `ipso_migrate`: a login role that is not a superuser and has neither `BYPASSRLS` nor `CREATEROLE`. It owns the database, the schemas, the tables, the views and the `SECURITY DEFINER` functions.
 - `ipso_app`: a login role with the same restrictions. It owns nothing and holds only the grants the migrations write.
 - An empty database owned by `ipso_migrate`.
+- `GRANT SET ON PARAMETER session_replication_role TO ipso_migrate;` (PostgreSQL 15 or later). Only `ipso-server tenant restore` and `tenant offboard` use it, to skip triggers and foreign keys for one transaction ([ADR-0100](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0100-tenant-lifecycle-and-crypto-shredding.md)). The role owns every table and could already disable a trigger, so the grant adds no power over the schema. `ipso_app` does not get it. A provider that refuses the grant can still run everything except those two commands.
 - `ipso.current_tenant()`, created by that same superuser. Only a superuser can mark a function leakproof, and the migration role is not one. The policies call it so the planner can use indexes. Its body is `nullif(current_setting('ipso.tenant', true), '')::uuid`.
 
 ```sql

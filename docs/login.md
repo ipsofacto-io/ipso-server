@@ -40,7 +40,7 @@ A sign-in becomes a session only for a login the tenant has bound to a person (A
 {"error": "unknown_login", "issuer": "https://accounts.google.com", "subject": "110169484474386276334"}
 ```
 
-Nothing is written. An operator binds the person with SQL as the application role, the way the seed of the local stack does:
+Nothing is written. `ipso-server tenant create` binds the first person of a tenant ([docs/tenants.md](tenants.md)). An operator binds each later person with SQL as the application role:
 
 ```sql
 BEGIN;

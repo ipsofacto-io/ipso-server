@@ -95,23 +95,22 @@ services:
     restart: "no"
 
   seed:
-    <<: *hardened
-    image: postgres:18.6@sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4
-    entrypoint: ["psql"]
+    <<: [*hardened, *ipso-server]
+    # tenant create adds the tenant, its wrapped data key, one person, and the login that binds the test
+    # user's subject to that person (ADR-0093, ADR-0100). It runs as the application role and is safe to
+    # run again. Only this service reads the key encryption key.
     command:
-      - --host=postgres
-      - --username=ipso_app
-      - --dbname=ipso
-      - --set=ON_ERROR_STOP=1
-      - --set=tenant=${IPSO_TENANT_ID:?copy .env.example to .env}
-      - --set=person=${IPSO_SEED_PRINCIPAL_ID:?copy .env.example to .env}
-      - --set=issuer=https://dex:5556/dex
-      - --set=subject=${IPSO_SEED_SUBJECT:?copy .env.example to .env}
-      - --file=/seed.sql
+      - tenant
+      - create
+      - --tenant=${IPSO_TENANT_ID:?copy .env.example to .env}
+      - --name=local
+      - --person=${IPSO_SEED_PRINCIPAL_ID:?copy .env.example to .env}
+      - --person-name=Local developer
+      - --issuer=https://dex:5556/dex
+      - --subject=${IPSO_SEED_SUBJECT:?copy .env.example to .env}
     environment:
-      PGPASSWORD: ${IPSO_APP_PASSWORD:?copy .env.example to .env}
-    volumes:
-      - ./deploy/compose/seed.sql:/seed.sql:ro
+      IPSO_DATABASE_URL: postgres://ipso_app:${IPSO_APP_PASSWORD:?copy .env.example to .env}@postgres:5432/ipso?sslmode=disable
+      IPSO_TENANT_KEK: ${IPSO_TENANT_KEK:?copy .env.example to .env}
     depends_on:
       migrate:
         condition: service_completed_successfully

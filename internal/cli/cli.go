@@ -25,6 +25,8 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
 	"github.com/ipsofacto-io/ipso-server/internal/login"
 	"github.com/ipsofacto-io/ipso-server/internal/migrate"
+	"github.com/ipsofacto-io/ipso-server/internal/rls"
+	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
 	"github.com/ipsofacto-io/ipso-server/internal/worker"
 )
 
@@ -86,6 +88,14 @@ type deps struct {
 	// openPool and runWorker serve --role=worker. Tests inject both.
 	openPool  func(ctx context.Context, databaseURL string) (*pgxpool.Pool, error)
 	runWorker func(ctx context.Context, cfg worker.Config) error
+	// The tenant commands (ADR-0100). checkApplication is the start gate of the api role and checkMigration
+	// refuses a superuser or BYPASSRLS role. Tests inject all of them.
+	checkApplication func(ctx context.Context, db *sql.DB) error
+	checkMigration   func(ctx context.Context, db *sql.DB) error
+	provision        func(ctx context.Context, db *sql.DB, o tenancy.ProvisionOptions) (tenancy.ProvisionReport, error)
+	exportTenant     func(ctx context.Context, db *sql.DB, o tenancy.ExportOptions) (tenancy.ExportReport, error)
+	restoreTenant    func(ctx context.Context, db *sql.DB, o tenancy.RestoreOptions) (tenancy.RestoreReport, error)
+	offboardTenant   func(ctx context.Context, db *sql.DB, o tenancy.OffboardOptions) (tenancy.OffboardReport, error)
 }
 
 // Run executes one CLI invocation. args excludes the program name.
@@ -104,7 +114,13 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		openPool: func(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 			return pgxpool.New(ctx, databaseURL)
 		},
-		runWorker: worker.Run,
+		runWorker:        worker.Run,
+		checkApplication: rls.Check,
+		checkMigration:   migrate.RefusePrivilegedRole,
+		provision:        tenancy.Provision,
+		exportTenant:     tenancy.Export,
+		restoreTenant:    tenancy.Restore,
+		offboardTenant:   tenancy.Offboard,
 		loadBundle: func(layout, digest, publicKey string) (integrations.PlanEvaluator, error) {
 			return plancheck.Load(layout, digest, publicKey)
 		},
@@ -126,6 +142,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 			return 2
 		}
 		return migrateCmd(ctx, stdout, stderr, d)
+	case "tenant":
+		return tenantCmd(ctx, args[1:], stdout, stderr, d)
 	case "webhooks":
 		if len(args) != 1 {
 			fprintln(stderr, "usage: ipso-server webhooks")
@@ -157,6 +175,7 @@ usage:
   ipso-server --role=api
   ipso-server --role=worker
   ipso-server migrate
+  ipso-server tenant create|export|restore|offboard
   ipso-server webhooks
   ipso-server runtasks
 
@@ -175,6 +194,9 @@ yet.
 
 migrate applies the pending schema migrations and exits. It reads the
 connection string from ` + migrateDatabaseEnv + ` and must run as the migration role.
+
+tenant creates, exports, restores and offboards a tenant. Run ipso-server tenant help for the commands, their
+flags and the credential each one uses.
 
 webhooks serves the GitHub App webhook on ` + listenAddrEnv + ` (default ` + defaultListen + `). It reads
 ` + appIDEnv + `, ` + appPrivateKeyEnv + `, and ` + webhookSecretEnv + `, holds no
