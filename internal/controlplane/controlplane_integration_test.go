@@ -4,11 +4,15 @@ package controlplane
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -19,6 +23,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/api"
 	"github.com/ipsofacto-io/ipso-server/internal/authn/authntest"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
+	"github.com/ipsofacto-io/ipso-server/internal/login"
 	"github.com/ipsofacto-io/ipso-server/internal/migrate"
 	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
@@ -301,4 +306,220 @@ func TestStartRefusesWhatCouldServeTheWrongTenant(t *testing.T) {
 			t.Fatal("an http issuer was accepted")
 		}
 	})
+}
+
+const signInOrigin = "https://ipso.example.test"
+
+// signIn is a provider of people, reached the way a browser reaches one: the control plane sends the
+// browser to it, and the browser comes back with a code. The provider is the fake authorization server
+// with a token endpoint that holds the client to what a real one does.
+type signIn struct {
+	idp       *authntest.Server
+	challenge string
+	nonce     string
+}
+
+func newSignIn(t *testing.T) *signIn {
+	t.Helper()
+	s := &signIn{idp: authntest.NewServer(t)}
+	s.idp.Meta["authorization_endpoint"] = s.idp.Server.URL + "/authorize"
+	s.idp.Meta["token_endpoint"] = s.idp.Server.URL + "/token"
+	s.idp.Meta["token_endpoint_auth_methods_supported"] = []string{"client_secret_post"}
+	s.idp.Mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		sum := sha256.Sum256([]byte(r.PostForm.Get("code_verifier")))
+		w.Header().Set("Content-Type", "application/json")
+		if r.PostForm.Get("code") != "good-code" || r.PostForm.Get("client_secret") != "test-only-secret" ||
+			base64.RawURLEncoding.EncodeToString(sum[:]) != s.challenge {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+			return
+		}
+		id := s.idp.Token("ipso-login", nil, subject("person-2"), authntest.Claim("nonce", s.nonce))
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at", "token_type": "Bearer", "id_token": id})
+	})
+	return s
+}
+
+func (s *signIn) config(stack *stack) Config {
+	cfg := stack.config(false)
+	cfg.PublicURL = signInOrigin
+	cfg.Providers = []login.ProviderConfig{{ID: "idp", Kind: login.KindOIDC, Issuer: s.idp.Server.URL, ClientID: "ipso-login", ClientSecretEnv: "IPSO_LOGIN_IDP"}}
+	cfg.Secrets = func(name string) string { return map[string]string{"IPSO_LOGIN_IDP": "test-only-secret"}[name] }
+	return cfg
+}
+
+func request(handler http.Handler, method, target string, headers map[string]string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, target, nil)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	for _, c := range cookies {
+		req.AddCookie(&http.Cookie{Name: c.Name, Value: c.Value})
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func cookieOf(rec *httptest.ResponseRecorder, name string) *http.Cookie {
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+// begin starts a sign-in and returns the attempt cookie and the state, and teaches the provider the
+// challenge and nonce the control plane sent.
+func (s *signIn) begin(t *testing.T, handler http.Handler) (*http.Cookie, string) {
+	t.Helper()
+	rec := request(handler, http.MethodGet, "/auth/login/idp", nil)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("start: status %d: %s", rec.Code, rec.Body)
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.challenge, s.nonce = loc.Query().Get("code_challenge"), loc.Query().Get("nonce")
+	return cookieOf(rec, "__Host-ipso-login"), loc.Query().Get("state")
+}
+
+func sessionRows(t *testing.T, admin *sql.DB) int {
+	t.Helper()
+	var n int
+	if err := admin.QueryRowContext(t.Context(), `SELECT count(*) FROM identity.session`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// The whole path on PostgreSQL 18: a person the tenant bound signs in, the cookie is their session on
+// the API, another site cannot use it, and logout ends it. A failed sign-in writes no session.
+func TestAPersonSignsInAndTheCookieIsTheirSession(t *testing.T) {
+	s := newStack(t)
+	in := newSignIn(t)
+	admin := s.database.Open(t, pgtest.Admin)
+	if _, err := pgtest.Exec(t.Context(), s.app, tenant.String(),
+		`INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1, $2, $3, 'person-2')`, tenant, s.person, in.idp.Server.URL); err != nil {
+		t.Fatal(err)
+	}
+	handler := s.handler(t, in.config(s))
+
+	// A forged state creates no session, and neither does a callback with no attempt.
+	attempt, state := in.begin(t, handler)
+	if rec := request(handler, http.MethodGet, "/auth/callback/idp?code=good-code&state=forged", nil, attempt); rec.Code != http.StatusBadRequest {
+		t.Errorf("a forged state: status %d", rec.Code)
+	}
+	if rec := request(handler, http.MethodGet, "/auth/callback/idp?code=good-code&state="+state, nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("no attempt cookie: status %d", rec.Code)
+	}
+	if n := sessionRows(t, admin); n != 0 {
+		t.Fatalf("%d sessions after failed sign-ins, want 0", n)
+	}
+
+	attempt, state = in.begin(t, handler)
+	rec := request(handler, http.MethodGet, "/auth/callback/idp?code=good-code&state="+state, nil, attempt)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
+		t.Fatalf("callback: status %d: %s", rec.Code, rec.Body)
+	}
+	session := cookieOf(rec, "__Host-ipso-session")
+	if session == nil || sessionRows(t, admin) != 1 {
+		t.Fatalf("session cookie %v, %d rows", session, sessionRows(t, admin))
+	}
+
+	if rec := request(handler, http.MethodGet, "/v1/scopes", nil, session); rec.Code != http.StatusOK {
+		t.Errorf("the API with the session: status %d: %s", rec.Code, rec.Body)
+	}
+	if rec := request(handler, http.MethodGet, "/v1/scopes", nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("the API with nothing: status %d", rec.Code)
+	}
+	// A request another site makes with the cookie is refused, and so is one with a made-up cookie.
+	if rec := request(handler, http.MethodPost, "/v1/resolve", map[string]string{"Sec-Fetch-Site": "cross-site"}, session); rec.Code != http.StatusForbidden {
+		t.Errorf("a cross-site POST: status %d", rec.Code)
+	}
+	forged := &http.Cookie{Name: session.Name, Value: strings.Repeat("A", 43)}
+	if rec := request(handler, http.MethodGet, "/v1/scopes", nil, forged); rec.Code != http.StatusUnauthorized || cookieOf(rec, session.Name) == nil {
+		t.Errorf("a made-up cookie: status %d", rec.Code)
+	}
+	// Remote MCP and a bearer header never read the cookie.
+	if rec := request(handler, http.MethodGet, "/v1/scopes", map[string]string{"Authorization": "Bearer bad"}, session); rec.Code != http.StatusUnauthorized {
+		t.Errorf("a bad bearer token and a good cookie: status %d", rec.Code)
+	}
+
+	if rec := request(handler, http.MethodPost, "/auth/logout", map[string]string{"Sec-Fetch-Site": "cross-site"}, session); rec.Code != http.StatusForbidden {
+		t.Errorf("a cross-site logout: status %d", rec.Code)
+	}
+	if rec := request(handler, http.MethodPost, "/auth/logout", map[string]string{"Sec-Fetch-Site": "same-origin"}, session); rec.Code != http.StatusNoContent {
+		t.Fatalf("logout: status %d", rec.Code)
+	}
+	if rec := request(handler, http.MethodGet, "/v1/scopes", nil, session); rec.Code != http.StatusUnauthorized {
+		t.Errorf("the API after logout: status %d, want 401: this process kept the session", rec.Code)
+	}
+	if n := sessionRows(t, admin); n != 0 {
+		t.Errorf("%d sessions after logout", n)
+	}
+}
+
+func TestASignInOfAPersonTheTenantNeverBoundCreatesNoSession(t *testing.T) {
+	s := newStack(t)
+	in := newSignIn(t)
+	admin := s.database.Open(t, pgtest.Admin)
+	handler := s.handler(t, in.config(s))
+
+	attempt, state := in.begin(t, handler)
+	rec := request(handler, http.MethodGet, "/auth/callback/idp?code=good-code&state="+state, nil, attempt)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "unknown_login") || !strings.Contains(rec.Body.String(), "person-2") {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if cookieOf(rec, "__Host-ipso-session") != nil || sessionRows(t, admin) != 0 {
+		t.Error("a session was started")
+	}
+}
+
+func TestAnAgentsLoginCreatesNoBrowserSession(t *testing.T) {
+	s := newStack(t)
+	in := newSignIn(t)
+	admin := s.database.Open(t, pgtest.Admin)
+	if _, err := pgtest.Exec(t.Context(), s.app, tenant.String(),
+		`INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1, $2, $3, 'person-2')`, tenant, s.agent, in.idp.Server.URL); err != nil {
+		t.Fatal(err)
+	}
+	handler := s.handler(t, in.config(s))
+	attempt, state := in.begin(t, handler)
+	rec := request(handler, http.MethodGet, "/auth/callback/idp?code=good-code&state="+state, nil, attempt)
+	if rec.Code != http.StatusForbidden || sessionRows(t, admin) != 0 {
+		t.Fatalf("status %d: %s, %d sessions", rec.Code, rec.Body, sessionRows(t, admin))
+	}
+}
+
+// With no provider configured there is no /auth, so the API's own 401 answers, and a cookie is not read.
+func TestWithoutProvidersThereIsNoSignInAndNoCookie(t *testing.T) {
+	s := newStack(t)
+	handler := s.handler(t, s.config(false))
+	if rec := request(handler, http.MethodGet, "/auth/login/idp", nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("/auth without providers: status %d, want the API's 401", rec.Code)
+	}
+	cookie := &http.Cookie{Name: "__Host-ipso-session", Value: strings.Repeat("A", 43)}
+	if rec := request(handler, http.MethodGet, "/v1/scopes", nil, cookie); rec.Code != http.StatusUnauthorized || cookieOf(rec, cookie.Name) != nil {
+		t.Errorf("a cookie with sign-in off: status %d", rec.Code)
+	}
+}
+
+func TestStartRefusesAProviderItCannotReach(t *testing.T) {
+	s := newStack(t)
+	in := newSignIn(t)
+	cfg := in.config(s)
+	in.idp.Server.Close()
+	if _, err := New(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "sign-in") {
+		t.Fatalf("err = %v, want a sign-in error", err)
+	}
+	// A client id equal to the API's audience would let an ID token pass as a bearer token.
+	cfg = newSignIn(t).config(s)
+	cfg.Providers[0].ClientID = apiAudience
+	if _, err := New(t.Context(), cfg); err == nil {
+		t.Fatal("a client id equal to the API audience was accepted")
+	}
 }

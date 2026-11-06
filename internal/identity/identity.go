@@ -157,7 +157,13 @@ func Actions(ctx context.Context, db *sql.DB, tenant uuid.UUID, limit int) ([]Ac
 // inTenant runs fn in one REPEATABLE READ transaction with ipso.tenant set for that transaction
 // only, the way internal/registry does. A pooled connection does not keep the setting.
 func inTenant(ctx context.Context, db *sql.DB, tenant uuid.UUID, readOnly bool, fn func(*sql.Tx) error) error {
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: readOnly})
+	return inTenantAt(ctx, db, tenant, sql.LevelRepeatableRead, readOnly, fn)
+}
+
+// inTenantAt is inTenant at the isolation level given. A session writer asks for READ COMMITTED,
+// because two sign-ins that delete the same expired row must not abort one of them.
+func inTenantAt(ctx context.Context, db *sql.DB, tenant uuid.UUID, level sql.IsolationLevel, readOnly bool, fn func(*sql.Tx) error) error {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: level, ReadOnly: readOnly})
 	if err != nil {
 		return err
 	}

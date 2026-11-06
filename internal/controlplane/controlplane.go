@@ -1,7 +1,8 @@
-// Package controlplane starts the HTTP side of the control plane: the API of ADR-0090 and, when its own
-// issuer is configured, the remote MCP handler of ADR-0077 (ADR-0094). Nothing is served until the
-// start gates pass, in this order: the connected role cannot bypass row-level security, the tenant has
-// a row, and each authorization server answers its metadata over https.
+// Package controlplane starts the HTTP side of the control plane: the API of ADR-0090, the remote MCP
+// handler of ADR-0077 when its own issuer is configured (ADR-0094), and the browser sign-in of ADR-0099
+// when providers are configured. Nothing is served until the start gates pass, in this order: the
+// connected role cannot bypass row-level security, the tenant has a row, and each authorization server
+// and each sign-in provider answers its metadata over https.
 package controlplane
 
 import (
@@ -23,6 +24,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/httpserve"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
+	"github.com/ipsofacto-io/ipso-server/internal/login"
 	"github.com/ipsofacto-io/ipso-server/internal/mcpremote"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
@@ -48,6 +50,12 @@ type Config struct {
 	// offer PKCE with S256 and Client ID Metadata Documents, which an OIDC issuer such as Dex does not.
 	MCPIssuer      string
 	MCPResourceURL string
+	// PublicURL and Providers turn on browser sign-in (ADR-0099), and are set together or not at all.
+	// PublicURL is the origin people reach the control plane at. Secrets reads the client secret a
+	// provider names.
+	PublicURL string
+	Providers []login.ProviderConfig
+	Secrets   func(name string) string
 	// Limits bound every request of both handlers. A zero field takes its default.
 	Limits api.Limits
 	// Client reads the authorization servers' metadata. Default: a client with a 10 second timeout.
@@ -76,6 +84,7 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 
 	svc := newService(cfg.DB, cfg.Tenant, cfg.Log, cfg.Limits)
 	mcpOn := cfg.MCPIssuer != ""
+	limits := cfg.Limits.WithDefaults()
 
 	apiVerifier, _, err := authn.Discover(ctx, cfg.Client, cfg.Issuer, cfg.Audience)
 	if err != nil {
@@ -86,6 +95,29 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		// A token that names both resources would pass both checks, so each refuses the other's.
 		verifier = authn.Exclusive(apiVerifier, cfg.MCPResourceURL)
 	}
+	var (
+		sessions *api.Sessions
+		signIn   *login.Service
+	)
+	if len(cfg.Providers) > 0 {
+		signIn, err = login.New(ctx, login.Options{
+			DB:        cfg.DB,
+			Tenant:    cfg.Tenant,
+			PublicURL: cfg.PublicURL,
+			Providers: cfg.Providers,
+			Secret:    cfg.Secrets,
+			// An ID token must never pass as a bearer token of either handler.
+			Forbidden: []string{cfg.Audience, cfg.MCPResourceURL},
+			Client:    cfg.Client,
+			Rate:      limits.Rate,
+			Burst:     limits.Burst,
+			Log:       cfg.Log,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("sign-in: %w", err)
+		}
+		sessions = &api.Sessions{Origin: signIn.Origin(), Lookup: sessionCaller(signIn, cfg.Tenant)}
+	}
 	apiHandler, err := api.New(api.Config{
 		DB:       cfg.DB,
 		Verifier: verifier,
@@ -93,8 +125,9 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 			principal, ok := svc.principal(ctx, claims)
 			return api.Caller{Tenant: cfg.Tenant, Principal: principal}, ok
 		},
-		Limits: cfg.Limits,
-		Log:    cfg.Log,
+		Sessions: sessions,
+		Limits:   cfg.Limits,
+		Log:      cfg.Log,
 	})
 	if err != nil {
 		return nil, err
@@ -102,6 +135,11 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", svc.health)
+	if signIn != nil {
+		// Outside the API's document and its guard, like /healthz: a person who has not signed in has
+		// no token to show. Remote MCP never reads the session cookie.
+		mux.Handle("/auth/", signIn.Handler())
+	}
 	// Anything else is the API's, which answers 401 before it says whether a route exists.
 	mux.Handle("/", apiHandler)
 
@@ -146,6 +184,30 @@ func Serve(ctx context.Context, listener net.Listener, cfg Config) error {
 	return httpserve.Serve(ctx, listener, handler, nil)
 }
 
+// sessionCaller adapts the sign-in's answer to the API's. The tenant is the process's, never the cookie's.
+func sessionCaller(signIn *login.Service, tenant uuid.UUID) func(context.Context, []byte) (api.Caller, api.SessionStatus) {
+	return func(ctx context.Context, token []byte) (api.Caller, api.SessionStatus) {
+		principal, status := signIn.Lookup(ctx, token)
+		if status != login.Found {
+			return api.Caller{}, sessionStatus(status)
+		}
+		return api.Caller{Tenant: tenant, Principal: principal}, api.SessionFound
+	}
+}
+
+func sessionStatus(status login.Status) api.SessionStatus {
+	switch status {
+	case login.Found:
+		return api.SessionFound
+	case login.Busy:
+		return api.SessionBusy
+	case login.Failed:
+		return api.SessionFailed
+	default:
+		return api.SessionUnknown
+	}
+}
+
 func (c Config) validate() error {
 	switch {
 	case c.DB == nil:
@@ -160,6 +222,8 @@ func (c Config) validate() error {
 		return errors.New("the MCP issuer and the MCP resource URL are set together or not at all")
 	case c.MCPResourceURL != "" && c.MCPResourceURL == c.Audience:
 		return errors.New("the API and the remote MCP handler need distinct audiences")
+	case (len(c.Providers) == 0) != (c.PublicURL == ""):
+		return errors.New("the public URL and the login providers are set together or not at all")
 	}
 	return nil
 }

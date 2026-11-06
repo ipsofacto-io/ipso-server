@@ -5,7 +5,9 @@ info:
   summary: Read the decision registry, the review queues, and the audit answers of one tenant.
   description: >-
     Every route reads, and none writes before authorization exists (IPSO-66). The tenant is always the one
-    the bearer token speaks for, so no route takes a tenant, and a query key `tenant` or `tenant_id` is 400.
+    the bearer token or the session cookie speaks for, so no route takes a tenant, and a query key `tenant`
+    or `tenant_id` is 400. A request that carries an Authorization header is read as a bearer call, whatever
+    cookie it also carries.
     A repeated query key, and a query key the operation does not list, are 400. Times are RFC 3339. Lists
     page by id from the highest: pass the last `id` of a page as `before` to read the next one. An answer
     over the response cap is refused whole with 500 `response too large` and never sent cut short. See
@@ -15,6 +17,7 @@ info:
     url: https://github.com/ipsofacto-io/ipso-server/blob/main/LICENSE
 security:
   - bearerAuth: []
+  - sessionCookie: []
 tags:
   - name: registry
     description: Decisions, scopes, and waivers, as they were in force and as they were known.
@@ -472,7 +475,18 @@ components:
       bearerFormat: JWT
       description: >-
         A signed JWT from the configured issuer for this API's audience. It is read from the Authorization
-        header only. Which tenant and principal it speaks for is set by the login of IPSO-65.
+        header only. Which tenant and principal it speaks for is set by the login that the issuer and the
+        subject of the token are bound to (ADR-0093).
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-ipso-session
+      description: >-
+        The cookie of a browser session, set by GET /auth/callback/{provider} after a person signs in
+        through an identity provider (ADR-0099). Those routes are outside this document. The cookie is
+        honoured only when sign-in is configured and no Authorization header is sent. A request that could
+        change state and comes from another site is 403, and a cookie that is repeated, malformed, unknown,
+        or expired is 401.
   parameters:
     Valid:
       name: valid
@@ -552,7 +566,7 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     Unauthorized:
-      description: No bearer token, or one that does not verify.
+      description: No bearer token or session cookie, or one that is not valid. A session cookie that is repeated, malformed, unknown, or expired is cleared in the answer.
       headers:
         WWW-Authenticate:
           schema:
@@ -562,7 +576,7 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     Forbidden:
-      description: The token speaks for no principal of a tenant here.
+      description: The token speaks for no principal of a tenant here, or a request that could change state came from another origin with a session cookie.
       content:
         application/json:
           schema:

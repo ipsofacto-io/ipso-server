@@ -18,7 +18,7 @@ The values in `.env.example` are test-only, and they are the only place a creden
 - `dex`: the OIDC provider, with the clients `ipso-api` and `other-app` and one test user.
 - `migrate`: applies the migrations as the migration role, then exits. It is the only service that holds that credential.
 - `seed`: writes the tenant row, one person, and the login that binds the test user's subject to that person, as the application role. It is safe to run again.
-- `api`: `ipso-server --role=api` as the application role. It refuses to start as a role that owns a table or can bypass row-level security, for a tenant with no row, and when it holds the migration credential.
+- `api`: `ipso-server --role=api` as the application role, with browser sign-in through Dex. It refuses to start as a role that owns a table or can bypass row-level security, for a tenant with no row, and when it holds the migration credential.
 - `worker`: `ipso-server --role=worker` as the application role. It serves no request and has no port. It refuses to start as a role that owns a table or can bypass row-level security, for a tenant with no row, when River's tables are missing, and when it holds the migration credential.
 - `front`: nginx, the only way in. It allows each client address 20 requests a second with a burst of 40, before a request reaches the API, so a request with no valid token is limited too.
 
@@ -53,6 +53,19 @@ TOKEN=$(curl --silent --cacert ca.pem https://localhost:5556/dex/token \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
 curl --silent -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/v1/scopes
 ```
+
+## Sign in with a browser
+
+The stack also signs a person in through Dex ([ADR-0099](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0099-browser-login-sessions.md), [docs/login.md](login.md)), as the client `ipso-login`. Dex puts `https://dex:5556/dex` in every redirect, so the browser needs two things on the host:
+
+```sh
+echo "127.0.0.1 dex" | sudo tee -a /etc/hosts
+docker compose cp certs:/certs/ca.pem ./ca.pem
+```
+
+Trust `ca.pem` in your browser or operating system for this session, or accept the warning for `https://dex:5556`. Then open exactly `http://localhost:8080/auth/login/dex`. `localhost` and `127.0.0.1` are different hosts to a cookie, and the sign-in origin is `http://localhost:8080`. Sign in as the test user (`IPSO_DEX_USER` and `IPSO_DEX_PASSWORD` of `.env`). The browser lands on `/`, which answers 401 because there is no web app yet, and the session cookie is set. Open `http://localhost:8080/v1/scopes` in the same browser to see the API answer with it.
+
+To sign out, run `fetch('/auth/logout', {method: 'POST'})` in the console of `http://localhost:8080`. The test user is the one the seed bound, so the sign-in works for it and for nobody else: a person Dex would let in and the seed never bound gets 403 `unknown_login`.
 
 `GET /healthz` needs no token. The routes are in [api/openapi.yaml](../api/openapi.yaml). The registry is empty, and no route writes yet (IPSO-134).
 

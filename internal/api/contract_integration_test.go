@@ -4,6 +4,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	verrors "github.com/pb33f/libopenapi-validator/errors"
 	"golang.org/x/time/rate"
 
+	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
 )
 
@@ -417,5 +419,59 @@ func TestLimitsHoldAgainstTheStore(t *testing.T) {
 	}
 	if w := c.exchange(t, limited, http.MethodGet, "/v1/scopes?known="+known, f.token(t, personB), "", nil); w.Code != http.StatusOK {
 		t.Fatalf("tenant B was limited by tenant A: %d", w.Code)
+	}
+}
+
+// The session cookie is a second way to satisfy the document's security, so an exchange that carries
+// only the cookie matches the document in both directions, and so does the 401 of a cookie that is no
+// session.
+func TestAnExchangeWithTheSessionCookieMatchesTheDocument(t *testing.T) {
+	f := newFixture(t)
+	c := newContract(t)
+	token, err := authn.NewSessionToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := &Sessions{
+		Origin: "https://ipso.example.test",
+		Lookup: func(_ context.Context, got []byte) (Caller, SessionStatus) {
+			if !bytes.Equal(got, token) {
+				return Caller{}, SessionUnknown
+			}
+			return f.callers[personA], SessionFound
+		},
+	}
+	handler := f.handlerWith(t, Limits{}, sessions)
+	cookie := authn.NewSessionCookie(token, time.Now().Add(time.Hour), time.Now())
+	unknown, err := authn.NewSessionToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := authn.NewSessionCookie(unknown, time.Now().Add(time.Hour), time.Now())
+
+	for name, tc := range map[string]struct {
+		cookie *http.Cookie
+		want   int
+	}{
+		"a session":                   {cookie, http.StatusOK},
+		"a cookie that is no session": {other, http.StatusUnauthorized},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := func() *http.Request {
+				r := httptest.NewRequest(http.MethodGet, "/v1/decisions", nil)
+				r.AddCookie(&http.Cookie{Name: tc.cookie.Name, Value: tc.cookie.Value})
+				return r
+			}
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, request())
+			if w.Code != tc.want {
+				t.Fatalf("status %d, want %d: %s", w.Code, tc.want, w.Body)
+			}
+			if ok, problems := c.validator.ValidateHttpRequestResponse(request(), w.Result()); !ok {
+				for _, problem := range problems {
+					t.Errorf("%s: %s", problem.Message, problem.Reason)
+				}
+			}
+		})
 	}
 }

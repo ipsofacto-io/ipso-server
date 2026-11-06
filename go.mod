@@ -16,6 +16,7 @@ require (
 	github.com/riverqueue/river/rivertype v0.51.0
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
+	golang.org/x/oauth2 v0.36.0
 	golang.org/x/time v0.16.0
 	pgregory.net/rapid v1.2.0 // integration tests only
 )

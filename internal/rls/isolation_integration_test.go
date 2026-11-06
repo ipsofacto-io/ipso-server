@@ -379,6 +379,9 @@ func seed(t *testing.T, app *sql.DB, tenant string) {
 		INSERT INTO identity.login (tenant_id, principal_id, issuer, subject)
 		VALUES ($1::uuid, $2::uuid, 'https://idp.example.test', 'subject-1')`, tenant, person)
 	mustExec(`
+		INSERT INTO identity.session (tenant_id, login_id, token_sha256)
+		SELECT tenant_id, id, sha256(convert_to('seeded session', 'UTF8')) FROM identity.login`)
+	mustExec(`
 		INSERT INTO identity.action_log (tenant_id, principal_id, responsible_id, action, subject)
 		VALUES ($1::uuid, $2::uuid, $2::uuid, 'api.read', 'registry')`, tenant, person)
 	mustExec(`INSERT INTO llm.usage (tenant_id, month, tokens) VALUES ($1::uuid, '2026-01-01', 1)`, tenant)
@@ -398,6 +401,9 @@ func smuggleInserts() []smuggle {
 		{"llm.usage", `INSERT INTO llm.usage (tenant_id, month, tokens) VALUES ($1::uuid, '2026-02-01', 1)`, []any{tenantA}, true},
 		{"tenancy.tenant", `INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1::uuid, 'smuggled')`, []any{tenantA}, true},
 		{"identity.login", `INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1::uuid, $1::uuid, 'https://idp.example.test', 'smuggled')`, []any{tenantA}, true},
+		// The stamp trigger reads the login as the caller's tenant, so it refuses this row (23514) before the
+		// policy is asked (42501). Either way the insert fails, and the policy stays as a second line.
+		{"identity.session", `INSERT INTO identity.session (tenant_id, login_id, token_sha256) VALUES ($1::uuid, $1::uuid, sha256(convert_to('smuggled', 'UTF8')))`, []any{tenantA}, false},
 		{"registry.premise_host_allow", `INSERT INTO registry.premise_host_allow (tenant_id, host, allowed) VALUES ($1::uuid, 'smuggled.example', true)`, []any{tenantA}, true},
 		{"registry.grandfather_period", `INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period) VALUES ($1::uuid, $2::uuid, '[2021-01-01,)')`, []any{tenantA, decisionTo}, true},
 		{"proposals.proposal", `
@@ -521,6 +527,7 @@ func policyTables() []string {
 		"identity.action_log",
 		"identity.login",
 		"identity.principal",
+		"identity.session",
 		"llm.usage",
 		"proposals.agent_proposal",
 		"proposals.approval",
@@ -552,6 +559,7 @@ func expectedPolicies() []string {
 		"identity.action_log":               "SELECT INSERT",
 		"identity.login":                    "SELECT INSERT",
 		"identity.principal":                "SELECT INSERT",
+		"identity.session":                  "SELECT INSERT DELETE",
 		"llm.usage":                         "SELECT INSERT UPDATE",
 		"proposals.agent_proposal":          "SELECT INSERT",
 		"proposals.approval":                "SELECT INSERT",

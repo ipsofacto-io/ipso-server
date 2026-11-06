@@ -27,6 +27,14 @@ staticClients:
     secretEnv: IPSO_API_CLIENT_SECRET
     redirectURIs:
       - http://localhost:8000/callback
+  # The client of browser sign-in (ADR-0099). Its id is the audience of the ID tokens it mints, so the API
+  # refuses them as bearer tokens, and the control plane refuses to start with a sign-in client id equal to
+  # the API's audience.
+  - id: ipso-login
+    name: ipso sign-in
+    secretEnv: IPSO_LOGIN_DEX_SECRET
+    redirectURIs:
+      - http://localhost:8080/auth/callback/dex
   # Another application of the same provider. Its tokens name another audience, so the API refuses
   # them, and the smoke test proves it.
   - id: other-app
