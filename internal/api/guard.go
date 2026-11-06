@@ -29,6 +29,8 @@ type guard struct {
 	db       *sql.DB
 	verifier authn.Verifier
 	callers  CallerFunc
+	sessions *Sessions
+	origin   *http.CrossOriginProtection
 	limiter  *ratelimit.Limiter
 	maxBody  int64
 	now      func() time.Time
@@ -37,21 +39,8 @@ type guard struct {
 
 func (g *guard) wrap(op string, keys []string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, ok := authn.Bearer(r.Header.Get("Authorization"))
+		caller, ok := g.authenticate(w, r)
 		if !ok {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="ipso"`)
-			writeError(w, http.StatusUnauthorized, errUnauthorized)
-			return
-		}
-		claims, err := g.verifier.Verify(r.Context(), token)
-		if err != nil {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="ipso", error="invalid_token"`)
-			writeError(w, http.StatusUnauthorized, errUnauthorized)
-			return
-		}
-		caller, ok := g.callers(r.Context(), claims)
-		if !ok || caller.Tenant == uuid.Nil || caller.Principal == uuid.Nil {
-			writeError(w, http.StatusForbidden, errForbidden)
 			return
 		}
 		if wait, ok := g.limiter.Allow(caller.Tenant, g.now()); !ok {
@@ -84,6 +73,81 @@ func (g *guard) wrap(op string, keys []string, next http.Handler) http.Handler {
 		r.Body = http.MaxBytesReader(w, r.Body, g.maxBody)
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, caller)))
 	})
+}
+
+// authenticate answers who is calling, or writes the refusal and returns false. A request that carries
+// an Authorization header is a bearer call, whatever else it carries. Without one, and only when
+// sign-in is configured, the session cookie is the credential (ADR-0099).
+func (g *guard) authenticate(w http.ResponseWriter, r *http.Request) (Caller, bool) {
+	if g.sessions != nil && r.Header.Get("Authorization") == "" {
+		return g.authenticateSession(w, r)
+	}
+	token, ok := authn.Bearer(r.Header.Get("Authorization"))
+	if !ok {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="ipso"`)
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return Caller{}, false
+	}
+	claims, err := g.verifier.Verify(r.Context(), token)
+	if err != nil {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="ipso", error="invalid_token"`)
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return Caller{}, false
+	}
+	caller, ok := g.callers(r.Context(), claims)
+	if !ok || caller.Tenant == uuid.Nil || caller.Principal == uuid.Nil {
+		writeError(w, http.StatusForbidden, errForbidden)
+		return Caller{}, false
+	}
+	return caller, true
+}
+
+// authenticateSession checks the cookie in the order that costs least: its shape, then the origin of a
+// request that could change state, and only then the store, behind the bucket that Lookup charges. A
+// cookie is a credential a browser sends by itself, so the origin check is what stops another site from
+// using it.
+func (g *guard) authenticateSession(w http.ResponseWriter, r *http.Request) (Caller, bool) {
+	token, err := authn.SessionToken(r)
+	if errors.Is(err, authn.ErrNoSession) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="ipso"`)
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return Caller{}, false
+	}
+	if err != nil {
+		return Caller{}, g.refuseSession(w)
+	}
+	if err := g.origin.Check(r); err != nil {
+		writeError(w, http.StatusForbidden, errForbidden)
+		return Caller{}, false
+	}
+	caller, status := g.sessions.Lookup(r.Context(), token)
+	switch status {
+	case SessionFound:
+	case SessionBusy:
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusTooManyRequests, errRateLimited)
+		return Caller{}, false
+	case SessionFailed:
+		g.log.Warn("a session could not be looked up, so the call was refused")
+		writeError(w, http.StatusInternalServerError, errInternal)
+		return Caller{}, false
+	default:
+		return Caller{}, g.refuseSession(w)
+	}
+	if caller.Tenant == uuid.Nil || caller.Principal == uuid.Nil {
+		writeError(w, http.StatusForbidden, errForbidden)
+		return Caller{}, false
+	}
+	return caller, true
+}
+
+// refuseSession answers 401 for a cookie that is no session, and clears it so the browser stops sending
+// it. It returns false for the caller to return.
+func (g *guard) refuseSession(w http.ResponseWriter) bool {
+	http.SetCookie(w, authn.ClearedSessionCookie())
+	w.Header().Set("WWW-Authenticate", `Bearer realm="ipso", error="invalid_token"`)
+	writeError(w, http.StatusUnauthorized, errUnauthorized)
+	return false
 }
 
 // plainQuery holds for a query the route reads as sent: it parses, no key repeats, so a second value

@@ -245,3 +245,135 @@ func TestExclusiveRefusesATokenThatNamesAnotherResource(t *testing.T) {
 		t.Error("a token for the other resource only was accepted")
 	}
 }
+
+const testClient = "ipso-login-client"
+
+func idToken(auth *authntest.Server, options ...authntest.TokenOption) string {
+	base := []authntest.TokenOption{authntest.Subject("person-1"), authntest.Claim("nonce", "nonce-1")}
+	return auth.Token(testClient, nil, append(base, options...)...)
+}
+
+func TestVerifyIDTokenChecksTheNonceAndTheAuthorizedParty(t *testing.T) {
+	auth := authntest.NewServer(t)
+	verifier, _, err := Discover(t.Context(), auth.Server.Client(), auth.Server.URL, testClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claims, err := verifier.VerifyIDToken(t.Context(), idToken(auth), "nonce-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.Subject != "person-1" || claims.Issuer != auth.Server.URL {
+		t.Fatalf("%+v", claims)
+	}
+	if _, err := verifier.VerifyIDToken(t.Context(), idToken(auth, authntest.Claim("azp", testClient)), "nonce-1"); err != nil {
+		t.Errorf("azp equal to the client: %v", err)
+	}
+	if _, err := verifier.VerifyIDToken(t.Context(), idToken(auth, authntest.Audiences(testClient, "another-client"), authntest.Claim("azp", testClient)), "nonce-1"); err != nil {
+		t.Errorf("several audiences with azp: %v", err)
+	}
+
+	for name, tc := range map[string]struct {
+		token string
+		nonce string
+	}{
+		"another nonce":                   {idToken(auth), "nonce-2"},
+		"no nonce in the token":           {auth.Token(testClient, nil), "nonce-1"},
+		"an empty nonce asked for":        {idToken(auth), ""},
+		"a nonce that is not a string":    {idToken(auth, authntest.Claim("nonce", 1)), "1"},
+		"azp for another client":          {idToken(auth, authntest.Claim("azp", "another-client")), "nonce-1"},
+		"azp that is not a string":        {idToken(auth, authntest.Claim("azp", 7)), "nonce-1"},
+		"several audiences and no azp":    {idToken(auth, authntest.Audiences(testClient, "another-client")), "nonce-1"},
+		"another audience":                {auth.Token("another-client", nil, authntest.Claim("nonce", "nonce-1")), "nonce-1"},
+		"another issuer":                  {idToken(auth, authntest.Issuer("https://elsewhere.example.test")), "nonce-1"},
+		"the legacy Google issuer":        {idToken(auth, authntest.Issuer("accounts.google.com")), "nonce-1"},
+		"an issuer that differs in case":  {idToken(auth, authntest.Issuer(strings.ToUpper(auth.Server.URL))), "nonce-1"},
+		"a token with a trailing garbage": {idToken(auth) + "x", "nonce-1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := verifier.VerifyIDToken(t.Context(), tc.token, tc.nonce); err == nil {
+				t.Fatal("it was accepted")
+			}
+		})
+	}
+}
+
+// An ID token is not a bearer token for the API: the API's audience is not a client id, and a token the
+// API accepts has no nonce.
+func TestAnAccessTokenIsNotAnIDTokenAndTheOtherWayRound(t *testing.T) {
+	auth := authntest.NewServer(t)
+	verifier, _, err := Discover(t.Context(), auth.Server.Client(), auth.Server.URL, testClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifier.VerifyIDToken(t.Context(), auth.Token(testClient, []string{"ipso.read"}), "nonce-1"); err == nil {
+		t.Error("an access token with no nonce passed as an ID token")
+	}
+	// Verify (the bearer path) still holds the token to the configured issuer.
+	if _, err := verifier.Verify(t.Context(), idToken(auth, authntest.Issuer("accounts.google.com"))); err == nil {
+		t.Error("a bearer token with another issuer was accepted")
+	}
+}
+
+// Microsoft publishes keys with no alg member. The algorithm is read from the token's header and must
+// suit the key.
+func TestAKeyWithNoAlgVerifiesAnIDToken(t *testing.T) {
+	auth := authntest.NewServer(t, authntest.WithRSAKeyWithoutAlg())
+	verifier, _, err := Discover(t.Context(), auth.Server.Client(), auth.Server.URL, testClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifier.VerifyIDToken(t.Context(), idToken(auth), "nonce-1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Google signs some tokens with the issuer "accounts.google.com". The claims still carry the issuer
+// that was configured, because that is what identity.login stores.
+func TestOnlyGoogleMayUseItsSecondIssuerForm(t *testing.T) {
+	auth := authntest.NewServer(t)
+	public, err := auth.Signing.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := jwk.NewSet()
+	if err := keys.AddKey(public); err != nil {
+		t.Fatal(err)
+	}
+	for issuer, aliases := range map[string][]string{
+		googleIssuer:               {googleIssuer, googleLegacy},
+		"https://idp.example.test": {"https://idp.example.test"},
+	} {
+		verifier := &JWTVerifier{issuer: issuer, audience: testClient, keys: keys, fetched: time.Now(), idTokenIssuers: aliases}
+		for _, form := range []string{googleIssuer, googleLegacy} {
+			token := idToken(auth, authntest.Issuer(form))
+			claims, err := verifier.VerifyIDToken(t.Context(), token, "nonce-1")
+			wantOK := issuer == googleIssuer || form == issuer
+			switch {
+			case wantOK && err != nil:
+				t.Errorf("%s with %s: %v", issuer, form, err)
+			case wantOK && claims.Issuer != issuer:
+				t.Errorf("%s with %s: the claims carry %q", issuer, form, claims.Issuer)
+			case !wantOK && err == nil:
+				t.Errorf("%s accepted the issuer form %s", issuer, form)
+			}
+		}
+	}
+}
+
+func TestDiscoverReadsTheEndpointsALoginNeeds(t *testing.T) {
+	auth := authntest.NewServer(t)
+	auth.Meta["authorization_endpoint"] = auth.Server.URL + "/authorize"
+	auth.Meta["token_endpoint"] = auth.Server.URL + "/token"
+	auth.Meta["token_endpoint_auth_methods_supported"] = []string{"client_secret_post", "client_secret_basic"}
+	auth.Meta["authorization_response_iss_parameter_supported"] = true
+	_, meta, err := Discover(t.Context(), auth.Server.Client(), auth.Server.URL, testClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.AuthorizationEndpoint != auth.Server.URL+"/authorize" || meta.TokenEndpoint != auth.Server.URL+"/token" ||
+		len(meta.TokenEndpointAuthMethods) != 2 || !meta.IssuerResponseParameter {
+		t.Fatalf("%+v", meta)
+	}
+}

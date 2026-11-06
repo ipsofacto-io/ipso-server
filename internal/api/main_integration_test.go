@@ -176,6 +176,12 @@ func clock(t *testing.T, db *sql.DB) time.Time {
 // TLS, and tokens mapped to callers by subject.
 func (f *fixture) handler(t *testing.T, limits Limits) http.Handler {
 	t.Helper()
+	return f.handlerWith(t, limits, nil)
+}
+
+// handlerWith is handler with the session cookie turned on when sessions is not nil.
+func (f *fixture) handlerWith(t *testing.T, limits Limits, sessions *Sessions) http.Handler {
+	t.Helper()
 	verifier, _, err := authn.Discover(t.Context(), f.auth.Server.Client(), f.auth.Server.URL, audience)
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +193,8 @@ func (f *fixture) handler(t *testing.T, limits Limits) http.Handler {
 			caller, ok := f.callers[claims.Subject]
 			return caller, ok
 		},
-		Limits: limits,
+		Sessions: sessions,
+		Limits:   limits,
 	})
 	if err != nil {
 		t.Fatal(err)

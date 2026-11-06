@@ -62,6 +62,7 @@ services:
       DEX_EXPAND_ENV: "true"
       IPSO_API_CLIENT_SECRET: ${IPSO_API_CLIENT_SECRET:?copy .env.example to .env}
       IPSO_OTHER_CLIENT_SECRET: ${IPSO_OTHER_CLIENT_SECRET:?copy .env.example to .env}
+      IPSO_LOGIN_DEX_SECRET: ${IPSO_LOGIN_DEX_SECRET:?copy .env.example to .env}
       IPSO_DEX_USER: ${IPSO_DEX_USER:?copy .env.example to .env}
       IPSO_DEX_PASSWORD: ${IPSO_DEX_PASSWORD:?copy .env.example to .env}
     volumes:
@@ -127,6 +128,12 @@ services:
       IPSO_OIDC_ISSUER: https://dex:5556/dex
       # Dex puts the id of the client in the audience, so the API accepts the ipso-api client only.
       IPSO_API_AUDIENCE: ipso-api
+      # Browser sign-in (ADR-0099) through the same Dex, as the client ipso-login. The origin is the one a
+      # browser reaches the front at: open exactly http://localhost:8080, since localhost and 127.0.0.1 are
+      # different hosts to a cookie. The secret is the variable the provider names.
+      IPSO_PUBLIC_URL: http://localhost:8080
+      IPSO_LOGIN_PROVIDERS: '[{"id":"dex","kind":"oidc","issuer":"https://dex:5556/dex","client_id":"ipso-login","client_secret_env":"IPSO_LOGIN_DEX_SECRET"}]'
+      IPSO_LOGIN_DEX_SECRET: ${IPSO_LOGIN_DEX_SECRET:?copy .env.example to .env}
       IPSO_LISTEN_ADDR: ":8080"
       # The throwaway CA of the local provider is the only authority this process trusts.
       SSL_CERT_FILE: /certs/ca.pem

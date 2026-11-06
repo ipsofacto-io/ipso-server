@@ -5,6 +5,7 @@ package authn
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,9 @@ const (
 	// keyRefreshInterval limits how often an unknown key can make this server call out, so a stream
 	// of bad tokens cannot turn into a stream of requests to the authorization server.
 	keyRefreshInterval = time.Minute
+	// googleIssuer signs some ID tokens with the issuer "accounts.google.com", without the scheme.
+	googleIssuer = "https://accounts.google.com"
+	googleLegacy = "accounts.google.com"
 )
 
 // JWTVerifier checks signed access tokens from one authorization server for one resource.
@@ -40,6 +44,8 @@ type JWTVerifier struct {
 	audience string
 	jwksURI  string
 	client   *http.Client
+	// idTokenIssuers are the issuers an ID token may carry. Only Google has a second form.
+	idTokenIssuers []string
 
 	mu      sync.Mutex
 	keys    jwk.Set
@@ -94,6 +100,12 @@ func (e exclusive) Verify(ctx context.Context, raw string) (Claims, error) {
 type Metadata struct {
 	CodeChallengeMethods      []string `json:"code_challenge_methods_supported"`
 	ClientIDMetadataDocuments bool     `json:"client_id_metadata_document_supported"`
+	// The rest is what a relying party needs to sign a person in (internal/login).
+	AuthorizationEndpoint    string   `json:"authorization_endpoint"`
+	TokenEndpoint            string   `json:"token_endpoint"`
+	TokenEndpointAuthMethods []string `json:"token_endpoint_auth_methods_supported"`
+	// IssuerResponseParameter says the server adds iss to the authorization response (RFC 9207).
+	IssuerResponseParameter bool `json:"authorization_response_iss_parameter_supported"`
 }
 
 type authServerMetadata struct {
@@ -124,7 +136,11 @@ func Discover(ctx context.Context, client *http.Client, issuer, audience string)
 	if err := requireHTTPS("jwks_uri", meta.JWKSURI); err != nil {
 		return nil, Metadata{}, err
 	}
-	verifier := &JWTVerifier{issuer: issuer, audience: audience, jwksURI: meta.JWKSURI, client: &noRedirects}
+	verifier := &JWTVerifier{issuer: issuer, audience: audience, jwksURI: meta.JWKSURI, client: &noRedirects,
+		idTokenIssuers: []string{issuer}}
+	if issuer == googleIssuer {
+		verifier.idTokenIssuers = append(verifier.idTokenIssuers, googleLegacy)
+	}
 	keys, err := verifier.fetchKeys(ctx)
 	if err != nil {
 		return nil, Metadata{}, err
@@ -144,11 +160,17 @@ func Bearer(header string) (string, bool) {
 }
 
 func requireHTTPS(name, value string) error {
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+	if !IsHTTPS(value) {
 		return fmt.Errorf("%s must be an https URL", name)
 	}
 	return nil
+}
+
+// IsHTTPS holds for an https URL with a host. The endpoints a sign-in sends a person and a code to
+// pass the same test as an issuer.
+func IsHTTPS(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != ""
 }
 
 // fetchMetadata tries RFC 8414, then OpenID Connect discovery, which some servers offer instead.
@@ -229,38 +251,84 @@ func (v *JWTVerifier) fetchKeys(ctx context.Context) (jwk.Set, error) {
 // A token the current keys already verify is not a reason to call out: a new key cannot fix an
 // issuer, an audience, or an expiry. The error says nothing a caller should see.
 func (v *JWTVerifier) Verify(ctx context.Context, raw string) (Claims, error) {
+	token, err := v.verified(ctx, raw, false)
+	if err != nil {
+		return Claims{}, err
+	}
+	return v.claimsOf(token), nil
+}
+
+// VerifyIDToken checks the ID token a person's sign-in returned, for the relying party whose client id
+// is the audience of this verifier (OpenID Connect Core 3.1.3.7). On top of Verify's checks it requires
+// the nonce the sign-in sent, an azp equal to the client id when there is one, and an azp when the
+// token names several audiences. The claims carry the configured issuer, never the token's own form of
+// it, because the issuer is half of the key of a login (ADR-0093).
+func (v *JWTVerifier) VerifyIDToken(ctx context.Context, raw, nonce string) (Claims, error) {
+	if nonce == "" {
+		return Claims{}, errors.New("a nonce is required")
+	}
+	token, err := v.verified(ctx, raw, true)
+	if err != nil {
+		return Claims{}, err
+	}
+	if issuer, ok := token.Issuer(); !ok || !slices.Contains(v.idTokenIssuers, issuer) {
+		return Claims{}, errors.New("the ID token names another issuer")
+	}
+	audiences, _ := token.Audience()
+	if token.Has("azp") {
+		var azp string
+		if err := token.Get("azp", &azp); err != nil || azp != v.audience {
+			return Claims{}, errors.New("the ID token was issued to another party")
+		}
+	} else if len(audiences) > 1 {
+		return Claims{}, errors.New("the ID token names several audiences and no authorized party")
+	}
+	var got string
+	if err := token.Get("nonce", &got); err != nil || subtle.ConstantTimeCompare([]byte(got), []byte(nonce)) != 1 {
+		return Claims{}, errors.New("the ID token carries another nonce")
+	}
+	return v.claimsOf(token), nil
+}
+
+// verified reads the keys the verifier holds, and once more after a signature fails.
+func (v *JWTVerifier) verified(ctx context.Context, raw string, idToken bool) (jwt.Token, error) {
 	if raw == "" || len(raw) > maxTokenBytes {
-		return Claims{}, errors.New("the token is empty or too large")
+		return nil, errors.New("the token is empty or too large")
 	}
 	v.mu.Lock()
 	keys := v.keys
 	v.mu.Unlock()
-	token, err := v.parse(raw, keys)
+	token, err := v.parse(raw, keys, idToken)
 	if err != nil {
 		if !errors.Is(err, jws.VerificationError()) {
-			return Claims{}, err
+			return nil, err
 		}
 		fresh, ok := v.refresh(ctx)
 		if !ok {
-			return Claims{}, err
+			return nil, err
 		}
-		if token, err = v.parse(raw, fresh); err != nil {
-			return Claims{}, err
+		if token, err = v.parse(raw, fresh, idToken); err != nil {
+			return nil, err
 		}
 	}
-	return claimsOf(token), nil
+	return token, nil
 }
 
-func (v *JWTVerifier) parse(raw string, keys jwk.Set) (jwt.Token, error) {
-	return jwt.Parse([]byte(raw),
+// parse checks everything a signed token must satisfy. A bearer token also names the issuer here. An ID
+// token's issuer is checked by VerifyIDToken, which accepts Google's second form.
+func (v *JWTVerifier) parse(raw string, keys jwk.Set, idToken bool) (jwt.Token, error) {
+	options := []jwt.ParseOption{
 		jwt.WithKeySet(keys, jws.WithInferAlgorithmFromKey(true)),
 		jwt.WithValidate(true),
-		jwt.WithIssuer(v.issuer),
 		jwt.WithAudience(v.audience),
 		jwt.WithRequiredClaim("exp"),
 		jwt.WithRequiredClaim("sub"),
 		jwt.WithAcceptableSkew(clockSkew),
-	)
+	}
+	if !idToken {
+		options = append(options, jwt.WithIssuer(v.issuer))
+	}
+	return jwt.Parse([]byte(raw), options...)
 }
 
 func (v *JWTVerifier) refresh(ctx context.Context) (jwk.Set, bool) {
@@ -280,9 +348,10 @@ func (v *JWTVerifier) refresh(ctx context.Context) (jwk.Set, bool) {
 	return keys, true
 }
 
-func claimsOf(token jwt.Token) Claims {
-	claims := Claims{}
-	claims.Issuer, _ = token.Issuer()
+// claimsOf reads the claims of a token that parse accepted. The issuer is the configured one: Verify
+// checked it, and VerifyIDToken accepted an alias of it.
+func (v *JWTVerifier) claimsOf(token jwt.Token) Claims {
+	claims := Claims{Issuer: v.issuer}
 	claims.Subject, _ = token.Subject()
 	claims.Audiences, _ = token.Audience()
 	_ = token.Get("client_id", &claims.ClientID)

@@ -11,6 +11,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -33,6 +34,32 @@ type Caller struct {
 // CallerFunc maps verified claims to a caller. internal/controlplane supplies it from the stored
 // logins (ADR-0093). The tenant comes from here and never from the request. A false result is 403.
 type CallerFunc func(context.Context, authn.Claims) (Caller, bool)
+
+// SessionStatus is what a lookup of a session token found.
+type SessionStatus int
+
+const (
+	// SessionFound means the token is an unexpired session, and the caller speaks for it.
+	SessionFound SessionStatus = iota
+	// SessionUnknown means the token is no session, or the session has ended. The guard answers 401 and
+	// clears the cookie.
+	SessionUnknown
+	// SessionBusy means the process refused the lookup without asking the store, because it looks up too
+	// many tokens it has not kept. The guard answers 429, not 401, so a page does not sign the person out.
+	SessionBusy
+	// SessionFailed means the store could not answer. The guard answers 500.
+	SessionFailed
+)
+
+// Sessions turns the token of a session cookie into a caller (ADR-0099). internal/login supplies it.
+type Sessions struct {
+	// Origin is the origin the control plane is reached at. A request that could change state and comes
+	// from another origin is refused, and this one is trusted.
+	Origin string
+	// Lookup returns the caller of a session token the guard has checked is well formed. The tenant is
+	// the process's, never the request's.
+	Lookup func(ctx context.Context, token []byte) (Caller, SessionStatus)
+}
 
 // Limits bound every request. A zero field takes its default.
 type Limits struct {
@@ -73,6 +100,9 @@ type Config struct {
 	DB       *sql.DB
 	Verifier authn.Verifier
 	Callers  CallerFunc
+	// Sessions turns on the session cookie as a second way to authenticate. Nil leaves the cookie unread,
+	// so a session outlives the removal of sign-in by no time at all.
+	Sessions *Sessions
 	Limits   Limits
 	// Now is the clock that a read without valid or known defaults to. Default time.Now.
 	Now func() time.Time
@@ -107,10 +137,21 @@ func New(cfg Config) (http.Handler, error) {
 		db:       cfg.DB,
 		verifier: cfg.Verifier,
 		callers:  cfg.Callers,
+		sessions: cfg.Sessions,
 		limiter:  ratelimit.New(limits.Rate, limits.Burst),
 		maxBody:  limits.RequestBytes,
 		now:      time.Now,
 		log:      cfg.Log,
+	}
+	if cfg.Sessions != nil {
+		if cfg.Sessions.Lookup == nil {
+			return nil, errors.New("sessions need a lookup")
+		}
+		origin, err := authn.NewOriginCheck(cfg.Sessions.Origin)
+		if err != nil {
+			return nil, fmt.Errorf("sessions need an origin: %w", err)
+		}
+		g.origin = origin
 	}
 	mux := http.NewServeMux()
 	for _, rt := range routes(cfg.DB, cfg.Now) {

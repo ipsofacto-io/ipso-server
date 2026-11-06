@@ -23,6 +23,7 @@ import (
 
 	"github.com/ipsofacto-io/ipso-server/internal/controlplane"
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
+	"github.com/ipsofacto-io/ipso-server/internal/login"
 	"github.com/ipsofacto-io/ipso-server/internal/migrate"
 	"github.com/ipsofacto-io/ipso-server/internal/worker"
 )
@@ -161,9 +162,10 @@ usage:
 
 --role=api serves the control plane API on ` + listenAddrEnv + ` (default ` + defaultListen + `) as the application role. It
 reads ` + databaseEnv + `, ` + tenantEnv + `, ` + oidcIssuerEnv + `, and ` + apiAudienceEnv + `, and optionally
-the pair ` + mcpIssuerEnv + ` and ` + mcpResourceEnv + ` for the remote MCP handler. It refuses to start as a
-role that can bypass row-level security, for a tenant with no row, or when it holds the migration
-credential.
+the pair ` + mcpIssuerEnv + ` and ` + mcpResourceEnv + ` for the remote MCP handler, and the pair
+` + login.PublicURLEnv + ` and ` + login.ProvidersEnv + ` for browser sign-in, whose client secrets are the
+variables the providers name. It refuses to start as a role that can bypass row-level security, for a
+tenant with no row, or when it holds the migration credential.
 
 --role=worker works the jobs of the control plane on River, in the registry's PostgreSQL, as the
 application role. It reads ` + databaseEnv + ` and ` + tenantEnv + `, serves no request, and runs the waiver notice
@@ -266,13 +268,27 @@ func apiConfig(getenv func(string) string) (controlplane.Config, error) {
 	if (getenv(mcpIssuerEnv) == "") != (getenv(mcpResourceEnv) == "") {
 		return controlplane.Config{}, errors.New(mcpIssuerEnv + " and " + mcpResourceEnv + " are set together or not at all")
 	}
-	return controlplane.Config{
+	cfg := controlplane.Config{
 		Tenant:         tenant,
 		Issuer:         getenv(oidcIssuerEnv),
 		Audience:       getenv(apiAudienceEnv),
 		MCPIssuer:      getenv(mcpIssuerEnv),
 		MCPResourceURL: getenv(mcpResourceEnv),
-	}, nil
+	}
+	// Browser sign-in (ADR-0099): the public origin and the providers, together or not at all. A provider
+	// names the variable that holds its client secret, so the JSON can be logged and committed.
+	publicURL, providers := getenv(login.PublicURLEnv), getenv(login.ProvidersEnv)
+	if (publicURL == "") != (providers == "") {
+		return controlplane.Config{}, errors.New(login.PublicURLEnv + " and " + login.ProvidersEnv + " are set together or not at all")
+	}
+	if providers != "" {
+		parsed, err := login.ParseProviders(strings.NewReader(providers))
+		if err != nil {
+			return controlplane.Config{}, err
+		}
+		cfg.PublicURL, cfg.Providers, cfg.Secrets = publicURL, parsed, getenv
+	}
+	return cfg, nil
 }
 
 // workerCmd works the jobs for the one tenant of IPSO_TENANT_ID until the process is told to stop. The

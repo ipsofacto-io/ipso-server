@@ -17,6 +17,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/api"
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
+	"github.com/ipsofacto-io/ipso-server/internal/login"
 )
 
 func TestNewRefusesAnIncompleteConfigBeforeItTouchesTheDatabase(t *testing.T) {
@@ -36,6 +37,10 @@ func TestNewRefusesAnIncompleteConfigBeforeItTouchesTheDatabase(t *testing.T) {
 		{"no audience", func(c *Config) { c.Audience = "" }, "audience"},
 		{"an MCP issuer alone", func(c *Config) { c.MCPIssuer = "https://mcp.example.test" }, "together"},
 		{"an MCP resource alone", func(c *Config) { c.MCPResourceURL = "https://ipso.example.test/mcp" }, "together"},
+		{"a public URL without providers", func(c *Config) { c.PublicURL = "https://ipso.example.test" }, "together"},
+		{"providers without a public URL", func(c *Config) {
+			c.Providers = []login.ProviderConfig{{ID: "github", Kind: login.KindGitHub, ClientID: "c", ClientSecretEnv: "IPSO_LOGIN_GITHUB"}}
+		}, "together"},
 		{"equal audiences", func(c *Config) {
 			c.MCPIssuer, c.MCPResourceURL, c.Audience = "https://mcp.example.test", "https://ipso.example.test/mcp", "https://ipso.example.test/mcp"
 		}, "distinct audiences"},
@@ -157,5 +162,20 @@ func TestTheLoginCacheStaysBounded(t *testing.T) {
 	}
 	if len(cache.entries) > 2 {
 		t.Fatalf("%d entries, want at most 2", len(cache.entries))
+	}
+}
+
+// Each answer of the sign-in maps to the one the guard acts on. internal/login's tests cover the
+// lookups, and the integration tests cover the whole path.
+func TestEachSignInStatusMapsToTheOneTheGuardActsOn(t *testing.T) {
+	for status, want := range map[login.Status]api.SessionStatus{
+		login.Found:   api.SessionFound,
+		login.Unknown: api.SessionUnknown,
+		login.Busy:    api.SessionBusy,
+		login.Failed:  api.SessionFailed,
+	} {
+		if got := sessionStatus(status); got != want {
+			t.Errorf("%v maps to %v, want %v", status, got, want)
+		}
 	}
 }

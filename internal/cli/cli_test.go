@@ -339,6 +339,52 @@ func TestRoleAPIStartsTheControlPlaneFromTheEnvironment(t *testing.T) {
 	}
 }
 
+func TestRoleAPIReadsBrowserSignInFromTheEnvironment(t *testing.T) {
+	var got controlplane.Config
+	providers := `[{"id":"github","kind":"github","client_id":"gh","client_secret_env":"IPSO_LOGIN_GITHUB"}]`
+	code, _, stderr := invoke(t, apiDeps(apiEnv(map[string]string{
+		"IPSO_PUBLIC_URL":      "https://ipso.example.test",
+		"IPSO_LOGIN_PROVIDERS": providers,
+		"IPSO_LOGIN_GITHUB":    "a-secret",
+	}), &got), "--role=api")
+	if code != 0 {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if got.PublicURL != "https://ipso.example.test" || len(got.Providers) != 1 || got.Providers[0].ID != "github" || got.Providers[0].ClientSecretEnv != "IPSO_LOGIN_GITHUB" {
+		t.Errorf("config = %+v", got)
+	}
+	// The process reads a secret through the environment of the provider that names it, and no other.
+	if got.Secrets == nil || got.Secrets("IPSO_LOGIN_GITHUB") != "a-secret" {
+		t.Error("the secrets are not read from the environment")
+	}
+	if strings.Contains(stderr, "a-secret") {
+		t.Error("a secret reached stderr")
+	}
+}
+
+func TestRoleAPIRefusesBrowserSignInItCannotRead(t *testing.T) {
+	good := `[{"id":"github","kind":"github","client_id":"gh","client_secret_env":"IPSO_LOGIN_GITHUB"}]`
+	for name, extra := range map[string]map[string]string{
+		"providers without a public URL": {"IPSO_LOGIN_PROVIDERS": good},
+		"a public URL without providers": {"IPSO_PUBLIC_URL": "https://ipso.example.test"},
+		"a provider with a field it does not know": {
+			"IPSO_PUBLIC_URL": "https://ipso.example.test", "IPSO_LOGIN_PROVIDERS": `[{"id":"github","kind":"github","client_id":"gh","client_secret":"oops"}]`,
+		},
+		"providers that are not JSON": {"IPSO_PUBLIC_URL": "https://ipso.example.test", "IPSO_LOGIN_PROVIDERS": "github"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got controlplane.Config
+			code, _, stderr := invoke(t, apiDeps(apiEnv(extra), &got), "--role=api")
+			if code != 1 || got.DB != nil {
+				t.Fatalf("exit code = %d, started %v: %s", code, got.DB != nil, stderr)
+			}
+			if strings.Contains(stderr, "oops") {
+				t.Errorf("the secret reached stderr: %q", stderr)
+			}
+		})
+	}
+}
+
 func TestRoleAPIAcceptsTheRoleAsASeparateArgument(t *testing.T) {
 	var got controlplane.Config
 	if code, _, stderr := invoke(t, apiDeps(apiEnv(nil), &got), "--role", "api"); code != 0 {
