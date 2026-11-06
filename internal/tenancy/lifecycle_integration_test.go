@@ -382,6 +382,19 @@ func open(t *testing.T, archive []byte, id *age.X25519Identity) parts {
 	return p
 }
 
+// line encodes a value as one JSON line the way the exporter writes it. json.Marshal would rewrite &, < and >
+// inside a raw row as \u0026 and so on, and the hash of the row would no longer be the hash of the bytes written.
+func line(t *testing.T, v any) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
 // seal writes the parts as an archive with a trailer that matches them.
 func seal(t *testing.T, p parts, id *age.X25519Identity) []byte {
 	t.Helper()
@@ -391,8 +404,7 @@ func seal(t *testing.T, p parts, id *age.X25519Identity) []byte {
 		t.Fatal(err)
 	}
 	zw := gzip.NewWriter(enc)
-	line, _ := json.Marshal(p.header)
-	_, _ = zw.Write(append(line, '\n'))
+	_, _ = zw.Write(line(t, p.header))
 	type sum struct {
 		Rows   int64  `json:"rows"`
 		SHA256 string `json:"sha256"`
@@ -407,8 +419,7 @@ func seal(t *testing.T, p parts, id *age.X25519Identity) []byte {
 		hashes[name.(string)] = sha256.New()
 	}
 	for _, r := range p.rows {
-		line, _ := json.Marshal(r)
-		_, _ = zw.Write(append(line, '\n'))
+		_, _ = zw.Write(line(t, r))
 		if h, ok := hashes[r.Table]; ok {
 			counts[r.Table]++
 			_, _ = h.Write(r.Row)
@@ -419,8 +430,7 @@ func seal(t *testing.T, p parts, id *age.X25519Identity) []byte {
 	for _, name := range tables {
 		trailer[name.(string)] = sum{Rows: counts[name.(string)], SHA256: hex.EncodeToString(hashes[name.(string)].Sum(nil))}
 	}
-	end, _ := json.Marshal(map[string]any{"end": true, "tables": trailer})
-	_, _ = zw.Write(append(end, '\n'))
+	_, _ = zw.Write(line(t, map[string]any{"end": true, "tables": trailer}))
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
