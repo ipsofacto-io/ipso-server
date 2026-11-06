@@ -59,7 +59,7 @@ func run(ctx context.Context, databaseURL string, fsys fs.FS) ([]string, error) 
 	if err := provider.Ping(ctx); err != nil {
 		return nil, fmt.Errorf("connect to database: %w", err)
 	}
-	if err := refusePrivilegedRole(ctx, db); err != nil {
+	if err := RefusePrivilegedRole(ctx, db); err != nil {
 		return nil, err
 	}
 	results, err := provider.Up(ctx)
@@ -91,10 +91,11 @@ func newProvider(db *sql.DB, fsys fs.FS) (*goose.Provider, error) {
 	)
 }
 
-// refusePrivilegedRole fails before any statement when the session role or the current
+// RefusePrivilegedRole fails before any statement when the session role or the current
 // role is a superuser or has BYPASSRLS. The current role differs from the session role
-// after SET ROLE, which a connection can request through its options.
-func refusePrivilegedRole(ctx context.Context, db *sql.DB) error {
+// after SET ROLE, which a connection can request through its options. The tenant
+// restore and offboard commands run it too, since they hold the migration credential.
+func RefusePrivilegedRole(ctx context.Context, db *sql.DB) error {
 	rows, err := db.QueryContext(ctx, `
 		SELECT rolname, rolsuper, rolbypassrls
 		FROM pg_catalog.pg_roles

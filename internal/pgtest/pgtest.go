@@ -118,6 +118,9 @@ func (s *Server) createRoles(ctx context.Context) error {
 	for _, statement := range []string{
 		`ALTER ROLE ipso_bypass BYPASSRLS`,
 		`GRANT ipso_bypass TO ipso_member`,
+		// The restore and offboard commands skip triggers and foreign keys for one transaction (ADR-0100).
+		// The install grants the migration role that parameter and nothing else. ipso_app has no grant.
+		`GRANT SET ON PARAMETER session_replication_role TO ipso_migrate`,
 	} {
 		if _, err := admin.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("%s: %w", statement, err)

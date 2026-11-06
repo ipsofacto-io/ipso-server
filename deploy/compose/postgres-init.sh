@@ -1,7 +1,8 @@
 #!/bin/sh
 # Prepares the database once, the way an administrator does before the first migrate (README,
 # "Database schema"): two login roles that are not superusers and have neither BYPASSRLS nor
-# CREATEROLE, an empty database owned by the migration role, and ipso.current_tenant().
+# CREATEROLE, an empty database owned by the migration role, the right of that role to set
+# session_replication_role, and ipso.current_tenant().
 # The image runs this on first start only, as the superuser.
 set -eu
 
@@ -10,6 +11,9 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres \
 CREATE ROLE ipso_migrate LOGIN PASSWORD :'migrate_password';
 CREATE ROLE ipso_app LOGIN PASSWORD :'app_password';
 CREATE DATABASE ipso OWNER ipso_migrate;
+-- The tenant restore and offboard commands run as the migration role and skip triggers for one
+-- transaction (ADR-0100). Only this parameter is granted, and ipso_app gets none.
+GRANT SET ON PARAMETER session_replication_role TO ipso_migrate;
 SQL
 
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname ipso <<'SQL'

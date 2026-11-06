@@ -20,9 +20,9 @@ const (
 	tenantA = "00000000-0000-4000-8000-00000000000a"
 	tenantB = "00000000-0000-4000-8000-00000000000b"
 
-	decisionKeep = "00000000-0000-4000-8000-0000000000d1"
-	decisionFrom = "00000000-0000-4000-8000-0000000000d2"
-	decisionTo   = "00000000-0000-4000-8000-0000000000d3"
+	decisionKeep = pgtest.DecisionKeep
+	decisionFrom = pgtest.DecisionFrom
+	decisionTo   = pgtest.DecisionTo
 )
 
 // tenantCall is what every policy compares tenant_id to. The function body is the
@@ -153,8 +153,9 @@ func TestCrossTenantReadsAndWritesFail(t *testing.T) {
 	db := migrated(t)
 	app := db.Open(t, pgtest.App)
 	admin := db.Open(t, pgtest.Admin)
-	seed(t, app, tenantA)
-	seed(t, app, tenantB)
+	pgtest.SeedEveryTable(t, app, tenantA)
+	pgtest.SeedEveryTable(t, app, tenantB)
+	seedTombstones(t, db, tenantA, tenantB)
 
 	for _, table := range policyTables() {
 		t.Run(table, func(t *testing.T) {
@@ -209,7 +210,7 @@ func TestCrossTenantReadsAndWritesFail(t *testing.T) {
 func TestASessionWithNoTenantSeesNoRow(t *testing.T) {
 	db := migrated(t)
 	app := db.Open(t, pgtest.App)
-	seed(t, app, tenantA)
+	pgtest.SeedEveryTable(t, app, tenantA)
 
 	var n int
 	if err := app.QueryRowContext(t.Context(), `SELECT count(*) FROM registry.scope`).Scan(&n); err != nil {
@@ -242,6 +243,28 @@ func TestASessionWithNoTenantSeesNoRow(t *testing.T) {
 	}
 }
 
+// The restore and offboard commands skip triggers for one transaction with session_replication_role. Only
+// the migration role holds that grant. The application role must not, or a request could skip the
+// triggers that stamp transaction time and keep history (ADR-0100).
+func TestOnlyTheMigrationRoleMaySkipTriggers(t *testing.T) {
+	db := migrated(t)
+	for role, wantErr := range map[string]bool{pgtest.App: true, pgtest.Migrate: false} {
+		conn := db.Open(t, role)
+		tx, err := conn.BeginTx(t.Context(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.ExecContext(t.Context(), `SELECT set_config('session_replication_role', 'replica', true)`)
+		_ = tx.Rollback()
+		if gotErr := err != nil; gotErr != wantErr {
+			t.Errorf("%s set session_replication_role: error %v, want an error %v", role, err, wantErr)
+		}
+		if wantErr && sqlState(err) != "42501" {
+			t.Errorf("%s: sqlstate = %s, want 42501 (%v)", role, sqlState(err), err)
+		}
+	}
+}
+
 func TestApplicationRoleCannotSetRoleToTheMigrationRole(t *testing.T) {
 	db := migrated(t)
 	app := db.Open(t, pgtest.App)
@@ -253,8 +276,8 @@ func TestApplicationRoleCannotSetRoleToTheMigrationRole(t *testing.T) {
 func TestBypassRLSSeesEveryTenantAndIsRefusedAtStart(t *testing.T) {
 	db := migrated(t)
 	app := db.Open(t, pgtest.App)
-	seed(t, app, tenantA)
-	seed(t, app, tenantB)
+	pgtest.SeedEveryTable(t, app, tenantA)
+	pgtest.SeedEveryTable(t, app, tenantB)
 
 	admin := db.Open(t, pgtest.Admin)
 	for _, statement := range []string{
@@ -278,113 +301,17 @@ func TestBypassRLSSeesEveryTenantAndIsRefusedAtStart(t *testing.T) {
 	}
 }
 
-func seed(t *testing.T, app *sql.DB, tenant string) {
+// seedTombstones writes the one row the application role cannot: the tombstone of an offboarded tenant. The
+// migration role writes it, with ipso.tenant set, the way the offboard command does.
+func seedTombstones(t *testing.T, db *pgtest.Database, tenants ...string) {
 	t.Helper()
-	ctx := t.Context()
-	mustScan := func(query string, args []any, dest ...any) {
-		t.Helper()
-		if err := pgtest.Scan(ctx, app, tenant, query, args, dest...); err != nil {
-			t.Fatalf("%s: %v", query, err)
+	migrator := db.Open(t, pgtest.Migrate)
+	for _, tenant := range tenants {
+		if _, err := pgtest.Exec(t.Context(), migrator, tenant,
+			`INSERT INTO tenancy.offboarding (tenant_id, deleted_rows, deleted_jobs, key_destroyed) VALUES ($1::uuid, 1, 0, true)`, tenant); err != nil {
+			t.Fatalf("tombstone of %s: %v", tenant, err)
 		}
 	}
-	mustExec := func(query string, args ...any) {
-		t.Helper()
-		if _, err := pgtest.Exec(ctx, app, tenant, query, args...); err != nil {
-			t.Fatalf("%s: %v", query, err)
-		}
-	}
-
-	var person, org, payments, labs, repo string
-	mustExec(`INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1::uuid, 'synthetic tenant')`, tenant)
-	mustScan(`INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1::uuid, 'human', 'Ada') RETURNING id`,
-		[]any{tenant}, &person)
-	mustScan(`INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1::uuid, NULL, 'org', 'acme') RETURNING id`,
-		[]any{tenant}, &org)
-	mustScan(`INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1::uuid, $2::uuid, 'domain', 'payments') RETURNING id`,
-		[]any{tenant, org}, &payments)
-	mustScan(`INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1::uuid, $2::uuid, 'domain', 'labs') RETURNING id`,
-		[]any{tenant, org}, &labs)
-	mustScan(`INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1::uuid, $2::uuid, 'repo', 'acme/payments') RETURNING id`,
-		[]any{tenant, payments}, &repo)
-	mustExec(`UPDATE registry.scope SET parent_id = $2::uuid WHERE id = $1::uuid`, repo, labs)
-
-	body := `{"premises":[{"id":"tls-version"}]}`
-	for _, decision := range []struct{ id, valid string }{
-		{decisionKeep, "[2020-01-01,)"},
-		{decisionFrom, "[2020-01-01,2025-01-01)"},
-		{decisionTo, "[2024-01-01,)"},
-	} {
-		mustExec(`
-			INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
-			VALUES ($1::uuid, 1, $2::uuid, $3::jsonb, ARRAY[$4::uuid], $5::text::tstzrange)`,
-			decision.id, tenant, body, org, decision.valid)
-	}
-	mustExec(`UPDATE registry.decision_version SET version = 2 WHERE decision_id = $1::uuid AND tenant_id = $2::uuid`, decisionKeep, tenant)
-	mustExec(`
-		INSERT INTO registry.supersession (tenant_id, from_decision, to_decision, effective_at)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, '2024-06-01')`, tenant, decisionFrom, decisionTo)
-	mustExec(`
-		INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period)
-		VALUES ($1::uuid, $2::uuid, '[2020-01-01,)')`, tenant, decisionKeep)
-	mustExec(`
-		INSERT INTO registry.baseline (tenant_id, decision_id, repo, fingerprints)
-		VALUES ($1::uuid, $2::uuid, 'acme/payments', ARRAY[sha256('fp')])`, tenant, decisionKeep)
-
-	var waiver string
-	mustScan(`
-		INSERT INTO registry.waiver
-			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'synthetic exception', 'Ada', $4::uuid, '[2020-01-01,2020-02-01)', 'OPS-1')
-		RETURNING id`, []any{tenant, decisionKeep, org, person}, &waiver)
-	mustExec(`
-		INSERT INTO registry.waiver_notice (tenant_id, waiver_id, days_before, ticket_ref)
-		VALUES ($1::uuid, $2::uuid, 0, 'OPS-1')`, tenant, waiver)
-
-	var evaluation, reason string
-	mustScan(`
-		INSERT INTO registry.premise_evaluation
-			(tenant_id, decision_id, premise_id, result, url, pointer, expected, observed, body_sha256)
-		VALUES ($1::uuid, $2::uuid, 'tls-version', 'fail', 'https://example.com/status', '', '1'::jsonb, '0'::jsonb, sha256('body'))
-		RETURNING id`, []any{tenant, decisionKeep}, &evaluation)
-	mustScan(`
-		INSERT INTO registry.premise_reason (tenant_id, decision_id, premise_id, evaluation_id)
-		VALUES ($1::uuid, $2::uuid, 'tls-version', $3::uuid)
-		RETURNING id`, []any{tenant, decisionKeep, evaluation}, &reason)
-	mustExec(`
-		INSERT INTO registry.premise_clearance (tenant_id, reason_id, kind)
-		VALUES ($1::uuid, $2::uuid, 'human')`, tenant, reason)
-	mustExec(`
-		INSERT INTO registry.premise_host_allow (tenant_id, host, allowed)
-		VALUES ($1::uuid, 'example.com', true)`, tenant)
-
-	var proposal string
-	mustScan(`
-		INSERT INTO proposals.proposal
-			(tenant_id, payload, confidence, model_id, prompt_version, repo, pr_number, external_id, source_url, source_sha256, candidate_index)
-		VALUES ($1::uuid, '{"title":"Use Postgres"}', 0.8, 'm', 'p', 'acme/payments', 8, 'comment1',
-		        'https://github.com/acme/payments/pull/8', decode(repeat('ab', 32), 'hex'), 0)
-		RETURNING id`, []any{tenant}, &proposal)
-	mustExec(`
-		INSERT INTO proposals.approval (tenant_id, proposal_id, approver_id, outcome)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'approved')`, tenant, proposal, person)
-	mustExec(`
-		INSERT INTO proposals.agent_proposal (tenant_id, principal_id, payload)
-		VALUES ($1::uuid, $2::uuid, '{"title":"Pin versions"}')`, tenant, person)
-	mustExec(`
-		INSERT INTO proposals.check_proposal
-			(tenant_id, decision_id, decision_version, spec, rego, rego_sha256, fixtures, fixtures_total, fixtures_passed, repaired, model_id, prompt_version)
-		VALUES ($1::uuid, $2::uuid, 1, '{}'::jsonb, 'package p', sha256(convert_to('package p', 'UTF8')),
-		        '[{},{}]'::jsonb, 2, 2, false, 'm', 'v1')`, tenant, decisionKeep)
-	mustExec(`
-		INSERT INTO identity.login (tenant_id, principal_id, issuer, subject)
-		VALUES ($1::uuid, $2::uuid, 'https://idp.example.test', 'subject-1')`, tenant, person)
-	mustExec(`
-		INSERT INTO identity.session (tenant_id, login_id, token_sha256)
-		SELECT tenant_id, id, sha256(convert_to('seeded session', 'UTF8')) FROM identity.login`)
-	mustExec(`
-		INSERT INTO identity.action_log (tenant_id, principal_id, responsible_id, action, subject)
-		VALUES ($1::uuid, $2::uuid, $2::uuid, 'api.read', 'registry')`, tenant, person)
-	mustExec(`INSERT INTO llm.usage (tenant_id, month, tokens) VALUES ($1::uuid, '2026-01-01', 1)`, tenant)
 }
 
 type smuggle struct {
@@ -400,6 +327,9 @@ func smuggleInserts() []smuggle {
 		{"identity.principal", `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1::uuid, 'human', 'Bea')`, []any{tenantA}, true},
 		{"llm.usage", `INSERT INTO llm.usage (tenant_id, month, tokens) VALUES ($1::uuid, '2026-02-01', 1)`, []any{tenantA}, true},
 		{"tenancy.tenant", `INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1::uuid, 'smuggled')`, []any{tenantA}, true},
+		{"tenancy.tenant_key", `INSERT INTO tenancy.tenant_key (tenant_id, wrapped_dek) VALUES ($1::uuid, decode(repeat('ab', 60), 'hex'))`, []any{tenantA}, true},
+		// The application role has no INSERT on the tombstone at all, so the privilege check refuses it.
+		{"tenancy.offboarding", `INSERT INTO tenancy.offboarding (tenant_id, deleted_rows, deleted_jobs, key_destroyed) VALUES ($1::uuid, 0, 0, false)`, []any{tenantA}, false},
 		{"identity.login", `INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1::uuid, $1::uuid, 'https://idp.example.test', 'smuggled')`, []any{tenantA}, true},
 		// The stamp trigger reads the login as the caller's tenant, so it refuses this row (23514) before the
 		// policy is asked (42501). Either way the insert fails, and the policy stays as a second line.
@@ -548,7 +478,9 @@ func policyTables() []string {
 		"registry.supersession",
 		"registry.waiver",
 		"registry.waiver_notice",
+		"tenancy.offboarding",
 		"tenancy.tenant",
+		"tenancy.tenant_key",
 	}
 	sort.Strings(tables)
 	return tables
@@ -580,15 +512,23 @@ func expectedPolicies() []string {
 		"registry.supersession":             "SELECT INSERT",
 		"registry.waiver":                   "SELECT INSERT",
 		"registry.waiver_notice":            "SELECT INSERT",
+		"tenancy.offboarding":               "SELECT",
 		"tenancy.tenant":                    "SELECT INSERT",
+		"tenancy.tenant_key":                "SELECT INSERT",
 	}
-	migrate := map[string]string{
-		"registry.decision_version_history": "INSERT",
-		"registry.scope":                    "SELECT UPDATE",
-		"registry.scope_closure":            "SELECT INSERT DELETE",
-		"registry.scope_closure_history":    "INSERT",
-		"registry.scope_history":            "INSERT",
+	// The migration role reads, writes and deletes every tenant table, because the restore and offboard
+	// commands run as it (ADR-0100). The exceptions are the tables a restore does not write, the table
+	// the triggers of the migration role already write, and the tombstone, which is written once and never
+	// deleted. The scope tree also keeps the UPDATE of 00013.
+	migrate := make(map[string]string)
+	for _, table := range policyTables() {
+		migrate[table] = "SELECT INSERT DELETE"
 	}
+	migrate["identity.session"] = "SELECT DELETE"
+	migrate["tenancy.tenant"] = "SELECT DELETE"
+	migrate["tenancy.tenant_key"] = "SELECT DELETE"
+	migrate["tenancy.offboarding"] = "SELECT INSERT"
+	migrate["registry.scope"] = "SELECT INSERT UPDATE DELETE"
 	var lines []string
 	for table, cmds := range app {
 		for _, cmd := range strings.Fields(cmds) {
