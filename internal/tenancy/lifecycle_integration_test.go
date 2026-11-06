@@ -382,8 +382,8 @@ func open(t *testing.T, archive []byte, id *age.X25519Identity) parts {
 	return p
 }
 
-// line encodes a value as one JSON line the way the exporter writes it. json.Marshal would rewrite &, < and >
-// inside a raw row as \u0026 and so on, and the hash of the row would no longer be the hash of the bytes written.
+// line encodes a value as one JSON line. Without SetEscapeHTML(false), json.Marshal would rewrite &, < and >
+// inside a raw row as \u0026 and so on.
 func line(t *testing.T, v any) []byte {
 	t.Helper()
 	var b bytes.Buffer
@@ -419,6 +419,13 @@ func seal(t *testing.T, p parts, id *age.X25519Identity) []byte {
 		hashes[name.(string)] = sha256.New()
 	}
 	for _, r := range p.rows {
+		// PostgreSQL prints jsonb with spaces after colons and commas, and the encoder compacts a raw
+		// message. Compacting first makes the bytes that are hashed the bytes that are written.
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, r.Row); err != nil {
+			t.Fatal(err)
+		}
+		r.Row = compact.Bytes()
 		_, _ = zw.Write(line(t, r))
 		if h, ok := hashes[r.Table]; ok {
 			counts[r.Table]++
