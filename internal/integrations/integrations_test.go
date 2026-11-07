@@ -300,11 +300,13 @@ func deliver(t *testing.T, s *Service, event, id string, payload any) int {
 	return recorder.Code
 }
 
-// drain runs what the handler queued and returns.
+// drain runs what the handler queued, check runs and merged pull request jobs alike, and returns.
 func drain(s *Service) {
 	for {
 		select {
 		case next := <-s.queue:
+			s.work(context.Background(), next)
+		case next := <-s.merged:
 			s.work(context.Background(), next)
 		default:
 			return
@@ -595,6 +597,128 @@ func TestFullQueueAsksForRedelivery(t *testing.T) {
 	}
 }
 
+func TestMergedJobsHaveTheirOwnQueue(t *testing.T) {
+	_, app := newFakeGitHub(t)
+	s := newTestService(t, app, nil, func(context.Context, MergedPullRequest) error { return nil })
+	if code := deliver(t, s, "pull_request", "m-1", prEvent("closed")); code != http.StatusAccepted {
+		t.Fatalf("merged: status %d", code)
+	}
+	if len(s.merged) != 1 || len(s.queue) != 0 {
+		t.Fatalf("a merged pull request queued %d merged and %d check jobs, want 1 and 0", len(s.merged), len(s.queue))
+	}
+	if code := deliver(t, s, "pull_request", "c-1", prEvent("opened")); code != http.StatusAccepted {
+		t.Fatalf("opened: status %d", code)
+	}
+	if len(s.merged) != 1 || len(s.queue) != 1 {
+		t.Fatalf("a check run queued %d merged and %d check jobs, want 1 and 1", len(s.merged), len(s.queue))
+	}
+}
+
+// A model can take minutes, and a check run is a status someone waits on (ADR-0103).
+func TestSlowMergedJobsDoNotDelayCheckRuns(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	release := make(chan struct{})
+	started := make(chan struct{}, workerCount)
+	s := newTestService(t, app, nil, func(ctx context.Context, _ MergedPullRequest) error {
+		started <- struct{}{}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	})
+	ctx, stop := context.WithCancel(t.Context())
+	stopped := make(chan struct{})
+	go func() {
+		s.Run(ctx)
+		close(stopped)
+	}()
+	defer func() {
+		close(release)
+		stop()
+		<-stopped
+	}()
+
+	// Enough merged pull requests to hold every worker of a shared pool.
+	for i := range workerCount {
+		if code := deliver(t, s, "pull_request", fmt.Sprintf("m-%d", i), prEvent("closed")); code != http.StatusAccepted {
+			t.Fatalf("merged %d: status %d", i, code)
+		}
+	}
+	for range mergedWorkerCount {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a merged pull request job did not start")
+		}
+	}
+	// Every merged worker waits on the model. The check run still finishes.
+	if code := deliver(t, s, "pull_request", "c-1", prEvent("opened")); code != http.StatusAccepted {
+		t.Fatalf("opened: status %d", code)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		fake.mu.Lock()
+		created := len(fake.created)
+		fake.mu.Unlock()
+		if created == 1 {
+			if running := len(started); running != 0 {
+				t.Fatalf("%d merged pull request jobs beyond the %d workers of their lane started", running, mergedWorkerCount)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the check run waited for the merged pull request jobs")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestFullMergedQueueAsksForRedelivery(t *testing.T) {
+	_, app := newFakeGitHub(t)
+	s := newTestService(t, app, nil, func(context.Context, MergedPullRequest) error { return nil })
+	for i := range queueSize {
+		if code := deliver(t, s, "pull_request", fmt.Sprintf("m-%d", i), prEvent("closed")); code != http.StatusAccepted {
+			t.Fatalf("delivery %d: status %d", i, code)
+		}
+	}
+	if code := deliver(t, s, "pull_request", "over", prEvent("closed")); code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d", code)
+	}
+	// A full merged queue leaves the check runs alone, and the delivery is forgotten for GitHub to redeliver.
+	if code := deliver(t, s, "pull_request", "c-1", prEvent("opened")); code != http.StatusAccepted {
+		t.Fatalf("a check run while the merged queue is full: status %d", code)
+	}
+	for len(s.merged) > 0 {
+		<-s.merged
+	}
+	if code := deliver(t, s, "pull_request", "over", prEvent("closed")); code != http.StatusAccepted {
+		t.Fatalf("redelivery: status %d", code)
+	}
+}
+
+// The gateway tries a second route after a timeout, so a bound of one route's wait would cut a call
+// that was about to succeed and lose the tokens it spent (ADR-0103).
+func TestMergedJobsGetALongerBoundThanCheckRuns(t *testing.T) {
+	_, app := newFakeGitHub(t)
+	s := newTestService(t, app, nil, nil)
+	bound := func(merged bool) time.Duration {
+		var left time.Duration
+		s.work(t.Context(), job{delivery: "d-1", name: "bound", merged: merged, run: func(ctx context.Context, _ uuid.UUID) error {
+			deadline, _ := ctx.Deadline()
+			left = time.Until(deadline)
+			return nil
+		}})
+		return left
+	}
+	if check := bound(false); check > jobTimeout || check < jobTimeout-time.Minute {
+		t.Errorf("a check job is bounded to %s, want about %s", check, jobTimeout)
+	}
+	if merged := bound(true); merged > mergedJobTimeout || merged < mergedJobTimeout-time.Minute {
+		t.Errorf("a merged pull request job is bounded to %s, want about %s", merged, mergedJobTimeout)
+	}
+}
+
 func TestPanicInJobDoesNotStopTheService(t *testing.T) {
 	_, app := newFakeGitHub(t)
 	s := newTestService(t, app, nil, nil)
@@ -706,8 +830,8 @@ func TestUnboundInstallationStartsNothingAndIsNotRemembered(t *testing.T) {
 				t.Fatalf("status %d, want 403", code)
 			}
 			drain(s)
-			if len(fake.requests) != 0 || hooked || len(s.queue) != 0 {
-				t.Fatalf("an unbound installation started work: requests %v, hooked %v, queued %d", fake.requests, hooked, len(s.queue))
+			if len(fake.requests) != 0 || hooked || len(s.queue)+len(s.merged) != 0 {
+				t.Fatalf("an unbound installation started work: requests %v, hooked %v, queued %d", fake.requests, hooked, len(s.queue)+len(s.merged))
 			}
 
 			// The operator binds the installation and GitHub redelivers the same delivery.

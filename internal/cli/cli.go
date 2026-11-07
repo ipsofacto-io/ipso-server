@@ -23,8 +23,10 @@ import (
 
 	"github.com/ipsofacto-io/ipso-server/internal/controlplane"
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
+	"github.com/ipsofacto-io/ipso-server/internal/llmgw"
 	"github.com/ipsofacto-io/ipso-server/internal/login"
 	"github.com/ipsofacto-io/ipso-server/internal/migrate"
+	"github.com/ipsofacto-io/ipso-server/internal/proposals"
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
 	"github.com/ipsofacto-io/ipso-server/internal/worker"
@@ -36,7 +38,8 @@ const migrateDatabaseEnv = "IPSO_MIGRATE_DATABASE_URL"
 
 // webhookDBConns bounds the connections of the webhooks process. Each delivery that starts work holds one
 // for its tenant lookup, which is a short read, and a delivery that cannot get one within the lookup
-// timeout is answered 503 for GitHub to redeliver. The database is shared with the api and the worker, so
+// timeout is answered 503 for GitHub to redeliver. A merged pull request job holds one at a time for a short
+// read or write and none while it waits for a model. The database is shared with the api and the worker, so
 // a burst of deliveries must not take every connection.
 const webhookDBConns = 8
 
@@ -47,6 +50,10 @@ const (
 	webhookSecretEnv = "IPSO_GITHUB_WEBHOOK_SECRET"
 	listenAddrEnv    = "IPSO_LISTEN_ADDR"
 	defaultListen    = ":8080"
+	// gatewayConfigEnv names the file that holds the configuration of the LLM gateway (ADR-0103). Without it
+	// the webhooks service reads no discussion and calls no model. It holds route names and key variable
+	// names, never a key, and it is not an IPSO_LLM_ variable, so no route can name it as its key.
+	gatewayConfigEnv = "IPSO_GATEWAY_CONFIG"
 )
 
 // The run task service reads the same way. The bundle is verified at start and held in memory.
@@ -226,9 +233,13 @@ ipso-server tenant help for the commands, their flags and the credential each on
 
 webhooks serves the GitHub App webhook on ` + listenAddrEnv + ` (default ` + defaultListen + `). It reads
 ` + appIDEnv + `, ` + appPrivateKeyEnv + `, and ` + webhookSecretEnv + `, and opens ` + databaseEnv + `
-as the application role to ask which tenant owns the installation of a delivery. It holds no tenant data, and a
-delivery from an installation that no tenant owns starts nothing. Bind an installation first with
-ipso-server tenant bind-installation.
+as the application role to ask which tenant owns the installation of a delivery. A delivery from an
+installation that no tenant owns starts nothing. Bind an installation first with
+ipso-server tenant bind-installation. When ` + gatewayConfigEnv + ` names the configuration file of the LLM
+gateway, a merged pull request also has its discussion read and turned into pending decision proposals for the
+tenant of the installation, through the gateway: each route reads its key from the IPSO_LLM_ variable it
+names, and the service stops at start when the file or a key is wrong. Without it no discussion is read and
+no model is called.
 
 runtasks serves the HCP Terraform run task on ` + listenAddrEnv + ` (default ` + defaultListen + `). It reads
 ` + runTaskHMACEnv + `, ` + runTaskBundleEnv + `, ` + runTaskDigestEnv + `,
@@ -427,6 +438,23 @@ func webhooksCmd(ctx context.Context, stderr io.Writer, d deps) int {
 		fprintf(stderr, "webhooks: %v\n", err)
 		return 1
 	}
+	logger := slog.New(slog.NewJSONHandler(stderr, nil))
+	cfg := integrations.Config{
+		App:           app,
+		WebhookSecret: []byte(d.getenv(webhookSecretEnv)),
+		Logger:        logger,
+		Tenants: func(ctx context.Context, installation int64) (uuid.UUID, bool, error) {
+			return d.installationTenant(ctx, db, installation)
+		},
+	}
+	if path := d.getenv(gatewayConfigEnv); path != "" {
+		hook, err := mergedHook(db, path, logger)
+		if err != nil {
+			fprintf(stderr, "webhooks: %v\n", err)
+			return 1
+		}
+		cfg.OnMerged = hook
+	}
 	address := d.getenv(listenAddrEnv)
 	if address == "" {
 		address = defaultListen
@@ -436,19 +464,32 @@ func webhooksCmd(ctx context.Context, stderr io.Writer, d deps) int {
 		fprintf(stderr, "webhooks: %v\n", err)
 		return 1
 	}
-	err = d.serve(ctx, listener, integrations.Config{
-		App:           app,
-		WebhookSecret: []byte(d.getenv(webhookSecretEnv)),
-		Logger:        slog.New(slog.NewJSONHandler(stderr, nil)),
-		Tenants: func(ctx context.Context, installation int64) (uuid.UUID, bool, error) {
-			return d.installationTenant(ctx, db, installation)
-		},
-	})
+	err = d.serve(ctx, listener, cfg)
 	if err != nil {
 		fprintf(stderr, "webhooks: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// mergedHook builds the LLM gateway from the configuration file and returns the hook that turns the discussion of
+// a merged pull request into decision proposals (ADR-0103). A route key comes from the IPSO_LLM_ variable the
+// route names, and no error here carries one.
+func mergedHook(db *sql.DB, path string, log *slog.Logger) (func(context.Context, integrations.MergedPullRequest) error, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", gatewayConfigEnv, err)
+	}
+	defer func() { _ = file.Close() }()
+	cfg, err := llmgw.ParseConfig(file)
+	if err != nil {
+		return nil, err
+	}
+	gateway, err := llmgw.New(cfg, llmgw.PGLedger{DB: db}, nil, log)
+	if err != nil {
+		return nil, err
+	}
+	return proposals.OnMerged(db, gateway, log), nil
 }
 
 func runTasksCmd(ctx context.Context, stderr io.Writer, d deps) int {

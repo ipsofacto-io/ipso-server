@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
+	"github.com/ipsofacto-io/ipso-server/internal/llmgw"
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
 	"github.com/ipsofacto-io/ipso/pkg/rulecheck"
 )
@@ -48,6 +50,31 @@ func Process(ctx context.Context, db *sql.DB, complete CompleteFunc, tenant uuid
 	found, stats.Duplicates = Dedupe(found, decided)
 	created, err := insert(ctx, db, tenant, found)
 	return created, stats, err
+}
+
+// OnMerged returns the hook the webhooks service runs for a merged pull request (ADR-0103). It reads the
+// discussion with the client the service limited to that one pull request, then runs Process through the
+// gateway for the tenant the installation mapping gave. The tenant charged and written is that one and no
+// other, and a hook with no tenant reads nothing. The log holds counts, never a comment, an answer, or a person
+// (ADR-0012).
+func OnMerged(db *sql.DB, gateway *llmgw.Gateway, log *slog.Logger) func(context.Context, integrations.MergedPullRequest) error {
+	return func(ctx context.Context, pr integrations.MergedPullRequest) error {
+		if pr.Tenant == uuid.Nil {
+			return errors.New("no tenant")
+		}
+		comments, err := pr.Client.Discussion(ctx, pr.Number)
+		if err != nil {
+			return err
+		}
+		created, stats, err := Process(ctx, db, gateway.For(pr.Tenant), pr.Tenant, pr.Repo, pr.Number, comments)
+		if err != nil {
+			return err
+		}
+		log.Info("pull request discussion processed", "tenant", pr.Tenant.String(), "repo", pr.Repo, "pull_request", pr.Number,
+			"created", created, "comments", stats.Comments, "untrusted", stats.Untrusted, "flagged", stats.Flagged,
+			"sent", stats.Sent, "refused", stats.Refused, "duplicates", stats.Duplicates)
+		return nil
+	}
 }
 
 // knownDecisions returns the titles of the decisions in force for the repository, as the registry
@@ -173,8 +200,8 @@ type TenantFunc func(*http.Request) (uuid.UUID, bool)
 
 // Handler returns the review routes, GET /v1/proposals for decision proposals,
 // GET /v1/agent-proposals for what AI coding agents proposed over MCP (ADR-0077), and
-// GET /v1/check-proposals for drafted checks. The binary does not serve them. The control plane
-// mounts them with the tenant from the token. A missing tenant is 401 and runs no query. A query
+// GET /v1/check-proposals for drafted checks. The control plane API mounts them with the tenant from the
+// token. A missing tenant is 401 and runs no query. A query
 // key tenant or tenant_id is 400 and runs no query. Another tenant's rows are never read.
 func Handler(db *sql.DB, tenantFrom TenantFunc) http.Handler {
 	mux := http.NewServeMux()

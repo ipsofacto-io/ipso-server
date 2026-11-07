@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -130,6 +131,16 @@ func TestRedactionHappensBeforeEgress(t *testing.T) {
 		if strings.Contains(llm.user, secret) {
 			t.Errorf("%q reached the LLM", secret)
 		}
+	}
+}
+
+// The hook takes its tenant from the installation mapping and from nowhere else (ADR-0101, ADR-0103). A merged
+// pull request with none reads nothing: the client is nil on purpose, and the hook would panic if it used it.
+func TestOnMergedRefusesAMergedPullRequestWithNoTenant(t *testing.T) {
+	hook := OnMerged(nil, nil, slog.New(slog.DiscardHandler))
+	err := hook(t.Context(), integrations.MergedPullRequest{InstallationID: 42, Repo: testRepo, Number: testNumber})
+	if err == nil || err.Error() != "no tenant" {
+		t.Fatalf("err = %v, want no tenant", err)
 	}
 }
 
