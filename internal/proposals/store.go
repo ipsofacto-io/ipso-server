@@ -29,7 +29,7 @@ const (
 // Process runs one merged pull request end to end for one tenant. The tenant must be the one that
 // installed the App, because Process trusts it. A comment already turned into a proposal at the
 // same bytes is not sent again, so a redelivered webhook spends nothing.
-func Process(ctx context.Context, db *sql.DB, complete CompleteFunc, tenant uuid.UUID, repo string, number int, comments []integrations.Comment) (int, Stats, error) {
+func Process(ctx context.Context, db *sql.DB, complete CompleteFunc, canWrite WriteAccess, tenant uuid.UUID, repo string, number int, comments []integrations.Comment) (int, Stats, error) {
 	if tenant == uuid.Nil {
 		return 0, Stats{}, errors.New("no tenant")
 	}
@@ -37,7 +37,7 @@ func Process(ctx context.Context, db *sql.DB, complete CompleteFunc, tenant uuid
 	if err != nil {
 		return 0, Stats{}, err
 	}
-	found, stats, err := Extract(ctx, complete, repo, number, comments, func(externalID string, digest [32]byte) bool {
+	found, stats, err := Extract(ctx, complete, canWrite, repo, number, comments, func(externalID string, digest [32]byte) bool {
 		return known[sourceKey(externalID, digest[:])]
 	})
 	if err != nil || len(found) == 0 {
@@ -54,9 +54,9 @@ func Process(ctx context.Context, db *sql.DB, complete CompleteFunc, tenant uuid
 
 // OnMerged returns the hook the webhooks service runs for a merged pull request (ADR-0103). It reads the
 // discussion with the client the service limited to that one pull request, then runs Process through the
-// gateway for the tenant the installation mapping gave. The tenant charged and written is that one and no
-// other, and a hook with no tenant reads nothing. The log holds counts, never a comment, an answer, or a person
-// (ADR-0012).
+// gateway for the tenant the installation mapping gave. The same client asks GitHub who can write to the
+// repository (ADR-0104). The tenant charged and written is that one and no other, and a hook with no tenant
+// reads nothing. The log holds counts, never a comment, an answer, or a person (ADR-0012).
 func OnMerged(db *sql.DB, gateway *llmgw.Gateway, log *slog.Logger) func(context.Context, integrations.MergedPullRequest) error {
 	return func(ctx context.Context, pr integrations.MergedPullRequest) error {
 		if pr.Tenant == uuid.Nil {
@@ -66,7 +66,7 @@ func OnMerged(db *sql.DB, gateway *llmgw.Gateway, log *slog.Logger) func(context
 		if err != nil {
 			return err
 		}
-		created, stats, err := Process(ctx, db, gateway.For(pr.Tenant), pr.Tenant, pr.Repo, pr.Number, comments)
+		created, stats, err := Process(ctx, db, gateway.For(pr.Tenant), pr.Client.CanWrite, pr.Tenant, pr.Repo, pr.Number, comments)
 		if err != nil {
 			return err
 		}

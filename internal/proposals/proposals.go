@@ -1,6 +1,7 @@
 // Package proposals turns merged pull request discussion into decision proposals, and decisions
-// in force into drafted checks, for a person to review (ADR-0062, ADR-0086). LLM output is
-// advisory, so nothing here can approve a proposal (ADR-0005),
+// in force into drafted checks, for a person to review (ADR-0062, ADR-0086). Only an author who can
+// write to the repository is read (ADR-0104). LLM output is advisory, so nothing here can approve a
+// proposal (ADR-0005),
 // and the database refuses any status but pending. ipso-server webhooks calls OnMerged when an LLM
 // gateway is configured (ADR-0103), and the control plane API serves the inbox.
 package proposals
@@ -70,6 +71,9 @@ type Proposal struct {
 }
 
 // Stats counts what happened to the discussion. It holds no text and names no person (ADR-0012).
+// Untrusted counts the comments that read like a decision, passed the injection screen, and were
+// not stored yet, but whose author cannot write to the repository. Flagged counts a flagged comment
+// whoever wrote it, because the author is asked about last.
 type Stats struct {
 	Comments  int
 	Untrusted int
@@ -87,10 +91,15 @@ type selected struct {
 }
 
 // Extract screens the discussion, asks the LLM, and checks its answer. A comment passes four
-// gates before any egress: a trusted author, a provenance link for this pull request, no
-// injection marker, and decision-like text. Redacted text is sent, and only for those comments.
-func Extract(ctx context.Context, complete CompleteFunc, repo string, number int, comments []integrations.Comment, seen func(externalID string, digest [32]byte) bool) ([]Proposal, Stats, error) {
-	picks, stats := screen(repo, number, comments, seen)
+// gates before any egress: a provenance link for this pull request, decision-like text, no
+// injection marker, and an author who can write to the repository. The author is the last gate, so
+// only a comment that would otherwise be sent costs a request to GitHub (ADR-0104). Redacted text is
+// sent, and only for those comments. When GitHub cannot say who can write, nothing is sent.
+func Extract(ctx context.Context, complete CompleteFunc, canWrite WriteAccess, repo string, number int, comments []integrations.Comment, seen func(externalID string, digest [32]byte) bool) ([]Proposal, Stats, error) {
+	picks, stats, err := screen(ctx, canWrite, repo, number, comments, seen)
+	if err != nil {
+		return nil, stats, fmt.Errorf("screen the discussion: %w", err)
+	}
 	if len(picks) == 0 {
 		return nil, stats, nil
 	}
@@ -145,24 +154,28 @@ func Extract(ctx context.Context, complete CompleteFunc, repo string, number int
 
 // Screen returns the external ids of the comments the four gates would send to the LLM, in order.
 // The eval harness measures the gates with it (IPSO-59).
-func Screen(repo string, number int, comments []integrations.Comment) []string {
-	picks, _ := screen(repo, number, comments, nil)
+func Screen(ctx context.Context, canWrite WriteAccess, repo string, number int, comments []integrations.Comment) ([]string, error) {
+	picks, _, err := screen(ctx, canWrite, repo, number, comments, nil)
+	if err != nil {
+		return nil, err
+	}
 	ids := make([]string, 0, len(picks))
 	for _, pick := range picks {
 		ids = append(ids, pick.comment.ExternalID)
 	}
-	return ids
+	return ids, nil
 }
 
-func screen(repo string, number int, comments []integrations.Comment, seen func(externalID string, digest [32]byte) bool) ([]selected, Stats) {
+func screen(ctx context.Context, canWrite WriteAccess, repo string, number int, comments []integrations.Comment, seen func(externalID string, digest [32]byte) bool) ([]selected, Stats, error) {
 	stats := Stats{Comments: len(comments)}
+	if canWrite == nil {
+		// A wiring mistake must fail every job in the log, not silently read nobody.
+		return nil, stats, errors.New("no way to tell who can write")
+	}
+	writers := newAuthors(ctx, canWrite)
 	var picks []selected
 	for _, comment := range comments {
 		if strings.TrimSpace(comment.Body) == "" {
-			continue
-		}
-		if !trusted(comment) {
-			stats.Untrusted++
 			continue
 		}
 		if !provenance(repo, number, comment.URL) || !decisionLike.MatchString(comment.Body) {
@@ -179,9 +192,17 @@ func screen(repo string, number int, comments []integrations.Comment, seen func(
 		if len(picks) == maxSent {
 			break
 		}
+		trusted, err := writers.trusted(comment)
+		if err != nil {
+			return nil, stats, err
+		}
+		if !trusted {
+			stats.Untrusted++
+			continue
+		}
 		picks = append(picks, selected{comment: comment, text: truncate(Redact(comment.Body), maxBodyRunes), digest: digest})
 	}
-	return picks, stats
+	return picks, stats, nil
 }
 
 // provenance reports whether the link is a github.com link to this pull request. The link comes

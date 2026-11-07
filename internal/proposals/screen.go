@@ -1,6 +1,7 @@
 package proposals
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"unicode"
@@ -43,19 +44,51 @@ func Redact(text string) string {
 	return mentionPattern.ReplaceAllString(redact.Text(text), "${1}[user]")
 }
 
-// trusted reports whether the author can already write to the repository. Anyone can comment on a
-// public repository, so text from anyone else never reaches the LLM. A bot is not a person
-// deciding anything. The association comes from the API, not from the comment text.
-func trusted(comment integrations.Comment) bool {
-	if comment.AuthorType != "User" {
-		return false
+// WriteAccess reports whether a login can write to the repository now. integrations.RepoClient.CanWrite
+// asks GitHub, which calculates it from every grant, so it holds for an organization member whose
+// membership is private. It is an error only when GitHub cannot answer (ADR-0104).
+type WriteAccess func(ctx context.Context, login string) (bool, error)
+
+// maxAuthorLookups bounds the requests one run makes to learn who can write. An author past it is not
+// trusted, so a thread cannot spend more of the App's rate limit than this.
+const maxAuthorLookups = 50
+
+// authors decides which authors are trusted for one run. Anyone can comment on a public repository,
+// so text from anyone who cannot already write to it never reaches the LLM. A bot is not a person
+// deciding anything, whatever it can write. The author type comes from the API, not from the comment
+// text, and write access comes from GitHub at the time of the merge. An answer is kept for the run,
+// so each login costs one request, and nothing outlives the run.
+type authors struct {
+	ctx   context.Context
+	ask   WriteAccess
+	known map[string]bool
+	asked int
+}
+
+func newAuthors(ctx context.Context, ask WriteAccess) *authors {
+	return &authors{ctx: ctx, ask: ask, known: map[string]bool{}}
+}
+
+// trusted reports whether the comment's author can write to the repository. A bot and a comment with no
+// account are not trusted, and are not asked about.
+func (a *authors) trusted(comment integrations.Comment) (bool, error) {
+	if comment.AuthorType != "User" || comment.Author == "" {
+		return false, nil
 	}
-	switch comment.Association {
-	case "OWNER", "MEMBER", "COLLABORATOR":
-		return true
-	default:
-		return false
+	key := strings.ToLower(comment.Author)
+	if allowed, found := a.known[key]; found {
+		return allowed, nil
 	}
+	if a.asked == maxAuthorLookups {
+		return false, nil
+	}
+	a.asked++
+	allowed, err := a.ask(a.ctx, comment.Author)
+	if err != nil {
+		return false, err
+	}
+	a.known[key] = allowed
+	return allowed, nil
 }
 
 // suspicious reports text that addresses a model, or that hides characters from a reader.

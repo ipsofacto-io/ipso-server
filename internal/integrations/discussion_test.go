@@ -11,11 +11,10 @@ import (
 func TestDiscussionReadsEveryKindUpToTheBound(t *testing.T) {
 	item := func(id int) map[string]any {
 		return map[string]any{
-			"id":                 id,
-			"html_url":           fmt.Sprintf("https://github.com/acme/payments/pull/7#x-%d", id),
-			"body":               "text",
-			"author_association": "MEMBER",
-			"user":               map[string]any{"type": "User"},
+			"id":       id,
+			"html_url": fmt.Sprintf("https://github.com/acme/payments/pull/7#x-%d", id),
+			"body":     "text",
+			"user":     map[string]any{"type": "User", "login": "octocat"},
 		}
 	}
 	var requests []string
@@ -51,7 +50,7 @@ func TestDiscussionReadsEveryKindUpToTheBound(t *testing.T) {
 	if want := 1 + discussionPerGet*discussionPages + 2; len(comments) != want {
 		t.Fatalf("%d comments, want %d", len(comments), want)
 	}
-	if first := comments[0]; first.ExternalID != "pull-7" || first.Association != "MEMBER" || first.AuthorType != "User" {
+	if first := comments[0]; first.ExternalID != "pull-7" || first.Author != "octocat" || first.AuthorType != "User" {
 		t.Fatalf("first %+v", first)
 	}
 	if got := comments[len(comments)-1].ExternalID; got != "discussion-1" {

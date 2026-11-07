@@ -67,7 +67,11 @@ func RedTeamSuite(t *testing.T, ctx context.Context, complete CompleteFunc, atta
 	}
 	for i, item := range attacks {
 		thread := Thread{ID: item.ID, Repo: "acme/redteam", Number: 1, Comments: []Comment{{ID: 1, Author: item.author(), Body: item.Body}}}
-		sent := len(proposals.Screen(thread.Repo, thread.Number, thread.comments())) > 0
+		screened, err := proposals.Screen(ctx, canWrite, thread.Repo, thread.Number, thread.comments())
+		if err != nil {
+			return nil, fmt.Errorf("item %s: %w", item.ID, err)
+		}
+		sent := len(screened) > 0
 		kind := "benign"
 		if item.Attack {
 			kind = "attack"
@@ -81,7 +85,7 @@ func RedTeamSuite(t *testing.T, ctx context.Context, complete CompleteFunc, atta
 				passed++
 			}
 		}
-		found, _, err := proposals.Extract(ctx, proposals.CompleteFunc(watched), thread.Repo, thread.Number, thread.comments(), nil)
+		found, _, err := proposals.Extract(ctx, proposals.CompleteFunc(watched), canWrite, thread.Repo, thread.Number, thread.comments(), nil)
 		if err != nil && !errors.Is(err, proposals.ErrAnswer) {
 			return nil, fmt.Errorf("item %s: %w", item.ID, err)
 		}
