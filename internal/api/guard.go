@@ -17,6 +17,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
+	"github.com/ipsofacto-io/ipso-server/internal/verification"
 )
 
 // maxLoggedSubject bounds the request a log entry records.
@@ -30,6 +31,7 @@ type guard struct {
 	verifier authn.Verifier
 	callers  CallerFunc
 	sessions *Sessions
+	uploads  *Uploads
 	origin   *http.CrossOriginProtection
 	limiter  *ratelimit.Limiter
 	maxBody  int64
@@ -72,6 +74,70 @@ func (g *guard) wrap(op string, keys []string, next http.Handler) http.Handler {
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, g.maxBody)
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, caller)))
+	})
+}
+
+// wrapUpload guards the route a CI job calls. It runs in the order that reveals least and spends least
+// before it knows the tenant: the bearer token, its signature, issuer and audience, then the mapping of its
+// repository to a tenant, then that tenant's request budget, then the query, and only then the body. It reads
+// no cookie, and there is no principal: the caller is the run, and the run is the one the signed token
+// names (ADR-0102).
+func (g *guard) wrapUpload(keys []string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, ok := authn.Bearer(r.Header.Get("Authorization"))
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="ipso"`)
+			writeError(w, http.StatusUnauthorized, errUnauthorized)
+			return
+		}
+		claims, err := g.uploads.Verifier.VerifyRun(r.Context(), token)
+		if err != nil {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="ipso", error="invalid_token"`)
+			writeError(w, http.StatusUnauthorized, errUnauthorized)
+			return
+		}
+		mapping, status := g.uploads.Lookup(r.Context(), claims)
+		switch status {
+		case MappingFound:
+		case MappingBusy:
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusTooManyRequests, errRateLimited)
+			return
+		case MappingFailed:
+			g.log.Warn("an upload could not be mapped to a tenant, so it was refused", "repository_id", claims.RepositoryID, "run_id", claims.RunID)
+			writeError(w, http.StatusServiceUnavailable, errUnavailable)
+			return
+		default:
+			writeError(w, http.StatusForbidden, errForbidden)
+			return
+		}
+		if mapping.Tenant == uuid.Nil || mapping.Installation <= 0 {
+			writeError(w, http.StatusForbidden, errForbidden)
+			return
+		}
+		if wait, ok := g.limiter.Allow(mapping.Tenant, g.now()); !ok {
+			w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
+			writeError(w, http.StatusTooManyRequests, errRateLimited)
+			return
+		}
+		if !plainQuery(r.URL.RawQuery, keys) {
+			writeError(w, http.StatusBadRequest, errInvalidQuery)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, g.maxBody)
+		ctx := context.WithValue(r.Context(), callerKey{}, Caller{Tenant: mapping.Tenant})
+		ctx = context.WithValue(ctx, runKey{}, verification.Run{
+			Installation: mapping.Installation,
+			RepositoryID: claims.RepositoryID,
+			Repo:         strings.ToLower(claims.Owner + "/" + claims.Name),
+			RunID:        claims.RunID,
+			RunAttempt:   claims.RunAttempt,
+			SHA:          claims.SHA,
+			Ref:          claims.Ref,
+			Event:        claims.Event,
+			WorkflowRef:  claims.WorkflowRef,
+		})
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

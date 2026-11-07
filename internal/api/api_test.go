@@ -76,12 +76,17 @@ func TestDocumentIsValidOpenAPI31(t *testing.T) {
 	}
 }
 
+// allRoutes is every route the API can mount: the ones behind a person's token and the one behind a CI job's.
+func allRoutes() []route {
+	return slices.Concat(routes(nil, time.Now), ciRoutes(nil, nil))
+}
+
 // The document describes exactly the routes the API mounts, under the same operationIds, so a route
 // cannot be added, dropped, or renamed without the contract.
 func TestRoutesAreTheDocumentsOperations(t *testing.T) {
 	want := operations(t, loadDocument(t))
 	got := map[string]string{}
-	for _, rt := range routes(nil, time.Now) {
+	for _, rt := range allRoutes() {
 		if _, seen := got[rt.pattern]; seen {
 			t.Errorf("%s is mounted twice", rt.pattern)
 		}
@@ -126,7 +131,7 @@ func queryKeys(t *testing.T, document libopenapi.Document) map[string][]string {
 // other, so a misspelt key is 400 and never a default. No route reads a tenant key.
 func TestRoutesReadTheDocumentsQueryKeys(t *testing.T) {
 	want := queryKeys(t, loadDocument(t))
-	for _, rt := range routes(nil, time.Now) {
+	for _, rt := range allRoutes() {
 		got := slices.Sorted(slices.Values(rt.keys))
 		if !slices.Equal(got, want[rt.pattern]) {
 			t.Errorf("%s reads %v, the document lists %v", rt.pattern, got, want[rt.pattern])
@@ -139,12 +144,49 @@ func TestRoutesReadTheDocumentsQueryKeys(t *testing.T) {
 	}
 }
 
-// Every operation reads. POST /v1/resolve is the one exception, and it reads too: a list of paths
-// does not fit a URL. No endpoint writes before authorization (IPSO-66).
-func TestEveryOperationIsAGetButResolve(t *testing.T) {
+// Every operation reads but two. POST /v1/resolve reads too: a list of paths does not fit a URL. POST
+// /v1/verdicts is the one that writes, and a CI job calls it with its own token (ADR-0102). No other
+// endpoint writes before authorization (IPSO-66).
+func TestEveryOperationIsAGetButTheTwoPosts(t *testing.T) {
 	for pattern := range operations(t, loadDocument(t)) {
-		if !strings.HasPrefix(pattern, "GET ") && pattern != "POST /v1/resolve" {
+		if !strings.HasPrefix(pattern, "GET ") && pattern != "POST /v1/resolve" && pattern != "POST /v1/verdicts" {
 			t.Errorf("%s is not a read", pattern)
+		}
+	}
+}
+
+// The upload is the only operation that takes a CI token, and nothing else takes it. Every other operation
+// takes a person's bearer token or session cookie, which the upload does not.
+func TestOnlyTheUploadTakesACIToken(t *testing.T) {
+	model, err := loadDocument(t).BuildV3Model()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, item := range model.Model.Paths.PathItems.FromOldest() {
+		for method, operation := range item.GetOperations().FromOldest() {
+			pattern := strings.ToUpper(method) + " " + path
+			var schemes []string
+			for _, requirement := range operation.Security {
+				for name := range requirement.Requirements.FromOldest() {
+					schemes = append(schemes, name)
+				}
+			}
+			if pattern == "POST /v1/verdicts" {
+				if !slices.Equal(schemes, []string{"ciToken"}) {
+					t.Errorf("%s takes %v, want only ciToken", pattern, schemes)
+				}
+				continue
+			}
+			if len(operation.Security) != 0 {
+				t.Errorf("%s sets its own security %v, and a person's credentials are the default", pattern, schemes)
+			}
+		}
+	}
+	for _, requirement := range model.Model.Security {
+		for name := range requirement.Requirements.FromOldest() {
+			if name == "ciToken" {
+				t.Error("ciToken is a default security scheme")
+			}
 		}
 	}
 }

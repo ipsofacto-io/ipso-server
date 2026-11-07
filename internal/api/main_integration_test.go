@@ -59,6 +59,8 @@ type fixture struct {
 	org, repo, docs, prod uuid.UUID
 	tls, api, old, other  uuid.UUID
 	waiver                uuid.UUID
+	// uploads is the one verdict upload seeded for each tenant.
+	uploads map[uuid.UUID]uuid.UUID
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -81,6 +83,8 @@ func newFixture(t *testing.T) *fixture {
 
 	people := map[uuid.UUID]uuid.UUID{}
 	for _, tenant := range []uuid.UUID{tenantA, tenantB} {
+		// A verdict upload names its tenant by a foreign key.
+		f.exec(t, `INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1, 'synthetic tenant')`, tenant)
 		people[tenant] = f.insert(t, `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'Ada') RETURNING id`, tenant)
 	}
 	agent := f.insert(t, `INSERT INTO identity.principal (tenant_id, kind, name, sponsor_id) VALUES ($1, 'agent', 'claude-code', $2) RETURNING id`, tenantA, people[tenantA])
@@ -133,6 +137,21 @@ func newFixture(t *testing.T) *fixture {
 			tenant, f.tls)
 	}
 	f.exec(t, `INSERT INTO proposals.agent_proposal (tenant_id, principal_id, payload) VALUES ($1, $2, '{"title":"Pin API versions"}')`, tenantA, agent)
+	f.uploads = map[uuid.UUID]uuid.UUID{}
+	for tenant, repo := range map[uuid.UUID]string{tenantA: "acme/api", tenantB: "globex/web"} {
+		upload := f.insert(t, `
+			INSERT INTO verification.upload
+				(tenant_id, installation_id, repository_id, repo, run_id, run_attempt, sha, ref, event_name, workflow_ref,
+				 check_name, env, ipso_version, evaluated_at, build_sha256, sarif_sha256, evidence, content_sha256)
+			VALUES ($1, 42, 7, $2::text, 1001, 1, repeat('ab', 20), 'refs/heads/main', 'push', $2::text || '/.github/workflows/ci.yml@refs/heads/main',
+			        'plan', 'prod', '0.5.0', '2026-06-01T00:00:00Z', sha256('build'), sha256('sarif'),
+			        jsonb_build_object('plan_sha256', encode(sha256('plan'), 'hex')), sha256('seeded'))
+			RETURNING id`, tenant, repo)
+		f.exec(t, `
+			INSERT INTO verification.verdict (tenant_id, upload_id, decision_id, slug, check_index, mode, result, violations)
+			VALUES ($1, $2, '01M5QJ0V9EVXKR4C89XNBNT5GG', 'use-tls', 0, 'block', 'fail', 2)`, tenant, upload)
+		f.uploads[tenant] = upload
+	}
 	f.known = clock(t, admin)
 	return f
 }

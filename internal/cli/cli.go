@@ -70,6 +70,8 @@ const (
 	apiAudienceEnv = "IPSO_API_AUDIENCE"
 	mcpIssuerEnv   = "IPSO_MCP_ISSUER"
 	mcpResourceEnv = "IPSO_MCP_RESOURCE_URL"
+	// ciAudienceEnv turns on verdict uploads (ADR-0102) together with the GitHub App settings.
+	ciAudienceEnv = "IPSO_CI_AUDIENCE"
 )
 
 // Version, Commit, and Date are set with -X at release time.
@@ -204,9 +206,10 @@ usage:
 
 --role=api serves the control plane API on ` + listenAddrEnv + ` (default ` + defaultListen + `) as the application role. It
 reads ` + databaseEnv + `, ` + tenantEnv + `, ` + oidcIssuerEnv + `, and ` + apiAudienceEnv + `, and optionally
-the pair ` + mcpIssuerEnv + ` and ` + mcpResourceEnv + ` for the remote MCP handler, and the pair
+the pair ` + mcpIssuerEnv + ` and ` + mcpResourceEnv + ` for the remote MCP handler, the pair
 ` + login.PublicURLEnv + ` and ` + login.ProvidersEnv + ` for browser sign-in, whose client secrets are the
-variables the providers name. It refuses to start as a role that can bypass row-level security, for a
+variables the providers name, and ` + ciAudienceEnv + ` with ` + appIDEnv + ` and ` + appPrivateKeyEnv + ` for the
+upload of verdicts by CI jobs, which it accepts with a GitHub Actions token only. It refuses to start as a role that can bypass row-level security, for a
 tenant with no row, or when it holds the migration credential.
 
 --role=worker works the jobs of the control plane on River, in the registry's PostgreSQL, as the
@@ -321,6 +324,20 @@ func apiConfig(getenv func(string) string) (controlplane.Config, error) {
 		Audience:       getenv(apiAudienceEnv),
 		MCPIssuer:      getenv(mcpIssuerEnv),
 		MCPResourceURL: getenv(mcpResourceEnv),
+	}
+	// Verdict uploads (ADR-0102): the audience of CI tokens turns them on, and then the GitHub App that maps a
+	// repository to its installation is required. The App settings alone change nothing, because a deployment
+	// may share them with the webhooks service.
+	if ciAudience := getenv(ciAudienceEnv); ciAudience != "" {
+		appID, appKey := getenv(appIDEnv), getenv(appPrivateKeyEnv)
+		if appID == "" || appKey == "" {
+			return controlplane.Config{}, errors.New(appIDEnv + " and " + appPrivateKeyEnv + " are required when " + ciAudienceEnv + " is set")
+		}
+		app, err := integrations.NewApp(appID, []byte(appKey))
+		if err != nil {
+			return controlplane.Config{}, err
+		}
+		cfg.CIAudience, cfg.Repositories = ciAudience, app
 	}
 	// Browser sign-in (ADR-0099): the public origin and the providers, together or not at all. A provider
 	// names the variable that holds its client secret, so the JSON can be logged and committed.

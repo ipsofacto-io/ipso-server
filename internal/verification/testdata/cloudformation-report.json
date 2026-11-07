@@ -1,0 +1,10 @@
+{
+  "report_version": 1,
+  "ipso_version": "0.4.0",
+  "evaluated_at": "2026-11-07T10:15:11Z",
+  "env": "prod",
+  "adapter": "cloudformation",
+  "input_sha256": "38f4f55f4c97a09881d32375b60716494022a2b055df6f4d12e06cf7b4573bfa",
+  "build_sha256": "6410290e46b5ff16b410b98039e4523794480510cd3829e8986ad2fca01876d1",
+  "verdicts": []
+}

@@ -123,6 +123,8 @@ type fakeGitHub struct {
 	// installation is what GET /app/installations/{id} answers.
 	installationApp   int64
 	installationLogin string
+	// repoInstallation is what GET /repos/{owner}/{repo}/installation answers.
+	repoInstallation map[string]any
 }
 
 func newFakeGitHub(t *testing.T) (*fakeGitHub, *App) {
@@ -136,6 +138,7 @@ func newFakeGitHub(t *testing.T) (*fakeGitHub, *App) {
 
 		installationApp:   12345,
 		installationLogin: "Acme-Corp",
+		repoInstallation:  map[string]any{"id": 42, "app_id": 12345, "account": map[string]any{"id": 9919, "login": "Acme-Corp"}},
 	}
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
@@ -165,6 +168,9 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/app":
 		f.requireAppToken(r)
 		_ = json.NewEncoder(w).Encode(map[string]any{"permissions": f.permissions, "events": f.events})
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/installation"):
+		f.requireAppToken(r)
+		_ = json.NewEncoder(w).Encode(f.repoInstallation)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/app/installations/"):
 		f.requireAppToken(r)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -981,6 +987,54 @@ func TestInstallationAccountRefusesWhatIsNotOurs(t *testing.T) {
 			}
 			if tc.id <= 0 && len(fake.requests) != 0 {
 				t.Fatalf("a bad id reached GitHub: %v", fake.requests)
+			}
+		})
+	}
+}
+
+func TestRepositoryInstallationReadsTheInstallationThatCoversARepository(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	got, err := app.RepositoryInstallation(context.Background(), "Acme", "payments")
+	if err != nil || got != (Installation{ID: 42, AccountID: 9919}) {
+		t.Fatalf("RepositoryInstallation = %+v, %v", got, err)
+	}
+	if len(fake.requests) != 1 || fake.requests[0] != "GET /repos/Acme/payments/installation" {
+		t.Fatalf("requests %v", fake.requests)
+	}
+}
+
+func TestRepositoryInstallationRefusesWhatIsNotOursOrNotUsable(t *testing.T) {
+	for name, tc := range map[string]struct {
+		owner, name string
+		change      func(*fakeGitHub)
+		want        string
+	}{
+		"not installed":   {"acme", "payments", func(f *fakeGitHub) { f.statusFor["/repos/acme/payments/installation"] = http.StatusNotFound }, "not found"},
+		"server error":    {"acme", "payments", func(f *fakeGitHub) { f.statusFor["/repos/acme/payments/installation"] = http.StatusBadGateway }, "502"},
+		"another app":     {"acme", "payments", func(f *fakeGitHub) { f.repoInstallation["app_id"] = 999 }, "another app"},
+		"suspended":       {"acme", "payments", func(f *fakeGitHub) { f.repoInstallation["suspended_at"] = "2026-11-01T00:00:00Z" }, "suspended"},
+		"no account":      {"acme", "payments", func(f *fakeGitHub) { f.repoInstallation["account"] = map[string]any{} }, "no id"},
+		"no id":           {"acme", "payments", func(f *fakeGitHub) { f.repoInstallation["id"] = 0 }, "no id"},
+		"a slash in name": {"acme", "pay/ments", func(*fakeGitHub) {}, "owner/name"},
+		"a dot dot":       {"acme", "..%2f", func(*fakeGitHub) {}, "owner/name"},
+		"an empty owner":  {"", "payments", func(*fakeGitHub) {}, "owner/name"},
+		"a long owner":    {strings.Repeat("a", 40), "payments", func(*fakeGitHub) {}, "owner/name"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake, app := newFakeGitHub(t)
+			tc.change(fake)
+			got, err := app.RepositoryInstallation(context.Background(), tc.owner, tc.name)
+			if err == nil || got != (Installation{}) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("RepositoryInstallation = %+v, %v; want an error with %q", got, err, tc.want)
+			}
+			if strings.Contains(err.Error(), "marker-api-error") {
+				t.Fatalf("the error quotes the API body: %v", err)
+			}
+			if wantMissing := name == "not installed" || name == "suspended"; errors.Is(err, ErrNotFound) != wantMissing {
+				t.Fatalf("errors.Is(err, ErrNotFound) = %v for %v", !wantMissing, err)
+			}
+			if tc.want == "owner/name" && len(fake.requests) != 0 {
+				t.Fatalf("a bad name reached GitHub: %v", fake.requests)
 			}
 		})
 	}

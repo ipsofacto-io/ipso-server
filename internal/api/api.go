@@ -4,7 +4,9 @@
 //
 // ipso-server --role=api serves this handler after internal/rls.Check and the tenant check
 // (ADR-0094). A token maps to a tenant and a principal only through a stored login for its issuer
-// and subject (ADR-0093). Every route reads. No endpoint writes before authorization (IPSO-66).
+// and subject (ADR-0093). Every route reads but one: POST /v1/verdicts stores the verdicts of a CI job,
+// behind its own guard, and takes its tenant from the installation of the job's repository (ADR-0102).
+// No other endpoint writes before authorization (IPSO-66).
 package api
 
 import (
@@ -23,6 +25,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/proposals"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
+	"github.com/ipsofacto-io/ipso-server/internal/verification"
 )
 
 // Caller is who a verified token speaks for. A nil tenant or principal is refused.
@@ -59,6 +62,37 @@ type Sessions struct {
 	// Lookup returns the caller of a session token the guard has checked is well formed. The tenant is
 	// the process's, never the request's.
 	Lookup func(ctx context.Context, token []byte) (Caller, SessionStatus)
+}
+
+// MappingStatus is what the mapping of a CI run to its tenant found.
+type MappingStatus int
+
+const (
+	// MappingFound means the repository of the run belongs to an installation of this process's tenant.
+	MappingFound MappingStatus = iota
+	// MappingUnknown means no installation of this tenant covers the repository. The guard answers 403.
+	MappingUnknown
+	// MappingBusy means the process refused the mapping without asking GitHub, because it makes too many
+	// calls for repositories it has not kept. The guard answers 429.
+	MappingBusy
+	// MappingFailed means GitHub or the store could not answer. The guard answers 503.
+	MappingFailed
+)
+
+// Mapping is the installation of the repository a CI run belongs to and the tenant that owns it.
+type Mapping struct {
+	Tenant       uuid.UUID
+	Installation int64
+}
+
+// Uploads turns on POST /v1/verdicts (ADR-0102). Nil leaves the route unmounted, so it is an unknown route.
+type Uploads struct {
+	// Verifier checks the OIDC token of a CI job. A token from any other issuer fails it.
+	Verifier authn.RunVerifier
+	// Lookup maps a verified run to its tenant through the installation of its repository (ADR-0101). It
+	// must answer MappingUnknown for a tenant other than the one this process serves. The tenant comes from
+	// here and never from the request.
+	Lookup func(ctx context.Context, run authn.RunClaims) (Mapping, MappingStatus)
 }
 
 // Limits bound every request. A zero field takes its default.
@@ -103,7 +137,9 @@ type Config struct {
 	// Sessions turns on the session cookie as a second way to authenticate. Nil leaves the cookie unread,
 	// so a session outlives the removal of sign-in by no time at all.
 	Sessions *Sessions
-	Limits   Limits
+	// Uploads turns on the CI upload route. The session cookie is never read on it.
+	Uploads *Uploads
+	Limits  Limits
 	// Now is the clock that a read without valid or known defaults to. Default time.Now.
 	Now func() time.Time
 	// Log receives what an operator needs: refused answers and calls that could not be logged. It
@@ -154,8 +190,19 @@ func New(cfg Config) (http.Handler, error) {
 		g.origin = origin
 	}
 	mux := http.NewServeMux()
+	if cfg.Uploads != nil {
+		if cfg.Uploads.Verifier == nil || cfg.Uploads.Lookup == nil {
+			return nil, errors.New("uploads need a verifier and a lookup")
+		}
+		g.uploads = cfg.Uploads
+	}
 	for _, rt := range routes(cfg.DB, cfg.Now) {
 		mux.Handle(rt.pattern, g.wrap(rt.op, rt.keys, rt.handler))
+	}
+	if g.uploads != nil {
+		for _, rt := range ciRoutes(cfg.DB, cfg.Log) {
+			mux.Handle(rt.pattern, g.wrapUpload(rt.keys, rt.handler))
+		}
 	}
 	// Anything else is 404, and only to a caller with a token, so the routes cannot be listed without one.
 	mux.Handle("/", g.wrap("", nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -170,6 +217,7 @@ func routes(db *sql.DB, now func() time.Time) []route {
 	reg := &registryRoutes{db: db, now: now}
 	audits := audit.Handler(db, tenantOf)
 	reviews := proposals.Handler(db, tenantOf)
+	verdicts := &verdictRoutes{db: db}
 	return []route{
 		{"POST /v1/resolve", "resolve", nil, http.HandlerFunc(reg.resolve)},
 		{"GET /v1/decisions", "list_decisions", []string{"valid", "known", "limit", "before"}, http.HandlerFunc(reg.decisions)},
@@ -184,10 +232,29 @@ func routes(db *sql.DB, now func() time.Time) []route {
 		{"GET /v1/audit/merges", "audit_merges", []string{"repo", "path", "env", "at", "known"}, audits},
 		{"GET /v1/audit/supersessions/{decisionID}", "audit_supersessions", []string{"known"}, audits},
 		{"GET /v1/audit/waivers", "audit_waivers", []string{"known", "now"}, audits},
+		{"GET /v1/verdicts", "list_verdicts", []string{"repo", "decision", "limit", "before"}, http.HandlerFunc(verdicts.list)},
+	}
+}
+
+// ciRoutes are the operations a CI job calls with its own OIDC token instead of a person's. They are
+// mounted only when uploads are on (ADR-0102).
+func ciRoutes(db *sql.DB, log *slog.Logger) []route {
+	verdicts := &verdictRoutes{db: db, log: log}
+	return []route{
+		{"POST /v1/verdicts", "upload_verdicts", nil, http.HandlerFunc(verdicts.upload)},
 	}
 }
 
 type callerKey struct{}
+
+// runKey carries the CI run that wrapUpload verified and mapped. Only the upload route reads it.
+type runKey struct{}
+
+// runOf is the run of an upload, as the token and the installation mapping describe it.
+func runOf(r *http.Request) (verification.Run, bool) {
+	run, ok := r.Context().Value(runKey{}).(verification.Run)
+	return run, ok
+}
 
 // tenantOf is the TenantFunc of every route: the tenant of the authenticated caller, never one the
 // request names.

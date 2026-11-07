@@ -32,7 +32,7 @@ IPSO_GITHUB_APP_PRIVATE_KEY="$(cat app.pem)" \
 ipso-server tenant bind-installation --tenant <tenant id> --installation <id> --account <login>
 ```
 
-The command asks GitHub, as the App, which account the installation is on, and binds nothing unless it belongs to this App and its account is the `--account` you gave. An installation belongs to one tenant: a second tenant's bind is refused, and binding the same pair again changes nothing. A tenant may hold several installations. Only `ipso-server tenant offboard` removes a binding today. A delivery that GitHub refused before the bind can be redelivered from the App's advanced settings.
+The command asks GitHub, as the App, which account the installation is on, and binds nothing unless it belongs to this App and its account is the `--account` you gave. An installation belongs to one tenant: a second tenant's bind is refused, and binding the same pair again changes nothing. A tenant may hold several installations. Only `ipso-server tenant offboard` removes a binding today. A delivery that GitHub refused before the bind can be redelivered from the App's advanced settings. The same binding decides which tenant the verdicts of a CI job are stored under ([docs/verdicts.md](verdicts.md)).
 
 ## Run the service
 

@@ -447,6 +447,66 @@ func TestRoleAPIRefusesBrowserSignInItCannotRead(t *testing.T) {
 	}
 }
 
+func TestRoleAPIReadsVerdictUploadsFromTheEnvironment(t *testing.T) {
+	app := webhookEnv(t)
+	var got controlplane.Config
+	code, _, stderr := invoke(t, apiDeps(apiEnv(map[string]string{
+		ciAudienceEnv: "https://ipso.example.test/ci", appIDEnv: app[appIDEnv], appPrivateKeyEnv: app[appPrivateKeyEnv],
+	}), &got), "--role=api")
+	if code != 0 {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if got.CIAudience != "https://ipso.example.test/ci" || got.Repositories == nil || got.CIIssuer != "" {
+		t.Errorf("config = %+v", got)
+	}
+	if strings.Contains(stderr, "PRIVATE KEY") {
+		t.Error("the App key reached stderr")
+	}
+
+	// Without the audience the route is off, and App settings shared with the webhooks service change nothing.
+	for name, extra := range map[string]map[string]string{
+		"nothing set":    nil,
+		"only the App":   {appIDEnv: app[appIDEnv], appPrivateKeyEnv: app[appPrivateKeyEnv]},
+		"only a junk id": {appIDEnv: "twelve"},
+	} {
+		got = controlplane.Config{}
+		if code, _, stderr := invoke(t, apiDeps(apiEnv(extra), &got), "--role=api"); code != 0 || got.CIAudience != "" || got.Repositories != nil {
+			t.Fatalf("%s: exit code = %d, config %+v: %s", name, code, got, stderr)
+		}
+	}
+}
+
+func TestRoleAPIRefusesVerdictUploadsItCannotServe(t *testing.T) {
+	app := webhookEnv(t)
+	full := map[string]string{ciAudienceEnv: "https://ipso.example.test/ci", appIDEnv: app[appIDEnv], appPrivateKeyEnv: app[appPrivateKeyEnv]}
+	without := func(name string) map[string]string {
+		values := map[string]string{}
+		for k, v := range full {
+			if k != name {
+				values[k] = v
+			}
+		}
+		return values
+	}
+	for name, extra := range map[string]map[string]string{
+		"no app id":          without(appIDEnv),
+		"no app key":         without(appPrivateKeyEnv),
+		"a key that is junk": {ciAudienceEnv: "https://ipso.example.test/ci", appIDEnv: "12345", appPrivateKeyEnv: "not pem"},
+		"an id that is junk": {ciAudienceEnv: "https://ipso.example.test/ci", appIDEnv: "twelve", appPrivateKeyEnv: app[appPrivateKeyEnv]},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got controlplane.Config
+			code, _, stderr := invoke(t, apiDeps(apiEnv(extra), &got), "--role=api")
+			if code != 1 || got.DB != nil {
+				t.Fatalf("exit code = %d, started %v: %s", code, got.DB != nil, stderr)
+			}
+			if strings.Contains(stderr, "PRIVATE KEY") || strings.Contains(stderr, "not pem") {
+				t.Errorf("the key reached stderr: %q", stderr)
+			}
+		})
+	}
+}
+
 func TestRoleAPIAcceptsTheRoleAsASeparateArgument(t *testing.T) {
 	var got controlplane.Config
 	if code, _, stderr := invoke(t, apiDeps(apiEnv(nil), &got), "--role", "api"); code != 0 {

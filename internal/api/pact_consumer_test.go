@@ -28,6 +28,9 @@ const pactFile = "../../api/pacts/ipso-web-ipso-server.json"
 // stateRegistry is the one provider state the pact names. Every row it describes is synthetic.
 const stateRegistry = "tenant A holds decisions, scopes, a waiver, and proposals"
 
+// stateVerdicts is the provider state of the verdict list: tenant A holds one stored verdict.
+const stateVerdicts = "tenant A holds a stored verdict"
+
 // rfc3339 is written out because the Timestamp matcher of pact-go uses a look-ahead, which the
 // matching engine of the FFI does not support.
 const rfc3339 = `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$`
@@ -38,6 +41,9 @@ const (
 )
 
 func timestamp(example string) m.Matcher { return m.Regex(example, rfc3339) }
+
+// sha256Hex matches a lowercase hex SHA-256.
+func sha256Hex(example string) m.Matcher { return m.Regex(example, `^[0-9a-f]{64}$`) }
 
 type pair struct{ key, value string }
 
@@ -123,6 +129,40 @@ func webCalls() []webCall {
 					map[string]any{"id": m.UUID(), "parent_id": m.UUID(), "kind": m.Like("repo"), "selector": m.Like("acme/api")},
 				}),
 			},
+		},
+		{
+			description: "a request for the stored verdicts",
+			state:       stateVerdicts,
+			method:      http.MethodGet,
+			path:        "/v1/verdicts",
+			token:       true,
+			status:      http.StatusOK,
+			answer: map[string]any{"verdicts": m.EachLike(map[string]any{
+				"id":           m.UUID(),
+				"upload_id":    m.UUID(),
+				"decision_id":  m.Like("01M5QJ0V9EVXKR4C89XNBNT5GG"),
+				"slug":         m.Like("use-tls"),
+				"check_index":  m.Integer(0),
+				"mode":         m.Like("block"),
+				"result":       m.Like("fail"),
+				"violations":   m.Integer(2),
+				"repo":         m.Like("acme/api"),
+				"sha":          m.Like("abababababababababababababababababababab"),
+				"ref":          m.Like("refs/heads/main"),
+				"event":        m.Like("push"),
+				"workflow_ref": m.Like("acme/api/.github/workflows/ci.yml@refs/heads/main"),
+				"run_id":       m.Integer(1001),
+				"run_attempt":  m.Integer(1),
+				"run_url":      m.Like("https://github.com/acme/api/actions/runs/1001"),
+				"check":        m.Like("plan"),
+				"env":          m.Like("prod"),
+				"ipso_version": m.Like("0.5.0"),
+				"evaluated_at": timestamp(exampleValid),
+				"recorded_at":  timestamp(exampleKnown),
+				"build_sha256": sha256Hex("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+				"sarif_sha256": sha256Hex("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"),
+				"evidence":     m.Like(map[string]any{"plan_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}),
+			}, 1)},
 		},
 		{
 			description: "a request for the waivers in force",

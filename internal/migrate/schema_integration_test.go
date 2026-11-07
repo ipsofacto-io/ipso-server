@@ -531,6 +531,8 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 		{"registry.supersession", "supersession_open_sys_period", 1 | 2 | 4},
 		{"tenancy.tenant_key", "tenant_key_open_sys_period", 1 | 2 | 4},
 		{"tenancy.tenant", "tenant_open_sys_period", 1 | 2 | 4},
+		{"verification.upload", "upload_open_sys_period", 1 | 2 | 4},
+		{"verification.verdict", "verdict_open_sys_period", 1 | 2 | 4},
 		{"registry.waiver", "waiver_approver", 1 | 2 | 4},
 		{"registry.waiver", "waiver_check", 1 | 2 | 4},
 		{"registry.waiver_notice", "waiver_notice_check", 1 | 2 | 4},

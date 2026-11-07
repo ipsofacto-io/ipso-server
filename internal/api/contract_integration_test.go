@@ -200,6 +200,11 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 				t.Errorf("%v", a)
 			}
 		}},
+		{"list_verdicts", http.MethodGet, "/v1/verdicts?repo=acme%2Fapi&decision=use-tls&limit=10", nil, func(t *testing.T, a map[string]any) {
+			if v := list(a, "verdicts"); len(v) != 1 || v[0].(map[string]any)["upload_id"] != f.uploads[tenantA].String() {
+				t.Errorf("%v", a)
+			}
+		}},
 	} {
 		t.Run(tc.op, func(t *testing.T) {
 			contentType := ""
@@ -217,7 +222,8 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 		return
 	}
 	t.Run("every operation is covered", func(t *testing.T) {
-		if got, want := 13, len(operations(t, loadDocument(t))); got != want {
+		// 14 are called above as a person. upload_verdicts is called as a CI job in upload_integration_test.go.
+		if got, want := 14+1, len(operations(t, loadDocument(t))); got != want {
 			t.Fatalf("%d operations covered, the document has %d", got, want)
 		}
 	})
@@ -262,6 +268,15 @@ func TestATenantReadsOnlyItsOwnRows(t *testing.T) {
 			t.Fatalf("%s: %d %s", target, w.Code, w.Body.String())
 		}
 	}
+	// Tenant B has a verdict of its own, and tenant A's is not in its list.
+	w = c.exchange(t, handler, http.MethodGet, "/v1/verdicts", token, "", nil)
+	if v := list(answerOf(t, w), "verdicts"); len(v) != 1 || v[0].(map[string]any)["upload_id"] != f.uploads[tenantB].String() {
+		t.Fatalf("tenant B verdicts: %s", w.Body.String())
+	}
+	w = c.exchange(t, handler, http.MethodGet, "/v1/verdicts?repo=acme%2Fapi", token, "", nil)
+	if v := list(answerOf(t, w), "verdicts"); v == nil || len(v) != 0 {
+		t.Fatalf("tenant B asked for tenant A's repository: %s", w.Body.String())
+	}
 	for _, tc := range []struct{ target, key string }{
 		{"/v1/scopes?known=" + known, "scopes"},
 		{"/v1/waivers?valid=" + valid + "&known=" + known, "waivers"},
@@ -290,6 +305,7 @@ func TestARequestCannotNameATenant(t *testing.T) {
 		"/v1/decisions?tenant=" + tenantB.String(),
 		"/v1/audit/waivers?known=" + at(f.known) + "&now=" + at(f.known) + "&tenant_id=" + tenantB.String(),
 		"/v1/proposals?Tenant=" + tenantB.String(),
+		"/v1/verdicts?tenant_id=" + tenantB.String(),
 	} {
 		w := c.exchange(t, handler, http.MethodGet, target, token, "", nil)
 		if w.Code != http.StatusBadRequest || errorOf(t, w) != errInvalidQuery {
