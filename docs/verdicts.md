@@ -32,7 +32,27 @@ The API process now holds the App key, which can mint installation tokens. The c
 
 ## Upload from a workflow
 
-The job needs `id-token: write` to request a token. Run the upload with `if: always()`, so that a failed check is stored too.
+The simplest way is [`ipso-action`](https://github.com/ipsofacto-io/ipso-action), which uploads the report of each check when you set `server-url` and `server-audience` ([ADR-0105](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0105-action-verdict-upload.md)). The audience is the value of `IPSO_CI_AUDIENCE`, and the job needs `id-token: write` in addition to its other permissions. The action uploads after a failed check too, and a failed upload only prints a warning, so the result of the step stays the result of the check. It hands out the `upload-id` of the answer as an output.
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@<sha>
+      - uses: ipsofacto-io/ipso-action@<sha>
+        with:
+          command: plan
+          args: plan.json
+          env: prod
+          server-url: https://ipso.example.com
+          server-audience: https://ipso.example.com/ci
+```
+
+Without the action, a job needs `id-token: write` to request a token. Run the upload with `if: always()`, so that a failed check is stored too.
 
 ```yaml
 permissions:
