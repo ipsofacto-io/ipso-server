@@ -37,7 +37,9 @@ var notRestored = map[string]bool{
 	"tenancy.tenant":     true,
 	"tenancy.tenant_key": true,
 	"identity.session":   true,
-	tombstone:            true,
+	// A binding is unique across tenants, so a restore into a fresh tenant would find it taken (ADR-0101).
+	"tenancy.installation": true,
+	tombstone:              true,
 }
 
 type lifecycle struct {

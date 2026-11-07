@@ -27,10 +27,11 @@ type queryer interface {
 // in the catalog, so a table added by a later migration is exported, restored and purged without a code
 // change, and the integration tests fail when its policies are missing (ADR-0100).
 const (
-	tenantTable    = "tenancy.tenant"
-	tenantKeyTable = "tenancy.tenant_key"
-	sessionTable   = "identity.session"
-	tombstoneTable = "tenancy.offboarding"
+	tenantTable       = "tenancy.tenant"
+	tenantKeyTable    = "tenancy.tenant_key"
+	sessionTable      = "identity.session"
+	tombstoneTable    = "tenancy.offboarding"
+	installationTable = "tenancy.installation"
 )
 
 // Table is a table with a tenant_id column.
@@ -96,12 +97,15 @@ func catalog(ctx context.Context, q queryer) ([]Table, error) {
 }
 
 // exported is the tables an export carries: every tenant table except the wrapped key, which never leaves
-// the database, the sessions, which hold credential hashes and end on their own, and the tombstone.
+// the database, the sessions, which hold credential hashes and end on their own, the tombstone, and the
+// installation bindings. A binding is unique across tenants, so a restore into a fresh tenant would find it
+// taken by the tenant it was exported from, and moving a live installation to a copy is the operator's
+// choice (ADR-0101).
 func exported(all []Table) []Table {
 	var out []Table
 	for _, t := range all {
 		switch t.String() {
-		case tenantKeyTable, sessionTable, tombstoneTable:
+		case tenantKeyTable, sessionTable, tombstoneTable, installationTable:
 			continue
 		}
 		out = append(out, t)

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ipsofacto-io/ipso-server/internal/controlplane"
@@ -177,6 +178,7 @@ func webhookEnv(t *testing.T) map[string]string {
 		appPrivateKeyEnv: string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})),
 		webhookSecretEnv: strings.Repeat("s3", 16),
 		listenAddrEnv:    "127.0.0.1:0",
+		databaseEnv:      appURL,
 	}
 }
 
@@ -204,11 +206,14 @@ func TestWebhooksRefusesABadKeyWithoutPrintingIt(t *testing.T) {
 
 func TestWebhooksServes(t *testing.T) {
 	values := webhookEnv(t)
+	other := uuid.MustParse("00000000-0000-4000-8000-0000000000a1")
+	calls := &tenantCalls{owners: map[int64]uuid.UUID{42: other}}
 	var got integrations.Config
-	d := deps{getenv: env(values), serve: func(_ context.Context, listener net.Listener, cfg integrations.Config) error {
+	d := tenantDeps(values, calls)
+	d.serve = func(_ context.Context, listener net.Listener, cfg integrations.Config) error {
 		got = cfg
 		return listener.Close()
-	}}
+	}
 	code, _, stderr := invoke(t, d, "webhooks")
 	if code != 0 {
 		t.Fatalf("code %d stderr %q", code, stderr)
@@ -216,13 +221,70 @@ func TestWebhooksServes(t *testing.T) {
 	if string(got.WebhookSecret) != values[webhookSecretEnv] || got.App == nil || got.OnMerged != nil {
 		t.Fatalf("config %+v", got)
 	}
+	// The process opens the database as the application role behind the start gate of the api role, and
+	// checks the lookup before it listens.
+	if len(calls.opened) != 1 || calls.opened[0] != appURL || calls.checkedApp != 1 || calls.lookupRequired != 1 {
+		t.Errorf("opened %v, checked %d, lookup required %d", calls.opened, calls.checkedApp, calls.lookupRequired)
+	}
+	// A burst of deliveries must not take every connection of a database that the api and worker share.
+	if calls.openedDB == nil {
+		t.Fatal("the webhooks command opened no database")
+	}
+	if got := calls.openedDB.Stats().MaxOpenConnections; got != webhookDBConns {
+		t.Errorf("the webhooks pool allows %d connections, want %d", got, webhookDBConns)
+	}
+	// The mapping it hands the service is the lookup of that database.
+	if got.Tenants == nil {
+		t.Fatal("the service has no installation mapping")
+	}
+	if tenant, ok, err := got.Tenants(context.Background(), 42); err != nil || !ok || tenant != other {
+		t.Errorf("Tenants(42) = %v, %v, %v", tenant, ok, err)
+	}
+	if _, ok, err := got.Tenants(context.Background(), 43); err != nil || ok {
+		t.Errorf("Tenants(43) = %v, %v; want no tenant", ok, err)
+	}
+}
+
+func TestWebhooksRefusesToStartWithoutItsDatabase(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(map[string]string)
+		calls  tenantCalls
+		want   string
+	}{
+		"no database":              {func(v map[string]string) { delete(v, databaseEnv) }, tenantCalls{}, "IPSO_DATABASE_URL is not set"},
+		"the migration credential": {func(v map[string]string) { v[migrateDatabaseEnv] = migrateURL }, tenantCalls{}, "must not hold the migration credential"},
+		"the start gate":           {func(map[string]string) {}, tenantCalls{checkAppErr: errors.New("refusing to start")}, "refusing to start"},
+		"an unmigrated database":   {func(map[string]string) {}, tenantCalls{lookupErr: errors.New("installation lookup: run ipso-server migrate")}, "run ipso-server migrate"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			values := webhookEnv(t)
+			tc.change(values)
+			calls := tc.calls
+			served := false
+			d := tenantDeps(values, &calls)
+			d.serve = func(_ context.Context, listener net.Listener, _ integrations.Config) error {
+				served = true
+				return listener.Close()
+			}
+			code, stdout, stderr := invoke(t, d, "webhooks")
+			if code != 1 || !strings.Contains(stderr, tc.want) || served {
+				t.Fatalf("code %d, served %v, stderr %q; want code 1 containing %q", code, served, stderr, tc.want)
+			}
+			for _, secret := range []string{"app-pass", "migrate-pass", values[webhookSecretEnv], "PRIVATE KEY"} {
+				if strings.Contains(stdout+stderr, secret) {
+					t.Errorf("output contains a credential: %q %q", stdout, stderr)
+				}
+			}
+		})
+	}
 }
 
 func TestWebhooksReportsAServeError(t *testing.T) {
-	d := deps{getenv: env(webhookEnv(t)), serve: func(_ context.Context, listener net.Listener, _ integrations.Config) error {
+	d := tenantDeps(webhookEnv(t), &tenantCalls{})
+	d.serve = func(_ context.Context, listener net.Listener, _ integrations.Config) error {
 		_ = listener.Close()
 		return errors.New("the app permissions are not the set in section 3.1")
-	}}
+	}
 	code, _, stderr := invoke(t, d, "webhooks")
 	if code != 1 || !strings.Contains(stderr, "section 3.1") {
 		t.Fatalf("code %d stderr %q", code, stderr)

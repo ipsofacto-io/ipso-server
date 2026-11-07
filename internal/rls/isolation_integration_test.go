@@ -328,6 +328,7 @@ func smuggleInserts() []smuggle {
 		{"llm.usage", `INSERT INTO llm.usage (tenant_id, month, tokens) VALUES ($1::uuid, '2026-02-01', 1)`, []any{tenantA}, true},
 		{"tenancy.tenant", `INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1::uuid, 'smuggled')`, []any{tenantA}, true},
 		{"tenancy.tenant_key", `INSERT INTO tenancy.tenant_key (tenant_id, wrapped_dek) VALUES ($1::uuid, decode(repeat('ab', 60), 'hex'))`, []any{tenantA}, true},
+		{"tenancy.installation", `INSERT INTO tenancy.installation (installation_id, tenant_id) VALUES (987654321, $1::uuid)`, []any{tenantA}, true},
 		// The application role has no INSERT on the tombstone at all, so the privilege check refuses it.
 		{"tenancy.offboarding", `INSERT INTO tenancy.offboarding (tenant_id, deleted_rows, deleted_jobs, key_destroyed) VALUES ($1::uuid, 0, 0, false)`, []any{tenantA}, false},
 		{"identity.login", `INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1::uuid, $1::uuid, 'https://idp.example.test', 'smuggled')`, []any{tenantA}, true},
@@ -478,6 +479,7 @@ func policyTables() []string {
 		"registry.supersession",
 		"registry.waiver",
 		"registry.waiver_notice",
+		"tenancy.installation",
 		"tenancy.offboarding",
 		"tenancy.tenant",
 		"tenancy.tenant_key",
@@ -512,6 +514,7 @@ func expectedPolicies() []string {
 		"registry.supersession":             "SELECT INSERT",
 		"registry.waiver":                   "SELECT INSERT",
 		"registry.waiver_notice":            "SELECT INSERT",
+		"tenancy.installation":              "SELECT INSERT",
 		"tenancy.offboarding":               "SELECT",
 		"tenancy.tenant":                    "SELECT INSERT",
 		"tenancy.tenant_key":                "SELECT INSERT",
@@ -525,6 +528,8 @@ func expectedPolicies() []string {
 		migrate[table] = "SELECT INSERT DELETE"
 	}
 	migrate["identity.session"] = "SELECT DELETE"
+	// A binding is unique across tenants, so an export leaves it out and a restore does not write it.
+	migrate["tenancy.installation"] = "SELECT DELETE"
 	migrate["tenancy.tenant"] = "SELECT DELETE"
 	migrate["tenancy.tenant_key"] = "SELECT DELETE"
 	migrate["tenancy.offboarding"] = "SELECT INSERT"

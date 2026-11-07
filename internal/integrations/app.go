@@ -146,6 +146,41 @@ func (a *App) Verify(ctx context.Context) error {
 	return nil
 }
 
+// InstallationAccount returns the login of the account an installation of this App is on. It is how an
+// operator proves that an installation id is the one they mean before it is bound to a tenant: the
+// installation has to belong to this App, and the login is what the operator names (ADR-0101). The
+// answer is data from GitHub and is not trusted beyond that comparison.
+func (a *App) InstallationAccount(ctx context.Context, installationID int64) (string, error) {
+	if installationID <= 0 {
+		return "", errors.New("the installation id is not positive")
+	}
+	appID, err := strconv.ParseInt(a.id, 10, 64)
+	if err != nil {
+		return "", errors.New("the app id is not a number")
+	}
+	token, err := a.jwt()
+	if err != nil {
+		return "", err
+	}
+	var answer struct {
+		AppID   int64 `json:"app_id"`
+		Account struct {
+			Login string `json:"login"`
+		} `json:"account"`
+	}
+	path := "/app/installations/" + strconv.FormatInt(installationID, 10)
+	if err := a.call(ctx, token, http.MethodGet, path, nil, &answer); err != nil {
+		return "", fmt.Errorf("read the installation: %w", err)
+	}
+	if answer.AppID != appID {
+		return "", errors.New("the installation belongs to another app")
+	}
+	if answer.Account.Login == "" {
+		return "", errors.New("the installation has no account")
+	}
+	return answer.Account.Login, nil
+}
+
 // repoClient mints a token limited to one repository and to perms, which must be a subset of
 // appPermissions. The answer has to confirm that limit, or the token is not used.
 func (a *App) repoClient(ctx context.Context, installationID, repoID int64, repo string, perms map[string]string) (*RepoClient, error) {

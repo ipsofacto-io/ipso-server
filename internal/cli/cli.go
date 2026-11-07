@@ -34,6 +34,12 @@ import (
 // A flag would show the credential in the process list.
 const migrateDatabaseEnv = "IPSO_MIGRATE_DATABASE_URL"
 
+// webhookDBConns bounds the connections of the webhooks process. Each delivery that starts work holds one
+// for its tenant lookup, which is a short read, and a delivery that cannot get one within the lookup
+// timeout is answered 503 for GitHub to redeliver. The database is shared with the api and the worker, so
+// a burst of deliveries must not take every connection.
+const webhookDBConns = 8
+
 // The webhook service reads its secrets from the environment for the same reason.
 const (
 	appIDEnv         = "IPSO_GITHUB_APP_ID"
@@ -96,6 +102,13 @@ type deps struct {
 	exportTenant     func(ctx context.Context, db *sql.DB, o tenancy.ExportOptions) (tenancy.ExportReport, error)
 	restoreTenant    func(ctx context.Context, db *sql.DB, o tenancy.RestoreOptions) (tenancy.RestoreReport, error)
 	offboardTenant   func(ctx context.Context, db *sql.DB, o tenancy.OffboardOptions) (tenancy.OffboardReport, error)
+	// The installation to tenant mapping (ADR-0101). installationAccount asks GitHub which account an
+	// installation is on, bindInstallation writes the mapping, and installationTenant and
+	// requireInstallations serve the webhooks command. Tests inject all of them.
+	installationAccount  func(ctx context.Context, appID string, privateKey []byte, installation int64) (string, error)
+	bindInstallation     func(ctx context.Context, db *sql.DB, o tenancy.BindOptions) (tenancy.BindReport, error)
+	installationTenant   func(ctx context.Context, db *sql.DB, installation int64) (uuid.UUID, bool, error)
+	requireInstallations func(ctx context.Context, db *sql.DB) error
 }
 
 // Run executes one CLI invocation. args excludes the program name.
@@ -121,6 +134,16 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		exportTenant:     tenancy.Export,
 		restoreTenant:    tenancy.Restore,
 		offboardTenant:   tenancy.Offboard,
+		installationAccount: func(ctx context.Context, appID string, privateKey []byte, installation int64) (string, error) {
+			app, err := integrations.NewApp(appID, privateKey)
+			if err != nil {
+				return "", err
+			}
+			return app.InstallationAccount(ctx, installation)
+		},
+		bindInstallation:     tenancy.BindInstallation,
+		installationTenant:   tenancy.InstallationTenant,
+		requireInstallations: tenancy.RequireInstallationLookup,
 		loadBundle: func(layout, digest, publicKey string) (integrations.PlanEvaluator, error) {
 			return plancheck.Load(layout, digest, publicKey)
 		},
@@ -175,7 +198,7 @@ usage:
   ipso-server --role=api
   ipso-server --role=worker
   ipso-server migrate
-  ipso-server tenant create|export|restore|offboard
+  ipso-server tenant create|export|restore|offboard|bind-installation
   ipso-server webhooks
   ipso-server runtasks
 
@@ -195,12 +218,14 @@ yet.
 migrate applies the pending schema migrations and exits. It reads the
 connection string from ` + migrateDatabaseEnv + ` and must run as the migration role.
 
-tenant creates, exports, restores and offboards a tenant. Run ipso-server tenant help for the commands, their
-flags and the credential each one uses.
+tenant creates, exports, restores and offboards a tenant, and binds a GitHub App installation to it. Run
+ipso-server tenant help for the commands, their flags and the credential each one uses.
 
 webhooks serves the GitHub App webhook on ` + listenAddrEnv + ` (default ` + defaultListen + `). It reads
-` + appIDEnv + `, ` + appPrivateKeyEnv + `, and ` + webhookSecretEnv + `, holds no
-tenant data, and opens no database connection.
+` + appIDEnv + `, ` + appPrivateKeyEnv + `, and ` + webhookSecretEnv + `, and opens ` + databaseEnv + `
+as the application role to ask which tenant owns the installation of a delivery. It holds no tenant data, and a
+delivery from an installation that no tenant owns starts nothing. Bind an installation first with
+ipso-server tenant bind-installation.
 
 runtasks serves the HCP Terraform run task on ` + listenAddrEnv + ` (default ` + defaultListen + `). It reads
 ` + runTaskHMACEnv + `, ` + runTaskBundleEnv + `, ` + runTaskDigestEnv + `,
@@ -372,6 +397,19 @@ func webhooksCmd(ctx context.Context, stderr io.Writer, d deps) int {
 		fprintf(stderr, "webhooks: %v\n", err)
 		return 1
 	}
+	// The mapping from an installation to its tenant lives in the database. The process opens it as the
+	// application role, with the start gate of the api role, and holds no tenant data (ADR-0101).
+	db, err := applicationDB(ctx, d, "webhooks")
+	if err != nil {
+		fprintf(stderr, "webhooks: %v\n", err)
+		return 1
+	}
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(webhookDBConns)
+	if err := d.requireInstallations(ctx, db); err != nil {
+		fprintf(stderr, "webhooks: %v\n", err)
+		return 1
+	}
 	address := d.getenv(listenAddrEnv)
 	if address == "" {
 		address = defaultListen
@@ -385,6 +423,9 @@ func webhooksCmd(ctx context.Context, stderr io.Writer, d deps) int {
 		App:           app,
 		WebhookSecret: []byte(d.getenv(webhookSecretEnv)),
 		Logger:        slog.New(slog.NewJSONHandler(stderr, nil)),
+		Tenants: func(ctx context.Context, installation int64) (uuid.UUID, bool, error) {
+			return d.installationTenant(ctx, db, installation)
+		},
 	})
 	if err != nil {
 		fprintf(stderr, "webhooks: %v\n", err)

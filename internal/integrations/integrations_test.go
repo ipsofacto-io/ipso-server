@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,6 +23,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -33,6 +36,17 @@ const (
 
 // Repeated, so that it is long enough and reads as no credential.
 var testSecret = strings.Repeat("s3", 16)
+
+// testTenant owns installation 42, the one every fixture delivery names.
+var testTenant = uuid.MustParse("00000000-0000-4000-8000-0000000000a1")
+
+// ownedBy answers the lookup of a delivery from a table, the way the database does.
+func ownedBy(owners map[int64]uuid.UUID) func(context.Context, int64) (uuid.UUID, bool, error) {
+	return func(_ context.Context, installation int64) (uuid.UUID, bool, error) {
+		tenant, ok := owners[installation]
+		return tenant, ok, nil
+	}
+}
 
 const validDecision = `---
 edr: 1
@@ -106,6 +120,9 @@ type fakeGitHub struct {
 	patches     []map[string]any
 	statusFor   map[string]int
 	requests    []string
+	// installation is what GET /app/installations/{id} answers.
+	installationApp   int64
+	installationLogin string
 }
 
 func newFakeGitHub(t *testing.T) (*fakeGitHub, *App) {
@@ -116,6 +133,9 @@ func newFakeGitHub(t *testing.T) (*fakeGitHub, *App) {
 		permissions: maps.Clone(appPermissions),
 		events:      []string{"pull_request", "push"},
 		statusFor:   map[string]int{},
+
+		installationApp:   12345,
+		installationLogin: "Acme-Corp",
 	}
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
@@ -145,6 +165,12 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/app":
 		f.requireAppToken(r)
 		_ = json.NewEncoder(w).Encode(map[string]any{"permissions": f.permissions, "events": f.events})
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/app/installations/"):
+		f.requireAppToken(r)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"app_id":  f.installationApp,
+			"account": map[string]any{"login": f.installationLogin},
+		})
 	case strings.HasSuffix(path, "/access_tokens"):
 		f.requireAppToken(r)
 		f.minted = append(f.minted, decoded)
@@ -242,6 +268,7 @@ func newTestService(t *testing.T, app *App, logs io.Writer, onMerged func(contex
 		App:           app,
 		WebhookSecret: []byte(testSecret),
 		Logger:        slog.New(slog.NewTextHandler(logs, nil)),
+		Tenants:       ownedBy(map[int64]uuid.UUID{42: testTenant}),
 		OnMerged:      onMerged,
 	})
 }
@@ -302,6 +329,7 @@ func pushEvent(ref string) map[string]any {
 func TestSignatureGuardsEverything(t *testing.T) {
 	fake, app := newFakeGitHub(t)
 	s := newTestService(t, app, nil, nil)
+	s.cfg.Tenants = neverCalled(t)
 	body := []byte(`{"action":"opened"}`)
 	for name, header := range map[string]string{
 		"missing":   "",
@@ -564,7 +592,7 @@ func TestFullQueueAsksForRedelivery(t *testing.T) {
 func TestPanicInJobDoesNotStopTheService(t *testing.T) {
 	_, app := newFakeGitHub(t)
 	s := newTestService(t, app, nil, nil)
-	s.work(context.Background(), job{delivery: "d-1", name: "boom", run: func(context.Context) error { panic("boom") }})
+	s.work(context.Background(), job{delivery: "d-1", name: "boom", run: func(context.Context, uuid.UUID) error { panic("boom") }})
 }
 
 func TestPushOnDefaultBranch(t *testing.T) {
@@ -606,6 +634,7 @@ func TestIgnoredEventsDoNoWork(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fake, app := newFakeGitHub(t)
 			s := newTestService(t, app, nil, nil)
+			s.cfg.Tenants = neverCalled(t)
 			if code := deliver(t, s, delivery.event, "d-1", delivery.payload); code != http.StatusAccepted {
 				t.Fatalf("status %d", code)
 			}
@@ -628,6 +657,7 @@ func TestMalformedTargetsAreRefused(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fake, app := newFakeGitHub(t)
 			s := newTestService(t, app, nil, nil)
+			s.cfg.Tenants = neverCalled(t)
 			if code := deliver(t, s, "pull_request", "d-1", payload); code != http.StatusBadRequest {
 				t.Fatalf("status %d", code)
 			}
@@ -635,6 +665,149 @@ func TestMalformedTargetsAreRefused(t *testing.T) {
 				t.Fatalf("requests %v", fake.requests)
 			}
 		})
+	}
+}
+
+// neverCalled fails the test when a request that is refused, or that needs no work, asks for a tenant.
+func neverCalled(t *testing.T) func(context.Context, int64) (uuid.UUID, bool, error) {
+	t.Helper()
+	return func(context.Context, int64) (uuid.UUID, bool, error) {
+		t.Error("a request that starts no work looked up a tenant")
+		return uuid.Nil, false, nil
+	}
+}
+
+func TestUnboundInstallationStartsNothingAndIsNotRemembered(t *testing.T) {
+	for name, delivery := range map[string]struct {
+		event   string
+		payload any
+	}{
+		"pull request": {"pull_request", prEvent("opened")},
+		"push":         {"push", pushEvent("refs/heads/main")},
+		"merged":       {"pull_request", prEvent("closed")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake, app := newFakeGitHub(t)
+			hooked := false
+			s := newTestService(t, app, nil, func(context.Context, MergedPullRequest) error {
+				hooked = true
+				return nil
+			})
+			owners := map[int64]uuid.UUID{}
+			s.cfg.Tenants = ownedBy(owners)
+
+			if code := deliver(t, s, delivery.event, "d-1", delivery.payload); code != http.StatusForbidden {
+				t.Fatalf("status %d, want 403", code)
+			}
+			drain(s)
+			if len(fake.requests) != 0 || hooked || len(s.queue) != 0 {
+				t.Fatalf("an unbound installation started work: requests %v, hooked %v, queued %d", fake.requests, hooked, len(s.queue))
+			}
+
+			// The operator binds the installation and GitHub redelivers the same delivery.
+			owners[42] = testTenant
+			if code := deliver(t, s, delivery.event, "d-1", delivery.payload); code != http.StatusAccepted {
+				t.Fatalf("redelivery: status %d, want 202", code)
+			}
+			drain(s)
+			if len(fake.requests) == 0 {
+				t.Fatal("the redelivery after the bind did no work")
+			}
+		})
+	}
+}
+
+func TestInstallationOfAnotherTenantIsNotTheCallers(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	s := newTestService(t, app, nil, nil)
+	s.cfg.Tenants = ownedBy(map[int64]uuid.UUID{43: testTenant})
+	// Installation 42 is the one the delivery names. Only 43 is bound.
+	if code := deliver(t, s, "pull_request", "d-1", prEvent("opened")); code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403", code)
+	}
+	drain(s)
+	if len(fake.requests) != 0 {
+		t.Fatalf("requests %v", fake.requests)
+	}
+}
+
+// A mapping that says "bound" with no tenant is no mapping. A job must never carry the nil tenant.
+func TestMappingThatAnswersBoundWithNoTenantIsRefused(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	s := newTestService(t, app, nil, nil)
+	s.cfg.Tenants = func(context.Context, int64) (uuid.UUID, bool, error) { return uuid.Nil, true, nil }
+	if code := deliver(t, s, "pull_request", "d-1", prEvent("opened")); code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403", code)
+	}
+	drain(s)
+	if len(fake.requests) != 0 {
+		t.Fatalf("requests %v", fake.requests)
+	}
+}
+
+func TestServiceWithoutAMappingRefusesEveryDelivery(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	s := newTestService(t, app, nil, nil)
+	s.cfg.Tenants = nil
+	if code := deliver(t, s, "pull_request", "d-1", prEvent("opened")); code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403", code)
+	}
+	drain(s)
+	if len(fake.requests) != 0 {
+		t.Fatalf("requests %v", fake.requests)
+	}
+}
+
+func TestTenantLookupFailureAsksForRedeliveryAndLeaksNothing(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	var logs strings.Builder
+	s := newTestService(t, app, &logs, nil)
+	failing := true
+	s.cfg.Tenants = func(context.Context, int64) (uuid.UUID, bool, error) {
+		if failing {
+			return uuid.Nil, false, errors.New("marker-database-error")
+		}
+		return testTenant, true, nil
+	}
+	if code := deliver(t, s, "pull_request", "d-1", prEvent("opened")); code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503", code)
+	}
+	drain(s)
+	if len(fake.requests) != 0 {
+		t.Fatalf("requests %v", fake.requests)
+	}
+	if strings.Contains(logs.String(), "marker-database-error") {
+		t.Fatalf("the log quotes the database error: %s", logs.String())
+	}
+	failing = false
+	if code := deliver(t, s, "pull_request", "d-1", prEvent("opened")); code != http.StatusAccepted {
+		t.Fatalf("redelivery: status %d, want 202", code)
+	}
+	drain(s)
+	if len(fake.requests) == 0 {
+		t.Fatal("the redelivery did no work")
+	}
+}
+
+func TestMergedHookGetsTheTenantOfTheMappingAndNeverOneFromThePayload(t *testing.T) {
+	_, app := newFakeGitHub(t)
+	var got MergedPullRequest
+	s := newTestService(t, app, nil, func(_ context.Context, pr MergedPullRequest) error {
+		got = pr
+		return nil
+	})
+	const other = "00000000-0000-4000-8000-0000000000b2"
+	payload := prEvent("closed")
+	payload["tenant"] = other
+	payload["tenant_id"] = other
+	payload["installation"].(map[string]any)["tenant_id"] = other
+	payload["repository"].(map[string]any)["tenant_id"] = other
+	if code := deliver(t, s, "pull_request", "d-1", payload); code != http.StatusAccepted {
+		t.Fatalf("status %d", code)
+	}
+	drain(s)
+	if got.Tenant != testTenant || got.InstallationID != 42 {
+		t.Fatalf("tenant %s installation %d, want %s and 42", got.Tenant, got.InstallationID, testTenant)
 	}
 }
 
@@ -747,12 +920,69 @@ func TestServeRefusesAShortSecretAndAnOverprivilegedApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if err := Serve(context.Background(), listener, Config{App: app, WebhookSecret: []byte("short"), Logger: logger}); err == nil {
+	tenants := ownedBy(nil)
+	if err := Serve(context.Background(), listener, Config{App: app, WebhookSecret: []byte("short"), Logger: logger, Tenants: tenants}); err == nil {
 		t.Fatal("a short secret passed")
 	}
 	fake.permissions["administration"] = "write"
-	if err := Serve(context.Background(), listener, Config{App: app, WebhookSecret: []byte(testSecret), Logger: logger}); err == nil {
+	if err := Serve(context.Background(), listener, Config{App: app, WebhookSecret: []byte(testSecret), Logger: logger, Tenants: tenants}); err == nil {
 		t.Fatal("an overprivileged app passed")
+	}
+}
+
+func TestServeRefusesAServiceWithNoInstallationMapping(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	listener, err := (&testListener{}).listen(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = Serve(context.Background(), listener, Config{App: app, WebhookSecret: []byte(testSecret), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err == nil || !strings.Contains(err.Error(), "mapping") {
+		t.Fatalf("Serve = %v, want a refusal that names the mapping", err)
+	}
+	if len(fake.requests) != 0 {
+		t.Fatalf("a refused service called GitHub: %v", fake.requests)
+	}
+}
+
+func TestInstallationAccountReadsTheAccountOfOurInstallation(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	login, err := app.InstallationAccount(context.Background(), 42)
+	if err != nil || login != "Acme-Corp" {
+		t.Fatalf("InstallationAccount = %q, %v", login, err)
+	}
+	if len(fake.requests) != 1 || fake.requests[0] != "GET /app/installations/42" {
+		t.Fatalf("requests %v", fake.requests)
+	}
+}
+
+func TestInstallationAccountRefusesWhatIsNotOurs(t *testing.T) {
+	for name, tc := range map[string]struct {
+		id     int64
+		change func(*fakeGitHub)
+		want   string
+	}{
+		"another app":     {42, func(f *fakeGitHub) { f.installationApp = 999 }, "another app"},
+		"no account":      {42, func(f *fakeGitHub) { f.installationLogin = "" }, "no account"},
+		"unknown":         {42, func(f *fakeGitHub) { f.statusFor["/app/installations/42"] = http.StatusNotFound }, "not found"},
+		"server error":    {42, func(f *fakeGitHub) { f.statusFor["/app/installations/42"] = http.StatusBadGateway }, "502"},
+		"not positive":    {0, func(*fakeGitHub) {}, "positive"},
+		"negative number": {-5, func(*fakeGitHub) {}, "positive"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake, app := newFakeGitHub(t)
+			tc.change(fake)
+			login, err := app.InstallationAccount(context.Background(), tc.id)
+			if err == nil || login != "" || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("InstallationAccount = %q, %v; want an error with %q", login, err, tc.want)
+			}
+			if strings.Contains(err.Error(), "marker-api-error") {
+				t.Fatalf("the error quotes the API body: %v", err)
+			}
+			if tc.id <= 0 && len(fake.requests) != 0 {
+				t.Fatalf("a bad id reached GitHub: %v", fake.requests)
+			}
+		})
 	}
 }
 
@@ -766,7 +996,7 @@ func TestServeStopsWithItsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Serve(ctx, listener, Config{App: app, WebhookSecret: []byte(testSecret), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		done <- Serve(ctx, listener, Config{App: app, WebhookSecret: []byte(testSecret), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Tenants: ownedBy(nil)})
 	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for {

@@ -15,7 +15,7 @@ const (
 )
 
 // SeedEveryTable writes a tenant with at least one row in every table the application role can write
-// and that the lifecycle commands export: the tenant and its wrapped key, scopes and their history,
+// and that the lifecycle commands treat: the tenant, its wrapped key and its installation binding, scopes and their history,
 // decisions and their history, supersession, waivers, premises, proposals, identity, sessions, the action
 // log and usage. It runs as the application role under row-level security, so every trigger runs as it
 // does in production. The tombstone has no application insert and is not seeded here.
@@ -38,6 +38,9 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 	var person, org, payments, labs, repo string
 	mustExec(`INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1::uuid, 'synthetic tenant')`, tenant)
 	mustExec(`INSERT INTO tenancy.tenant_key (tenant_id, wrapped_dek) VALUES ($1::uuid, decode(repeat('ab', 60), 'hex'))`, tenant)
+	// An installation belongs to one tenant in the whole table, so each seeded tenant gets its own id,
+	// derived from the tenant: a fixed id would be taken by the second tenant.
+	mustExec(`INSERT INTO tenancy.installation (installation_id, tenant_id) VALUES (1 + abs(hashtextextended($1::text, 0) % 1000000000000), $2::uuid)`, tenant, tenant)
 	mustScan(`INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1::uuid, 'human', 'Ada') RETURNING id`,
 		[]any{tenant}, &person)
 	mustScan(`INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1::uuid, NULL, 'org', 'acme') RETURNING id`,

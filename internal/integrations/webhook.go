@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -23,6 +25,8 @@ const (
 	queueSize      = 256
 	workerCount    = 4
 	jobTimeout     = 2 * time.Minute
+	// lookupTimeout bounds the tenant lookup of a delivery. GitHub gives a delivery 10 seconds.
+	lookupTimeout = 5 * time.Second
 	// evaluateTimeout leaves the rest of jobTimeout to close the check run.
 	evaluateTimeout = 100 * time.Second
 	seenDeliveries  = 4096
@@ -39,6 +43,9 @@ var (
 
 // MergedPullRequest is a merged pull request and a client limited to reading its discussion.
 type MergedPullRequest struct {
+	// Tenant is the tenant the installation is bound to. It comes from the mapping and never from the
+	// payload (ADR-0101).
+	Tenant         uuid.UUID
 	InstallationID int64
 	Repo           string
 	Number         int
@@ -47,10 +54,15 @@ type MergedPullRequest struct {
 
 // Config is what the service needs. OnMerged is optional. When it is nil, a merged pull request
 // mints no token and starts no work (ADR-0062).
+//
+// Tenants maps the installation of a delivery to its tenant, and reports false for an installation no
+// tenant owns. A delivery that would start work is answered 403 and starts nothing when the installation
+// has no tenant, and 503 when the lookup fails. Without Tenants every such delivery is refused (ADR-0101).
 type Config struct {
 	App           *App
 	WebhookSecret []byte
 	Logger        *slog.Logger
+	Tenants       func(ctx context.Context, installationID int64) (uuid.UUID, bool, error)
 	OnMerged      func(context.Context, MergedPullRequest) error
 }
 
@@ -66,7 +78,11 @@ type Service struct {
 type job struct {
 	delivery string
 	name     string
-	run      func(context.Context) error
+	// installation is the one the signed payload names. tenant is what the mapping says it belongs to,
+	// set by receive before the job is queued. A job never takes its tenant from a payload.
+	installation int64
+	tenant       uuid.UUID
+	run          func(ctx context.Context, tenant uuid.UUID) error
 }
 
 // NewService returns a service. Run its workers with Run before serving Handler.
@@ -129,7 +145,7 @@ func (s *Service) work(ctx context.Context, next job) {
 				err = errors.New("the job panicked")
 			}
 		}()
-		return next.run(ctx)
+		return next.run(ctx, next.tenant)
 	}()
 	if err != nil {
 		s.seen.forget(next.delivery)
@@ -176,6 +192,21 @@ func (s *Service) receive(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
+	// The tenant of a delivery is the one the mapping gives its installation. An installation nobody
+	// bound starts nothing, and its delivery is not remembered, so a redelivery after the operator binds
+	// it is worked (ADR-0101).
+	tenant, bound, err := s.tenantOf(r.Context(), next.installation)
+	if err != nil {
+		s.cfg.Logger.Error("webhook tenant lookup failed", "delivery", delivery, "installation", next.installation, "error", err)
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !bound {
+		s.cfg.Logger.Warn("webhook from an installation no tenant owns", "delivery", delivery, "installation", next.installation)
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	next.tenant = tenant
 	next.delivery = delivery
 	if !s.seen.add(delivery) {
 		w.WriteHeader(http.StatusAccepted)
@@ -189,6 +220,24 @@ func (s *Service) receive(w http.ResponseWriter, r *http.Request) {
 		s.seen.forget(delivery)
 		http.Error(w, "busy", http.StatusServiceUnavailable)
 	}
+}
+
+// tenantOf asks the mapping for the tenant of an installation. A service with no mapping owns no
+// installation.
+func (s *Service) tenantOf(ctx context.Context, installationID int64) (uuid.UUID, bool, error) {
+	if s.cfg.Tenants == nil {
+		return uuid.Nil, false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+	defer cancel()
+	tenant, bound, err := s.cfg.Tenants(ctx, installationID)
+	if err != nil {
+		return uuid.Nil, false, errors.New("the lookup failed")
+	}
+	if !bound || tenant == uuid.Nil {
+		return uuid.Nil, false, nil
+	}
+	return tenant, true, nil
 }
 
 func validSignature(secret, body []byte, header string) bool {
@@ -268,7 +317,7 @@ func (s *Service) routePullRequest(body []byte) (*job, error) {
 		if payload.Number <= 0 {
 			return nil, errors.New("bad pull request")
 		}
-		return &job{name: "merged", run: func(ctx context.Context) error {
+		return &job{name: "merged", installation: payload.Installation.ID, run: func(ctx context.Context, tenant uuid.UUID) error {
 			client, err := s.cfg.App.repoClient(ctx, payload.Installation.ID, payload.Repository.ID, payload.Repository.FullName, map[string]string{
 				"metadata": readAccess, "pull_requests": readAccess,
 			})
@@ -276,6 +325,7 @@ func (s *Service) routePullRequest(body []byte) (*job, error) {
 				return err
 			}
 			return s.cfg.OnMerged(ctx, MergedPullRequest{
+				Tenant:         tenant,
 				InstallationID: payload.Installation.ID,
 				Repo:           payload.Repository.FullName,
 				Number:         payload.Number,
@@ -332,7 +382,7 @@ func validTarget(install installation, repo repository) error {
 // failure with fixed text, so a broken check does not read as a pass and no internal error
 // reaches the pull request.
 func (s *Service) checkJob(name string, install installation, repo repository, sha string, perms map[string]string, list func(context.Context, *RepoClient) ([]changedFile, error)) *job {
-	return &job{name: name, run: func(ctx context.Context) error {
+	return &job{name: name, installation: install.ID, run: func(ctx context.Context, _ uuid.UUID) error {
 		client, err := s.cfg.App.repoClient(ctx, install.ID, repo.ID, repo.FullName, perms)
 		if err != nil {
 			return err

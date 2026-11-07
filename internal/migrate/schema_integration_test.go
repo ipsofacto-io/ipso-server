@@ -507,6 +507,7 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 		{"registry.decision_version", "decision_version_open_sys_period", 1 | 2 | 4},
 		{"registry.decision_version", "decision_version_scope_refs", 1 | 2 | 4 | 16},
 		{"registry.grandfather_period", "grandfather_period_open_sys_period", 1 | 2 | 4},
+		{"tenancy.installation", "installation_open_sys_period", 1 | 2 | 4},
 		{"identity.login", "login_open_sys_period", 1 | 2 | 4},
 		{"tenancy.offboarding", "offboarding_open_sys_period", 1 | 2 | 4},
 		{"registry.premise_clearance", "premise_clearance_check", 1 | 2 | 4},
