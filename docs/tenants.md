@@ -8,8 +8,9 @@
 | `tenant export` | the application role, `IPSO_DATABASE_URL` | writes every row of the tenant to an age file |
 | `tenant restore` | the migration role, `IPSO_MIGRATE_DATABASE_URL` | reads such a file into a fresh tenant |
 | `tenant offboard` | the migration role, `IPSO_MIGRATE_DATABASE_URL` | deletes the tenant, proves it, and records a tombstone |
+| `tenant bind-installation` | the application role, `IPSO_DATABASE_URL`, and the GitHub App `IPSO_GITHUB_APP_ID` and `IPSO_GITHUB_APP_PRIVATE_KEY` | says that a GitHub App installation belongs to the tenant |
 
-`create` and `export` refuse to start as a superuser or a role that can bypass row-level security, for a table owner, and when `IPSO_MIGRATE_DATABASE_URL` is set. `restore` and `offboard` refuse a superuser and a `BYPASSRLS` role, because the policies of the migration role would mean nothing to them.
+`create`, `export` and `bind-installation` refuse to start as a superuser or a role that can bypass row-level security, for a table owner, and when `IPSO_MIGRATE_DATABASE_URL` is set. `restore` and `offboard` refuse a superuser and a `BYPASSRLS` role, because the policies of the migration role would mean nothing to them.
 
 ## Onboard
 
@@ -26,6 +27,18 @@ ipso-server tenant create --tenant 0190a0a0-0000-7000-8000-000000000001 --name a
 - Running it again with the same arguments changes nothing. Different arguments are refused. A tenant that already has a wrapped key must open it with the key encryption key in use, so a wrong key stops here.
 - The key encryption key is the base64 of 32 random bytes: `openssl rand -base64 32`. It never reaches the database, only `create` reads it, and the api and the worker never see it. Keep it in the secret store of the deployment, apart from the database and its backups. Until IPSO-64 holds it in a cloud KMS, one key wraps every tenant of the deployment.
 
+## Bind a GitHub App installation
+
+```sh
+ipso-server tenant bind-installation --tenant <id> --installation 12345678 --account acme
+```
+
+The GitHub App service takes the tenant of a delivery from this binding and never from the payload ([ADR-0101](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0101-installation-tenant-mapping.md)), so an installation must be bound before the App does anything for it. The command asks GitHub, as the App, which account the installation is on, and binds nothing unless the installation is this App's and its account is the login given with `--account`. [github-app.md](github-app.md) shows where to find the installation id.
+
+- An installation belongs to one tenant. A second tenant's bind is refused, and the error does not name the owner. Binding the same pair again changes nothing, and a tenant may hold several installations.
+- The tenant must exist and must not have been offboarded.
+- The application role can write a binding once and cannot change or delete it. Offboarding removes a tenant's bindings, which frees the installation for another tenant.
+
 ## Export
 
 ```sh
@@ -38,7 +51,7 @@ The file is encrypted to the age public keys given with `--recipient` (`age-keyg
 age --decrypt -i key.txt acme.age | gunzip | jq -c 'select(.table == "registry.scope")'
 ```
 
-It is one consistent snapshot. The first line is the header with the tenant, the format `ipso-tenant-export/1` and a fingerprint of the schema. Then every row is a line `{"table": ..., "row": {...}}`, and the last line lists the row count and SHA-256 of each table. It holds all of the tenant's rows including the history tables and their transaction time. It leaves out the wrapped data key, the sessions, which hold credential hashes and end on their own, and the tombstone. EDR Markdown files and evidence objects are not part of it yet.
+It is one consistent snapshot. The first line is the header with the tenant, the format `ipso-tenant-export/1` and a fingerprint of the schema. Then every row is a line `{"table": ..., "row": {...}}`, and the last line lists the row count and SHA-256 of each table. It holds all of the tenant's rows including the history tables and their transaction time. It leaves out the wrapped data key, the sessions, which hold credential hashes and end on their own, the tombstone, and the installation bindings, which are unique across tenants. After a restore, bind the installation to the new tenant if it should receive the App's deliveries. EDR Markdown files and evidence objects are not part of it yet.
 
 An archive is as sensitive as the database. Anyone who holds a recipient's private key reads it, and anyone with a recipient's public key can write one, so restore only an archive you made or have reason to trust.
 
@@ -67,7 +80,7 @@ GRANT SET ON PARAMETER session_replication_role TO ipso_migrate;
 ipso-server tenant offboard --tenant <id> --confirm acme
 ```
 
-`--confirm` must be the name of the tenant, so a pasted id alone deletes nothing. In one transaction the command deletes every row of the tenant from every table that has a `tenant_id`, the wrapped data key included, and the River jobs that name the tenant. It counts again, writes the tombstone, and commits. Then, in a new transaction, it looks a second time and exits non-zero if any row is left. A repeat removes what appeared since, such as a job a worker inserted while it was still running.
+`--confirm` must be the name of the tenant, so a pasted id alone deletes nothing. In one transaction the command deletes every row of the tenant from every table that has a `tenant_id`, the wrapped data key and the installation bindings included, and the River jobs that name the tenant. It counts again, writes the tombstone, and commits. Then, in a new transaction, it looks a second time and exits non-zero if any row is left. A repeat removes what appeared since, such as a job a worker inserted while it was still running.
 
 The tombstone, `tenancy.offboarding`, holds the tenant id, the row and job counts, whether a key was destroyed, and the time. It is the record that the tenant was offboarded, and it outlives the tenant. Nothing deletes it.
 

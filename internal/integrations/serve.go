@@ -13,11 +13,14 @@ import (
 // minSecretBytes refuses a webhook secret short enough to guess.
 const minSecretBytes = 32
 
-// Serve verifies the App, then listens until ctx ends. It serves the webhook and a health route,
-// and no tenant data (ADR-0061).
+// Serve verifies the App, then listens until ctx ends. It serves the webhook and a health route. It
+// holds no tenant data: it asks cfg.Tenants which tenant owns the installation of a delivery (ADR-0101).
 func Serve(ctx context.Context, listener net.Listener, cfg Config) error {
 	if len(cfg.WebhookSecret) < minSecretBytes {
 		return fmt.Errorf("the webhook secret is shorter than %d bytes", minSecretBytes)
+	}
+	if cfg.Tenants == nil {
+		return errors.New("the webhook service has no installation to tenant mapping")
 	}
 	if err := cfg.App.Verify(ctx); err != nil {
 		return err

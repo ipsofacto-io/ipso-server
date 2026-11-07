@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ipsofacto-io/ipso/pkg/plancheck"
 )
 
@@ -168,7 +170,7 @@ func (s *RunTaskService) receive(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	next := job{delivery: request.TaskResult, name: "run task", run: func(ctx context.Context) error {
+	next := job{delivery: request.TaskResult, name: "run task", run: func(ctx context.Context, _ uuid.UUID) error {
 		return s.runJob(ctx, request, callback)
 	}}
 	select {

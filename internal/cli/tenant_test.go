@@ -25,6 +25,7 @@ const (
 // tenantCalls records what the fakes were asked.
 type tenantCalls struct {
 	opened          []string
+	openedDB        *sql.DB
 	checkedApp      int
 	checkedMigrate  int
 	provision       *tenancy.ProvisionOptions
@@ -37,6 +38,23 @@ type tenantCalls struct {
 	checkAppErr     error
 	checkMigrateErr error
 	provisionErr    error
+
+	// The installation mapping (ADR-0101).
+	asked          []askedAccount
+	accountLogin   string
+	accountErr     error
+	bind           *tenancy.BindOptions
+	bindErr        error
+	lookupRequired int
+	lookupErr      error
+	owners         map[int64]uuid.UUID
+}
+
+// askedAccount is what the fake GitHub was asked.
+type askedAccount struct {
+	appID        string
+	privateKey   string
+	installation int64
 }
 
 func tenantDeps(values map[string]string, calls *tenantCalls) deps {
@@ -44,7 +62,9 @@ func tenantDeps(values map[string]string, calls *tenantCalls) deps {
 		getenv: env(values),
 		openDB: func(url string) (*sql.DB, error) {
 			calls.opened = append(calls.opened, url)
-			return sql.Open("pgx", "postgres://nobody@127.0.0.1:1/none")
+			db, err := sql.Open("pgx", "postgres://nobody@127.0.0.1:1/none")
+			calls.openedDB = db
+			return db, err
 		},
 		checkApplication: func(context.Context, *sql.DB) error { calls.checkedApp++; return calls.checkAppErr },
 		checkMigration:   func(context.Context, *sql.DB) error { calls.checkedMigrate++; return calls.checkMigrateErr },
@@ -64,6 +84,22 @@ func tenantDeps(values map[string]string, calls *tenantCalls) deps {
 		offboardTenant: func(_ context.Context, _ *sql.DB, o tenancy.OffboardOptions) (tenancy.OffboardReport, error) {
 			calls.offboard = &o
 			return calls.offboardReport, calls.offboardErr
+		},
+		installationAccount: func(_ context.Context, appID string, privateKey []byte, installation int64) (string, error) {
+			calls.asked = append(calls.asked, askedAccount{appID, string(privateKey), installation})
+			return calls.accountLogin, calls.accountErr
+		},
+		bindInstallation: func(_ context.Context, _ *sql.DB, o tenancy.BindOptions) (tenancy.BindReport, error) {
+			calls.bind = &o
+			return tenancy.BindReport{Tenant: o.Tenant, Installation: o.Installation, Bound: true}, calls.bindErr
+		},
+		requireInstallations: func(context.Context, *sql.DB) error {
+			calls.lookupRequired++
+			return calls.lookupErr
+		},
+		installationTenant: func(_ context.Context, _ *sql.DB, installation int64) (uuid.UUID, bool, error) {
+			tenant, ok := calls.owners[installation]
+			return tenant, ok, nil
 		},
 	}
 }
@@ -393,5 +429,102 @@ func TestTenantCommandsNeverPrintTheCredentials(t *testing.T) {
 				t.Errorf("output of %v contains a credential: %q %q", run.args, stdout, stderr)
 			}
 		}
+	}
+}
+
+const (
+	testAppKey = "-----BEGIN RSA PRIVATE KEY-----\nmarker-private-key\n-----END RSA PRIVATE KEY-----"
+)
+
+func bindValues(extra map[string]string) map[string]string {
+	values := appValues(map[string]string{appIDEnv: "12345", appPrivateKeyEnv: testAppKey})
+	for k, v := range extra {
+		values[k] = v
+	}
+	return values
+}
+
+func TestTenantBindInstallationAsksGitHubThenBindsAndPrintsTheReport(t *testing.T) {
+	calls := &tenantCalls{accountLogin: "Acme-Corp"}
+	// GitHub logins have no case, so the account given matches whatever case GitHub answers.
+	code, stdout, stderr := invoke(t, tenantDeps(bindValues(nil), calls), "tenant", "bind-installation",
+		"--tenant", testTenant, "--installation", "424242", "--account", "acme-corp")
+	if code != 0 {
+		t.Fatalf("code %d: %s", code, stderr)
+	}
+	if calls.checkedApp != 1 || len(calls.opened) != 1 || calls.opened[0] != appURL {
+		t.Errorf("opened %v, checked %d", calls.opened, calls.checkedApp)
+	}
+	if len(calls.asked) != 1 || calls.asked[0] != (askedAccount{"12345", testAppKey, 424242}) {
+		t.Errorf("GitHub was asked %+v", calls.asked)
+	}
+	if calls.bind == nil || calls.bind.Tenant.String() != testTenant || calls.bind.Installation != 424242 {
+		t.Errorf("bind options = %+v", calls.bind)
+	}
+	var report struct {
+		Tenant       string `json:"tenant"`
+		Installation int64  `json:"installation"`
+		Bound        bool   `json:"bound"`
+		Account      string `json:"account"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil ||
+		report.Tenant != testTenant || report.Installation != 424242 || !report.Bound || report.Account != "Acme-Corp" {
+		t.Errorf("stdout = %q (%v)", stdout, err)
+	}
+}
+
+func TestTenantBindInstallationRefuses(t *testing.T) {
+	good := []string{"--tenant", testTenant, "--installation", "7", "--account", "acme"}
+	for name, tc := range map[string]struct {
+		values map[string]string
+		args   []string
+		calls  tenantCalls
+		code   int
+		want   string
+		// asked says whether GitHub may have been asked, and bound whether the mapping may have been written.
+		asked, bound bool
+	}{
+		"no tenant":                         {bindValues(nil), []string{"--installation", "7", "--account", "acme"}, tenantCalls{}, 2, "--tenant, --installation", false, false},
+		"a bad tenant":                      {bindValues(nil), []string{"--tenant", "acme", "--installation", "7", "--account", "acme"}, tenantCalls{}, 2, "--tenant, --installation", false, false},
+		"no installation":                   {bindValues(nil), []string{"--tenant", testTenant, "--account", "acme"}, tenantCalls{}, 2, "--tenant, --installation", false, false},
+		"a negative installation":           {bindValues(nil), []string{"--tenant", testTenant, "--installation", "-3", "--account", "acme"}, tenantCalls{}, 2, "--tenant, --installation", false, false},
+		"an installation that is no number": {bindValues(nil), []string{"--tenant", testTenant, "--installation", "abc", "--account", "acme"}, tenantCalls{}, 2, "tenant bind-installation", false, false},
+		"no account":                        {bindValues(nil), []string{"--tenant", testTenant, "--installation", "7"}, tenantCalls{}, 2, "--tenant, --installation", false, false},
+		"no app id":                         {bindValues(map[string]string{appIDEnv: ""}), good, tenantCalls{}, 1, appIDEnv + " is not set", false, false},
+		"no app key":                        {bindValues(map[string]string{appPrivateKeyEnv: ""}), good, tenantCalls{}, 1, appPrivateKeyEnv + " is not set", false, false},
+		"no database":                       {bindValues(map[string]string{"IPSO_DATABASE_URL": ""}), good, tenantCalls{}, 1, "IPSO_DATABASE_URL is not set", false, false},
+		"the migration credential":          {bindValues(map[string]string{"IPSO_MIGRATE_DATABASE_URL": migrateURL}), good, tenantCalls{}, 1, "must not hold the migration credential", false, false},
+		"the start gate":                    {bindValues(nil), good, tenantCalls{checkAppErr: errors.New("refusing to start")}, 1, "refusing to start", false, false},
+		"GitHub does not know it":           {bindValues(nil), good, tenantCalls{accountErr: errors.New("read the installation: github: not found")}, 1, "not found", true, false},
+		"another account":                   {bindValues(nil), good, tenantCalls{accountLogin: "somebody-else"}, 1, `installation 7 is not on the account "acme"`, true, false},
+		"the mapping refuses":               {bindValues(nil), good, tenantCalls{accountLogin: "acme", bindErr: tenancy.ErrInstallationBound}, 1, "bound to another tenant", true, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls := tc.calls
+			code, stdout, stderr := invoke(t, tenantDeps(tc.values, &calls), append([]string{"tenant", "bind-installation"}, tc.args...)...)
+			if code != tc.code || !strings.Contains(stderr, tc.want) {
+				t.Errorf("code %d, stderr %q; want code %d containing %q", code, stderr, tc.code, tc.want)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want none", stdout)
+			}
+			if (len(calls.asked) != 0) != tc.asked {
+				t.Errorf("GitHub asked = %v, want %v", calls.asked, tc.asked)
+			}
+			if (calls.bind != nil) != tc.bound {
+				t.Errorf("bind = %+v, want written %v", calls.bind, tc.bound)
+			}
+			if name == "another account" && strings.Contains(stderr, "somebody-else") {
+				t.Errorf("stderr names the account GitHub answered: %q", stderr)
+			}
+			if name == "the migration credential" && len(calls.opened) != 0 {
+				t.Errorf("a connection was opened with the migration credential in the environment: %v", calls.opened)
+			}
+			for _, secret := range []string{"app-pass", "migrate-pass", "marker-private-key", testKEKValue} {
+				if strings.Contains(stdout+stderr, secret) {
+					t.Errorf("output contains a credential: %q %q", stdout, stderr)
+				}
+			}
+		})
 	}
 }
