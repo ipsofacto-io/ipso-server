@@ -17,7 +17,7 @@ const (
 // SeedEveryTable writes a tenant with at least one row in every table the application role can write
 // and that the lifecycle commands treat: the tenant, its wrapped key and its installation binding, scopes and their history,
 // decisions and their history, supersession, waivers, premises, proposals, identity, sessions, the action
-// log and usage. It runs as the application role under row-level security, so every trigger runs as it
+// log, usage, and an uploaded verdict. It runs as the application role under row-level security, so every trigger runs as it
 // does in production. The tombstone has no application insert and is not seeded here.
 func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 	t.Helper()
@@ -130,4 +130,17 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 		INSERT INTO identity.action_log (tenant_id, principal_id, responsible_id, action, subject)
 		VALUES ($1::uuid, $2::uuid, $2::uuid, 'api.read', 'registry')`, tenant, person)
 	mustExec(`INSERT INTO llm.usage (tenant_id, month, tokens) VALUES ($1::uuid, '2026-01-01', 1)`, tenant)
+
+	var upload string
+	mustScan(`
+		INSERT INTO verification.upload
+			(tenant_id, installation_id, repository_id, repo, run_id, run_attempt, sha, ref, event_name, workflow_ref,
+			 check_name, env, ipso_version, evaluated_at, build_sha256, sarif_sha256, evidence, content_sha256)
+		VALUES ($1::uuid, 1, 1, 'acme/payments', 1, 1, repeat('ab', 20), 'refs/heads/main', 'push',
+		        'acme/payments/.github/workflows/ci.yml@refs/heads/main', 'plan', 'prod', '0.5.0', '2026-01-01T00:00:00Z',
+		        sha256('build'), sha256('sarif'), jsonb_build_object('plan_sha256', encode(sha256('plan'), 'hex')), sha256('upload'))
+		RETURNING id`, []any{tenant}, &upload)
+	mustExec(`
+		INSERT INTO verification.verdict (tenant_id, upload_id, decision_id, slug, check_index, mode, result, violations)
+		VALUES ($1::uuid, $2::uuid, '01M5QJ0V9EVXKR4C89XNBNT5GG', 'use-tls', 0, 'block', 'fail', 2)`, tenant, upload)
 }

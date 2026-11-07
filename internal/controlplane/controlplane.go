@@ -56,6 +56,13 @@ type Config struct {
 	PublicURL string
 	Providers []login.ProviderConfig
 	Secrets   func(name string) string
+	// CIAudience and Repositories turn on verdict uploads (ADR-0102), and are set together or not at all.
+	// CIAudience is what the OIDC tokens of CI jobs name, and it has to differ from Audience and from
+	// MCPResourceURL. Repositories is the GitHub App that says which installation covers a repository.
+	// CIIssuer is the issuer of those tokens, and defaults to GitHub Actions. Only a test sets it.
+	CIAudience   string
+	CIIssuer     string
+	Repositories Repositories
 	// Limits bound every request of both handlers. A zero field takes its default.
 	Limits api.Limits
 	// Client reads the authorization servers' metadata. Default: a client with a 10 second timeout.
@@ -118,9 +125,24 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		}
 		sessions = &api.Sessions{Origin: signIn.Origin(), Lookup: sessionCaller(signIn, cfg.Tenant)}
 	}
+	var uploads *api.Uploads
+	if cfg.CIAudience != "" {
+		if cfg.CIIssuer == "" {
+			cfg.CIIssuer = authn.GitHubActionsIssuer
+		}
+		ciVerifier, _, err := authn.Discover(ctx, cfg.Client, cfg.CIIssuer, cfg.CIAudience)
+		if err != nil {
+			return nil, fmt.Errorf("the CI authorization server: %w", err)
+		}
+		if err := cfg.Repositories.Verify(ctx); err != nil {
+			return nil, fmt.Errorf("the GitHub App: %w", err)
+		}
+		uploads = &api.Uploads{Verifier: ciVerifier, Lookup: newUploadMapper(cfg.DB, cfg.Tenant, cfg.Repositories, cfg.Log).lookup}
+	}
 	apiHandler, err := api.New(api.Config{
 		DB:       cfg.DB,
 		Verifier: verifier,
+		Uploads:  uploads,
 		Callers: func(ctx context.Context, claims authn.Claims) (api.Caller, bool) {
 			principal, ok := svc.principal(ctx, claims)
 			return api.Caller{Tenant: cfg.Tenant, Principal: principal}, ok
@@ -222,6 +244,10 @@ func (c Config) validate() error {
 		return errors.New("the MCP issuer and the MCP resource URL are set together or not at all")
 	case c.MCPResourceURL != "" && c.MCPResourceURL == c.Audience:
 		return errors.New("the API and the remote MCP handler need distinct audiences")
+	case (c.CIAudience == "") != (c.Repositories == nil):
+		return errors.New("the CI audience and the GitHub App are set together or not at all")
+	case c.CIAudience != "" && (c.CIAudience == c.Audience || c.CIAudience == c.MCPResourceURL):
+		return errors.New("verdict uploads need an audience of their own, distinct from the API and the remote MCP handler")
 	case (len(c.Providers) == 0) != (c.PublicURL == ""):
 		return errors.New("the public URL and the login providers are set together or not at all")
 	}

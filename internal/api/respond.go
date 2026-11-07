@@ -23,6 +23,7 @@ const (
 	errUnsupportedMedia = "unsupported media type"
 	errRateLimited      = "rate limited"
 	errTimeout          = "timeout"
+	errUnavailable      = "unavailable"
 	errResponseTooLarge = "response too large"
 	errInternal         = "internal"
 )

@@ -13,7 +13,7 @@ import (
 )
 
 // TestPactProviderIpsoServer verifies the ipso-web pact against the real handler, its guard
-// included, on PostgreSQL 18. The fixture seeds stateRegistry once, and the request filter swaps
+// included, on PostgreSQL 18. The fixture seeds stateRegistry and stateVerdicts once, and the request filter swaps
 // the pact's example token for a signed one that speaks for a person of tenant A. A request the
 // pact sends without a token is left without one.
 func TestPactProviderIpsoServer(t *testing.T) {
@@ -31,7 +31,7 @@ func TestPactProviderIpsoServer(t *testing.T) {
 		ProviderBaseURL:    served.URL,
 		PactFiles:          []string{pact},
 		FailIfNoPactsFound: true,
-		StateHandlers:      models.StateHandlers{stateRegistry: seeded},
+		StateHandlers:      models.StateHandlers{stateRegistry: seeded, stateVerdicts: seeded},
 		RequestFilter: func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != "" {

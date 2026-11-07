@@ -2,11 +2,13 @@ openapi: 3.1.0
 info:
   title: ipso control plane API
   version: 0.1.0
-  summary: Read the decision registry, the review queues, and the audit answers of one tenant.
+  summary: Read the decision registry, the review queues, the audit answers and the CI verdicts of one tenant.
   description: >-
-    Every route reads, and none writes before authorization exists (IPSO-66). The tenant is always the one
-    the bearer token or the session cookie speaks for, so no route takes a tenant, and a query key `tenant`
-    or `tenant_id` is 400. A request that carries an Authorization header is read as a bearer call, whatever
+    Every route reads but one, and none writes before authorization exists (IPSO-66). The exception is
+    POST /v1/verdicts, which a CI job calls with its own GitHub Actions token and which stores the verdicts of
+    one run (ADR-0102). The tenant is always the one the bearer token or the session cookie speaks for, or,
+    for that upload, the one that owns the installation of the repository the signed token names. So no
+    route takes a tenant, and a query key `tenant` or `tenant_id` is 400. A request that carries an Authorization header is read as a bearer call, whatever
     cookie it also carries.
     A repeated query key, and a query key the operation does not list, are 400. Times are RFC 3339. Lists
     page by id from the highest: pass the last `id` of a page as `before` to read the next one. An answer
@@ -25,6 +27,8 @@ tags:
     description: Proposals that wait for a person.
   - name: audit
     description: The five audit questions of section 2.3 (ADR-0055).
+  - name: verification
+    description: The verdicts a CI job uploads, and the per-repository and per-decision results (ADR-0102).
 paths:
   /v1/resolve:
     post:
@@ -467,6 +471,108 @@ paths:
           $ref: '#/components/responses/Internal'
         '503':
           $ref: '#/components/responses/Timeout'
+  /v1/verdicts:
+    get:
+      operationId: list_verdicts
+      tags: [verification]
+      summary: List the stored verdicts, newest first, for a repository or a decision or all.
+      description: >-
+        Each item is one decision check of one uploaded run, with the run it came from. The run, the commit,
+        the workflow and the repository are the ones the signed CI token named when it was uploaded, and
+        `run_url` is built from them.
+      parameters:
+        - $ref: '#/components/parameters/VerdictRepo'
+        - $ref: '#/components/parameters/VerdictDecision'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of verdicts, newest first. Pass the last `id` as `before` for the next page.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [verdicts]
+                properties:
+                  verdicts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/StoredVerdict'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+    post:
+      operationId: upload_verdicts
+      tags: [verification]
+      summary: Store the verdicts of one CI run.
+      description: >-
+        Accepted only with a GitHub Actions OIDC token for this server's CI audience, in the Authorization
+        header. The tenant is the one that owns the GitHub App installation of the repository the token names,
+        found through GitHub and the installation mapping (ADR-0101), and the body has no field that names a
+        tenant, a repository, a commit or a run. The route exists only when the server is configured for
+        uploads, and it takes no query. The body holds the verdict report an `ipso check` command wrote with
+        `--report`, and the SHA-256 of the SARIF file it wrote with `--sarif`. Plan values, resource addresses,
+        violation messages and SARIF never leave the runner (ADR-0006). The same run, attempt and content is
+        stored once: a repeat is 200 with the first upload's id, and a new upload is 201.
+      security:
+        - ciToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerdictUpload'
+      responses:
+        '200':
+          description: The same run had already uploaded the same content, and nothing was added.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadAnswer'
+        '201':
+          description: The verdicts were stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadAnswer'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          description: No bearer token, or one that is not a valid GitHub Actions token for the CI audience.
+          headers:
+            WWW-Authenticate:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: No installation of this server's tenant covers the repository the token names.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
 components:
   securitySchemes:
     bearerAuth:
@@ -477,6 +583,15 @@ components:
         A signed JWT from the configured issuer for this API's audience. It is read from the Authorization
         header only. Which tenant and principal it speaks for is set by the login that the issuer and the
         subject of the token are bound to (ADR-0093).
+    ciToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        The OIDC token of a GitHub Actions job (issuer https://token.actions.githubusercontent.com), requested
+        for the audience this server's operator set for uploads. The repository, run, commit and workflow it
+        names are GitHub's word and are what the upload is recorded under. It is accepted only by
+        POST /v1/verdicts, and a token for the API is not accepted there.
     sessionCookie:
       type: apiKey
       in: cookie
@@ -535,6 +650,24 @@ components:
       schema:
         type: string
         format: uuid
+    VerdictRepo:
+      name: repo
+      in: query
+      required: false
+      description: An owner/name, compared in lowercase. Absent matches every repository.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 140
+    VerdictDecision:
+      name: decision
+      in: query
+      required: false
+      description: An EDR id or a slug. Absent matches every decision.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
     Repo:
       name: repo
       in: query
@@ -616,7 +749,238 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: The request ran past its deadline, or GitHub or the store could not say which installation covers the repository.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
   schemas:
+    Sha256:
+      type: string
+      pattern: '^[0-9a-f]{64}$'
+      description: A lowercase hex SHA-256.
+    VerdictCheck:
+      type: string
+      enum: [plan, ci, checkov, pulumi, cloudformation, arm, depcruise, semgrep, archunit, importlinter, kyverno, gatekeeper, eslint]
+      description: The ipso check command that wrote the report.
+    CheckVerdict:
+      type: object
+      additionalProperties: false
+      required: [decision_id, slug, check_index, mode, result, violations]
+      properties:
+        decision_id:
+          type: string
+          pattern: '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+          description: The EDR id of the decision.
+        slug:
+          type: string
+          pattern: '^[a-z0-9]+(-[a-z0-9]+)*$'
+          maxLength: 128
+        check_index:
+          type: integer
+          minimum: 0
+          maximum: 1048575
+        mode:
+          type: string
+          enum: [block, warn, advise]
+        result:
+          type: string
+          enum: [pass, fail, waived, error]
+        violations:
+          type: integer
+          minimum: 0
+          maximum: 2147483647
+          description: The number of denials. 0 for pass and error, at least 1 for fail and waived.
+    VerdictReport:
+      type: object
+      additionalProperties: false
+      required: [report_version, ipso_version, evaluated_at, env, build_sha256, verdicts]
+      description: >-
+        The report of ADR-0030, version 1, exactly as the command wrote it. Beyond the six keys every report
+        has, each check has its own keys, and the server refuses a report with any other set. plan has
+        plan_sha256. ci has commit_sha and evidence_sha256. checkov has evidence_sha256. pulumi,
+        cloudformation and arm have adapter, equal to the check, and input_sha256. depcruise, semgrep,
+        archunit, importlinter, kyverno, gatekeeper and eslint have paths and their engine's version key
+        (depcruise_version, semgrep_version, archunit_version, importlinter_version, kyverno_version,
+        gator_version, eslint_version), which is empty when the engine did not run.
+      properties:
+        report_version:
+          type: integer
+          enum: [1]
+        ipso_version:
+          type: string
+          minLength: 1
+          maxLength: 64
+        evaluated_at:
+          type: string
+          format: date-time
+        env:
+          type: string
+          maxLength: 256
+        build_sha256:
+          $ref: '#/components/schemas/Sha256'
+        verdicts:
+          type: array
+          maxItems: 5000
+          items:
+            $ref: '#/components/schemas/CheckVerdict'
+        plan_sha256:
+          $ref: '#/components/schemas/Sha256'
+        evidence_sha256:
+          $ref: '#/components/schemas/Sha256'
+        input_sha256:
+          $ref: '#/components/schemas/Sha256'
+        commit_sha:
+          type: string
+          pattern: '^[0-9a-f]{40}$|^[0-9a-f]{64}$'
+        adapter:
+          type: string
+          enum: [pulumi, cloudformation, arm]
+        paths:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 512
+        depcruise_version:
+          type: string
+          maxLength: 64
+        semgrep_version:
+          type: string
+          maxLength: 64
+        archunit_version:
+          type: string
+          maxLength: 64
+        importlinter_version:
+          type: string
+          maxLength: 64
+        kyverno_version:
+          type: string
+          maxLength: 64
+        gator_version:
+          type: string
+          maxLength: 64
+        eslint_version:
+          type: string
+          maxLength: 64
+    VerdictUpload:
+      type: object
+      additionalProperties: false
+      required: [check, report]
+      properties:
+        check:
+          $ref: '#/components/schemas/VerdictCheck'
+        report:
+          $ref: '#/components/schemas/VerdictReport'
+        sarif_sha256:
+          $ref: '#/components/schemas/Sha256'
+    UploadAnswer:
+      type: object
+      additionalProperties: false
+      required: [id, verdicts]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The stored upload. For a repeat, the first one.
+        verdicts:
+          type: integer
+          minimum: 0
+    StoredVerdict:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - upload_id
+        - decision_id
+        - slug
+        - check_index
+        - mode
+        - result
+        - violations
+        - repo
+        - sha
+        - ref
+        - event
+        - workflow_ref
+        - run_id
+        - run_attempt
+        - run_url
+        - check
+        - env
+        - ipso_version
+        - evaluated_at
+        - recorded_at
+        - build_sha256
+        - sarif_sha256
+        - evidence
+      properties:
+        id:
+          type: string
+          format: uuid
+        upload_id:
+          type: string
+          format: uuid
+        decision_id:
+          type: string
+        slug:
+          type: string
+        check_index:
+          type: integer
+        mode:
+          type: string
+          enum: [block, warn, advise]
+        result:
+          type: string
+          enum: [pass, fail, waived, error]
+        violations:
+          type: integer
+        repo:
+          type: string
+          description: The lowercase owner/name the signed token named.
+        sha:
+          type: string
+        ref:
+          type: string
+        event:
+          type: string
+          description: The GitHub event that started the workflow.
+        workflow_ref:
+          type: string
+        run_id:
+          type: integer
+          format: int64
+        run_attempt:
+          type: integer
+        run_url:
+          type: string
+          format: uri
+        check:
+          $ref: '#/components/schemas/VerdictCheck'
+        env:
+          type: string
+        ipso_version:
+          type: string
+        evaluated_at:
+          type: string
+          format: date-time
+          description: The time the runner says it evaluated the checks.
+        recorded_at:
+          type: string
+          format: date-time
+          description: The time the server stored the upload.
+        build_sha256:
+          $ref: '#/components/schemas/Sha256'
+        sarif_sha256:
+          oneOf:
+            - $ref: '#/components/schemas/Sha256'
+            - type: 'null'
+          description: The digest of the SARIF file the same command wrote, or null.
+        evidence:
+          type: object
+          description: The hashes, paths and engine version only that check's report has.
     Error:
       type: object
       additionalProperties: false
@@ -633,6 +997,7 @@ components:
             - unsupported media type
             - rate limited
             - timeout
+            - unavailable
             - response too large
             - internal
     Decision:

@@ -19,6 +19,8 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"time"
@@ -35,6 +37,11 @@ const (
 	writeAccess   = "write"
 	acceptJSON    = "application/vnd.github+json"
 	acceptRawFile = "application/vnd.github.raw+json"
+)
+
+var (
+	ownerLogin = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,39}$`)
+	repoName   = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
 )
 
 // appPermissions is the permission set of section 3.1. Verify refuses an App with any other.
@@ -179,6 +186,54 @@ func (a *App) InstallationAccount(ctx context.Context, installationID int64) (st
 		return "", errors.New("the installation has no account")
 	}
 	return answer.Account.Login, nil
+}
+
+// Installation is the installation of this App that covers a repository.
+type Installation struct {
+	ID int64
+	// AccountID is GitHub's id of the account the installation is on. A repository's owner is that
+	// account, which is how a caller checks that the installation is the owner's.
+	AccountID int64
+}
+
+// RepositoryInstallation returns the installation of this App on a repository, as GitHub answers it to the
+// App itself. GitHub answers not found when the App is not installed on the repository, so a repository the
+// App does not cover has no installation to map (ADR-0102). A suspended installation is refused the same way,
+// because the account has withdrawn the App's access, and both wrap ErrNotFound. The names are checked before
+// they reach the path.
+func (a *App) RepositoryInstallation(ctx context.Context, owner, name string) (Installation, error) {
+	if !ownerLogin.MatchString(owner) || !repoName.MatchString(name) {
+		return Installation{}, errors.New("the repository name is not owner/name")
+	}
+	appID, err := strconv.ParseInt(a.id, 10, 64)
+	if err != nil {
+		return Installation{}, errors.New("the app id is not a number")
+	}
+	token, err := a.jwt()
+	if err != nil {
+		return Installation{}, err
+	}
+	var answer struct {
+		ID          int64  `json:"id"`
+		AppID       int64  `json:"app_id"`
+		SuspendedAt string `json:"suspended_at"`
+		Account     struct {
+			ID int64 `json:"id"`
+		} `json:"account"`
+	}
+	path := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(name) + "/installation"
+	if err := a.call(ctx, token, http.MethodGet, path, nil, &answer); err != nil {
+		return Installation{}, fmt.Errorf("read the repository installation: %w", err)
+	}
+	switch {
+	case answer.AppID != appID:
+		return Installation{}, errors.New("the installation belongs to another app")
+	case answer.SuspendedAt != "":
+		return Installation{}, fmt.Errorf("the installation is suspended: %w", ErrNotFound)
+	case answer.ID <= 0 || answer.Account.ID <= 0:
+		return Installation{}, errors.New("the installation has no id or no account")
+	}
+	return Installation{ID: answer.ID, AccountID: answer.Account.ID}, nil
 }
 
 // repoClient mints a token limited to one repository and to perms, which must be a subset of

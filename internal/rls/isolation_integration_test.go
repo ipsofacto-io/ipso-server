@@ -329,6 +329,16 @@ func smuggleInserts() []smuggle {
 		{"tenancy.tenant", `INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1::uuid, 'smuggled')`, []any{tenantA}, true},
 		{"tenancy.tenant_key", `INSERT INTO tenancy.tenant_key (tenant_id, wrapped_dek) VALUES ($1::uuid, decode(repeat('ab', 60), 'hex'))`, []any{tenantA}, true},
 		{"tenancy.installation", `INSERT INTO tenancy.installation (installation_id, tenant_id) VALUES (987654321, $1::uuid)`, []any{tenantA}, true},
+		{"verification.upload", `
+			INSERT INTO verification.upload
+				(tenant_id, installation_id, repository_id, repo, run_id, run_attempt, sha, ref, event_name, workflow_ref,
+				 check_name, env, ipso_version, evaluated_at, build_sha256, evidence, content_sha256)
+			VALUES ($1::uuid, 2, 2, 'acme/smuggled', 2, 1, repeat('cd', 20), 'refs/heads/main', 'push', 'acme/smuggled/.github/workflows/ci.yml@main',
+			        'plan', '', '0.5.0', '2026-01-01T00:00:00Z', sha256('b'), '{}'::jsonb, sha256('smuggled'))`, []any{tenantA}, true},
+		// The policy refuses the row before the foreign key to the upload is asked, so any upload id does.
+		{"verification.verdict", `
+			INSERT INTO verification.verdict (tenant_id, upload_id, decision_id, slug, check_index, mode, result, violations)
+			VALUES ($1::uuid, $2::uuid, '01M5QJ0V9EVXKR4C89XNBNT5GG', 'smuggled', 0, 'block', 'pass', 0)`, []any{tenantA, decisionKeep}, true},
 		// The application role has no INSERT on the tombstone at all, so the privilege check refuses it.
 		{"tenancy.offboarding", `INSERT INTO tenancy.offboarding (tenant_id, deleted_rows, deleted_jobs, key_destroyed) VALUES ($1::uuid, 0, 0, false)`, []any{tenantA}, false},
 		{"identity.login", `INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1::uuid, $1::uuid, 'https://idp.example.test', 'smuggled')`, []any{tenantA}, true},
@@ -483,6 +493,8 @@ func policyTables() []string {
 		"tenancy.offboarding",
 		"tenancy.tenant",
 		"tenancy.tenant_key",
+		"verification.upload",
+		"verification.verdict",
 	}
 	sort.Strings(tables)
 	return tables
@@ -518,6 +530,8 @@ func expectedPolicies() []string {
 		"tenancy.offboarding":               "SELECT",
 		"tenancy.tenant":                    "SELECT INSERT",
 		"tenancy.tenant_key":                "SELECT INSERT",
+		"verification.upload":               "SELECT INSERT",
+		"verification.verdict":              "SELECT INSERT",
 	}
 	// The migration role reads, writes and deletes every tenant table, because the restore and offboard
 	// commands run as it (ADR-0100). The exceptions are the tables a restore does not write, the table
