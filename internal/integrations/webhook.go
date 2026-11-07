@@ -25,6 +25,13 @@ const (
 	queueSize      = 256
 	workerCount    = 4
 	jobTimeout     = 2 * time.Minute
+	// mergedWorkerCount works the merged pull request jobs apart from the check runs, so a slow model never
+	// delays a check run (ADR-0103).
+	mergedWorkerCount = 2
+	// mergedJobTimeout bounds a merged pull request job. The gateway gives each route 90 seconds, and up to 600
+	// for a model served on CPU (ADR-0088), and tries the next route when one fails, so the bound of a check
+	// run would cut a call that failed over to a second route and lose the tokens it spent.
+	mergedJobTimeout = 15 * time.Minute
 	// lookupTimeout bounds the tenant lookup of a delivery. GitHub gives a delivery 10 seconds.
 	lookupTimeout = 5 * time.Second
 	// evaluateTimeout leaves the rest of jobTimeout to close the check run.
@@ -53,7 +60,8 @@ type MergedPullRequest struct {
 }
 
 // Config is what the service needs. OnMerged is optional. When it is nil, a merged pull request
-// mints no token and starts no work (ADR-0062).
+// mints no token and starts no work (ADR-0062). ipso-server webhooks sets it when an LLM gateway is
+// configured (ADR-0103).
 //
 // Tenants maps the installation of a delivery to its tenant, and reports false for an installation no
 // tenant owns. A delivery that would start work is answered 403 and starts nothing when the installation
@@ -70,14 +78,18 @@ type Config struct {
 type Service struct {
 	cfg   Config
 	queue chan job
-	seen  *deliverySet
-	// timeout bounds one job. Zero means jobTimeout.
+	// merged queues the merged pull request jobs, which wait on a model and have workers of their own.
+	merged chan job
+	seen   *deliverySet
+	// timeout bounds one job. Zero means jobTimeout, or mergedJobTimeout for a merged pull request.
 	timeout time.Duration
 }
 
 type job struct {
 	delivery string
 	name     string
+	// merged marks a merged pull request job, which runs on its own workers and under its own bound.
+	merged bool
 	// installation is the one the signed payload names. tenant is what the mapping says it belongs to,
 	// set by receive before the job is queued. A job never takes its tenant from a payload.
 	installation int64
@@ -87,33 +99,39 @@ type job struct {
 
 // NewService returns a service. Run its workers with Run before serving Handler.
 func NewService(cfg Config) *Service {
-	return &Service{cfg: cfg, queue: make(chan job, queueSize), seen: newDeliverySet(seenDeliveries)}
+	return &Service{cfg: cfg, queue: make(chan job, queueSize), merged: make(chan job, queueSize), seen: newDeliverySet(seenDeliveries)}
 }
 
-// Run works the queue until ctx ends, then finishes what was queued, for at most drainTimeout.
+// Run works the queues until ctx ends, then finishes what was queued, for at most drainTimeout. The check
+// runs and the merged pull request jobs have workers of their own.
 func (s *Service) Run(ctx context.Context) {
 	jobContext, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 	var workers sync.WaitGroup
 	stop := make(chan struct{})
-	for range workerCount {
-		workers.Go(func() {
-			for {
-				select {
-				case next := <-s.queue:
-					s.work(jobContext, next)
-				case <-stop:
-					for {
-						select {
-						case next := <-s.queue:
-							s.work(jobContext, next)
-						default:
-							return
+	for _, lane := range []struct {
+		queue chan job
+		count int
+	}{{s.queue, workerCount}, {s.merged, mergedWorkerCount}} {
+		for range lane.count {
+			workers.Go(func() {
+				for {
+					select {
+					case next := <-lane.queue:
+						s.work(jobContext, next)
+					case <-stop:
+						for {
+							select {
+							case next := <-lane.queue:
+								s.work(jobContext, next)
+							default:
+								return
+							}
 						}
 					}
 				}
-			}
-		})
+			})
+		}
 	}
 	<-ctx.Done()
 	close(stop)
@@ -136,6 +154,9 @@ func (s *Service) work(ctx context.Context, next job) {
 	limit := s.timeout
 	if limit == 0 {
 		limit = jobTimeout
+		if next.merged {
+			limit = mergedJobTimeout
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
@@ -212,8 +233,12 @@ func (s *Service) receive(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
+	queue := s.queue
+	if next.merged {
+		queue = s.merged
+	}
 	select {
-	case s.queue <- *next:
+	case queue <- *next:
 		w.WriteHeader(http.StatusAccepted)
 	default:
 		// GitHub records the failed delivery, and it can be redelivered.
@@ -317,7 +342,7 @@ func (s *Service) routePullRequest(body []byte) (*job, error) {
 		if payload.Number <= 0 {
 			return nil, errors.New("bad pull request")
 		}
-		return &job{name: "merged", installation: payload.Installation.ID, run: func(ctx context.Context, tenant uuid.UUID) error {
+		return &job{name: "merged", merged: true, installation: payload.Installation.ID, run: func(ctx context.Context, tenant uuid.UUID) error {
 			client, err := s.cfg.App.repoClient(ctx, payload.Installation.ID, payload.Repository.ID, payload.Repository.FullName, map[string]string{
 				"metadata": readAccess, "pull_requests": readAccess,
 			})
@@ -423,8 +448,8 @@ func (s *Service) checkJob(name string, install installation, repo repository, s
 }
 
 // deliverySet remembers recent delivery ids, so a repeated delivery does no work twice. It is in
-// memory and bounded, because this service has no database. A restart forgets it, and the worst
-// case is one more check run.
+// memory and bounded. A restart forgets it, and the worst case is one more check run, or one more read of a
+// discussion that sends the model nothing, because a comment already turned into a proposal is not sent again.
 type deliverySet struct {
 	mu    sync.Mutex
 	limit int

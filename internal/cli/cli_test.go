@@ -10,6 +10,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -242,6 +244,80 @@ func TestWebhooksServes(t *testing.T) {
 	}
 	if _, ok, err := got.Tenants(context.Background(), 43); err != nil || ok {
 		t.Errorf("Tenants(43) = %v, %v; want no tenant", ok, err)
+	}
+}
+
+const gatewayConfig = `{"routes":[{"name":"mistral","provider":"mistral","model":"mistral-medium-latest","key_env":"IPSO_LLM_MISTRAL"}],"default":["mistral"],"monthly_tokens":1000000}`
+
+func writeGatewayConfig(t *testing.T, text string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "gateway.json")
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The hook that reads the discussion of a merged pull request and calls a model exists only when the operator
+// configured a gateway, and its tenant is the one the installation mapping gave (ADR-0103).
+func TestWebhooksBuildsTheMergedHookFromTheGatewayConfig(t *testing.T) {
+	t.Setenv("IPSO_LLM_MISTRAL", "key-marker-1")
+	values := webhookEnv(t)
+	values[gatewayConfigEnv] = writeGatewayConfig(t, gatewayConfig)
+	var got integrations.Config
+	d := tenantDeps(values, &tenantCalls{})
+	d.serve = func(_ context.Context, listener net.Listener, cfg integrations.Config) error {
+		got = cfg
+		return listener.Close()
+	}
+	code, _, stderr := invoke(t, d, "webhooks")
+	if code != 0 || got.OnMerged == nil {
+		t.Fatalf("code %d, hook %v, stderr %q", code, got.OnMerged != nil, stderr)
+	}
+	// It is the proposals hook: with no tenant it returns before it reads anything from GitHub, and the nil
+	// client would panic if it did.
+	if err := got.OnMerged(t.Context(), integrations.MergedPullRequest{Repo: "acme/payments", Number: 7}); err == nil || err.Error() != "no tenant" {
+		t.Fatalf("the hook answered %v for a merged pull request with no tenant", err)
+	}
+}
+
+func TestWebhooksRefusesABadGatewayWithoutPrintingAKey(t *testing.T) {
+	const key = "key-marker-2"
+	for name, tc := range map[string]struct {
+		config string // empty means the file does not exist
+		key    string
+		want   string
+	}{
+		"a missing file":      {"", key, gatewayConfigEnv},
+		"not JSON":            {"{", key, "llm gateway config"},
+		"an unknown field":    {`{"routes":[],"surprise":1}`, key, "llm gateway config"},
+		"a route with no key": {gatewayConfig, "", "IPSO_LLM_MISTRAL is not set"},
+		"a route outside the EU": {`{"routes":[{"name":"bedrock","provider":"bedrock","model":"anthropic.claude-x","region":"us-east-1","key_env":"IPSO_LLM_MISTRAL"}],"default":["bedrock"],"monthly_tokens":1000}`,
+			key, "must be EU-resident"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("IPSO_LLM_MISTRAL", tc.key)
+			values := webhookEnv(t)
+			values[gatewayConfigEnv] = filepath.Join(t.TempDir(), "absent.json")
+			if tc.config != "" {
+				values[gatewayConfigEnv] = writeGatewayConfig(t, tc.config)
+			}
+			served := false
+			d := tenantDeps(values, &tenantCalls{})
+			d.serve = func(_ context.Context, listener net.Listener, _ integrations.Config) error {
+				served = true
+				return listener.Close()
+			}
+			code, stdout, stderr := invoke(t, d, "webhooks")
+			if code != 1 || served || !strings.Contains(stderr, tc.want) {
+				t.Fatalf("code %d, served %v, stderr %q; want code 1 containing %q", code, served, stderr, tc.want)
+			}
+			for _, secret := range []string{key, "app-pass", values[webhookSecretEnv], "PRIVATE KEY"} {
+				if strings.Contains(stdout+stderr, secret) {
+					t.Errorf("output contains a credential: %q %q", stdout, stderr)
+				}
+			}
+		})
 	}
 }
 

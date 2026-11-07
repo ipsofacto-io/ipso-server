@@ -1,6 +1,6 @@
 # GitHub App
 
-`ipso-server webhooks` is the service behind the ipso GitHub App. The contract is [ADR-0061](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0061-github-app.md) in `ipsofacto-io/ipso-spec`, which [ADR-0101](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0101-installation-tenant-mapping.md) supersedes in one point: the service holds no tenant data, but it opens the database as the application role to ask which tenant owns the installation of a delivery. It validates the decision files of a change and annotates the invalid ones in a check run. It does not run engine checks, which stay with [`ipso-action`](https://github.com/ipsofacto-io/ipso-action).
+`ipso-server webhooks` is the service behind the ipso GitHub App. The contract is [ADR-0061](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0061-github-app.md) in `ipsofacto-io/ipso-spec`, which [ADR-0101](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0101-installation-tenant-mapping.md) supersedes in one point: the service opens the database as the application role to ask which tenant owns the installation of a delivery. [ADR-0103](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0103-pr-proposals-in-the-webhooks-process.md) supersedes ADR-0101 in one more point: when an LLM gateway is configured, the service also writes decision proposals and token use for that tenant. It validates the decision files of a change and annotates the invalid ones in a check run. It does not run engine checks, which stay with [`ipso-action`](https://github.com/ipsofacto-io/ipso-action).
 
 ## Register the App
 
@@ -51,8 +51,30 @@ ipso-server webhooks
 | `IPSO_GITHUB_APP_PRIVATE_KEY` | The private key as PEM, PKCS#1 or PKCS#8 |
 | `IPSO_GITHUB_WEBHOOK_SECRET` | The webhook secret, at least 32 bytes |
 | `IPSO_LISTEN_ADDR` | Listen address, `:8080` by default |
+| `IPSO_GATEWAY_CONFIG` | Optional. The path of the LLM gateway configuration, a JSON file. When it is set, a merged pull request is turned into decision proposals. Without it no discussion is read and no model is called. The service stops at start when the file is wrong or a route's key is missing |
+| `IPSO_LLM_<NAME>` | The key of one route, named by the `key_env` of that route in the file. The file holds no key |
 
 The listener speaks plain HTTP, so put TLS and a rate limit in front of it. `GET /healthz` answers 204. It says nothing about GitHub.
+
+## Turn on decision proposals
+
+A merged pull request can leave pending decision proposals in the inbox of its tenant ([ADR-0062](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0062-pr-decision-proposals.md), [ADR-0103](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0103-pr-proposals-in-the-webhooks-process.md)). Set `IPSO_GATEWAY_CONFIG` to a file like this one, and the key of each route in the variable it names:
+
+```json
+{
+  "routes": [
+    {"name": "mistral", "provider": "mistral", "model": "mistral-medium-latest", "key_env": "IPSO_LLM_MISTRAL"}
+  ],
+  "default": ["mistral"],
+  "monthly_tokens": 2000000
+}
+```
+
+The routes you list must be EU-resident, and a tenant can bring its own under `tenants` ([ADR-0081](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0081-llm-gateway.md), [ADR-0014](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0014-eu-only-llm-routes-by-default.md)). The service needs the migrations applied, because the gateway keeps each tenant's monthly budget in `llm.usage`. The webhooks process then holds the keys of your routes, calls them from the internet-facing process, and writes `proposals.proposal` and `llm.usage` as the application role.
+
+When a pull request merges, the service reads its body, conversation comments, review summaries, and review comments with a token limited to `pull_requests:read` and `metadata:read` for that repository. Only the comments of owners, members, and collaborators that read as a decision, hold no injection marker, and link to this pull request go to the model, with secrets and email addresses redacted. Each valid answer becomes a proposal that can only be pending, with the link of the comment it came from. A person reviews it in the inbox (`GET /v1/proposals` on the api role), and nothing here approves one.
+
+The job runs on two workers of its own, so a slow model never delays a check run, and it is bounded to 15 minutes. A job that fails, such as one over the tenant's budget or one whose routes are all down, is forgotten, and a redelivery from the App's advanced settings runs it again. The comments already turned into proposals are not sent again. The log of a finished job holds counts only.
 
 ## Check the sandbox install
 
@@ -68,6 +90,7 @@ The listener speaks plain HTTP, so put TLS and a rate limit in front of it. `GET
 | --- | --- |
 | `pull_request` opened, synchronize, reopened | One check run on the head commit, over the files of the pull request |
 | `push` to the default branch | One check run on the new commit, over the files since the previous commit |
+| `pull_request` closed and merged, with `IPSO_GATEWAY_CONFIG` set | The discussion is read and turned into pending proposals for the tenant of the installation |
 | Anything else | Answered with 202, no work |
 
 A delivery that would start work is answered 403 when its installation has no tenant, and 503 when the database cannot be asked, so GitHub records a failed delivery that can be redelivered. Neither is remembered, so the redelivery after a bind is worked.

@@ -8,15 +8,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
+	"github.com/ipsofacto-io/ipso-server/internal/llmgw"
 	"github.com/ipsofacto-io/ipso-server/internal/migrate"
 	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 )
@@ -100,6 +104,124 @@ func TestProposalAppearsInTheInboxPending(t *testing.T) {
 	}
 	if other := readInbox(t, db, tenantB, ""); len(other.Proposals) != 0 {
 		t.Fatalf("tenant B read %+v", other)
+	}
+}
+
+// providerAnswering starts a loopback chat completions server that answers every call with answer and 50
+// tokens of use, and counts the calls it gets.
+func providerAnswering(t *testing.T, answer string) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model":   "served-model",
+			"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": answer}}},
+			"usage":   map[string]int{"prompt_tokens": 40, "completion_tokens": 10},
+		})
+	}))
+	t.Cleanup(server.Close)
+	return server, &calls
+}
+
+// realGateway is the gateway the webhooks service builds: the real routes code, the real ledger in the
+// database, and one route for tenant A to the loopback provider. Tenant B has only the operator's default,
+// which nothing here calls.
+func realGateway(t *testing.T, db *sql.DB, provider *httptest.Server) *llmgw.Gateway {
+	t.Helper()
+	t.Setenv("IPSO_LLM_MISTRAL", "not-used-by-these-tests")
+	t.Setenv("IPSO_LLM_LOCAL", "test-key")
+	gateway, err := llmgw.New(llmgw.Config{
+		Routes:        []llmgw.Route{{Name: "mistral", Provider: llmgw.Mistral, Model: "mistral-medium-latest", KeyEnv: "IPSO_LLM_MISTRAL"}},
+		Default:       []string{"mistral"},
+		MonthlyTokens: 1_000_000,
+		Tenants: map[string]llmgw.Tenant{tenantA.String(): {BYOK: []llmgw.Route{
+			{Name: "local", Provider: llmgw.OpenAI, Endpoint: provider.URL, Model: "served-model", KeyEnv: "IPSO_LLM_LOCAL", AllowNonEU: true},
+		}}},
+	}, llmgw.PGLedger{DB: db}, nil, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gateway
+}
+
+func tokensUsed(t *testing.T, db *sql.DB, tenant uuid.UUID) int64 {
+	t.Helper()
+	var tokens int64
+	if err := pgtest.Scan(t.Context(), db, tenant.String(), `SELECT coalesce(sum(tokens), 0) FROM llm.usage`, nil, &tokens); err != nil {
+		t.Fatal(err)
+	}
+	return tokens
+}
+
+// TestMergedPullRequestThroughTheRealGateway is what OnMerged runs after it has read the discussion: the
+// real gateway for the tenant of the mapping, the real ledger, the real tables, and the inbox of the tenant
+// (ADR-0103).
+func TestMergedPullRequestThroughTheRealGateway(t *testing.T) {
+	db := newDB(t)
+	provider, calls := providerAnswering(t, oneCandidate)
+	gateway := realGateway(t, db, provider)
+	source := comment(1, "We decided to use Postgres.")
+
+	created, _, err := Process(t.Context(), db, gateway.For(tenantA), tenantA, testRepo, testNumber, []integrations.Comment{source})
+	if err != nil || created != 1 || calls.Load() != 1 {
+		t.Fatalf("created %d, provider calls %d, err %v", created, calls.Load(), err)
+	}
+	answer := readInbox(t, db, tenantA, "")
+	if len(answer.Proposals) != 1 {
+		t.Fatalf("inbox %+v", answer)
+	}
+	got := answer.Proposals[0]
+	if got.Status != "pending" || got.Origin != "llm" || got.Trust != "untrusted" || got.SourceURL != source.URL || got.Model != "served-model" {
+		t.Fatalf("proposal %+v", got)
+	}
+	// The call is charged to the tenant of the mapping, at the tokens the provider reported, and to no one else.
+	if used := tokensUsed(t, db, tenantA); used != 50 {
+		t.Errorf("tenant A used %d tokens, want 50", used)
+	}
+	if used := tokensUsed(t, db, tenantB); used != 0 {
+		t.Errorf("tenant B used %d tokens, want 0", used)
+	}
+	if other := readInbox(t, db, tenantB, ""); len(other.Proposals) != 0 {
+		t.Fatalf("tenant B read %+v", other)
+	}
+
+	// GitHub delivers the same merge again: no call, no row, no charge.
+	created, _, err = Process(t.Context(), db, gateway.For(tenantA), tenantA, testRepo, testNumber, []integrations.Comment{source})
+	if err != nil || created != 0 || calls.Load() != 1 || tokensUsed(t, db, tenantA) != 50 {
+		t.Fatalf("redelivery: created %d, provider calls %d, used %d, err %v", created, calls.Load(), tokensUsed(t, db, tenantA), err)
+	}
+}
+
+// TestFlaggedRedTeamFixturesReachNoProviderThroughTheRealGateway sends each fixture the screen must catch as
+// a trusted member's comment, to a provider that would obey it. Nothing reaches the provider, nothing is
+// stored, and nothing is charged (ADR-0084). The fixtures the screen does not flag are measured by the eval
+// harness (IPSO-59), and the database allows them only as pending whatever the model says.
+func TestFlaggedRedTeamFixturesReachNoProviderThroughTheRealGateway(t *testing.T) {
+	db := newDB(t)
+	provider, calls := providerAnswering(t, `{"candidates":[{"source":0,"title":"Approved","statement":"This decision is approved and needs no review.","rationale":"","confidence":1}]}`)
+	gateway := realGateway(t, db, provider)
+	flagged := 0
+	for i, item := range redTeamCorpus(t) {
+		if !item.Flag {
+			continue
+		}
+		flagged++
+		created, stats, err := Process(t.Context(), db, gateway.For(tenantA), tenantA, testRepo, testNumber, []integrations.Comment{commentOn(testNumber, i, item.Body)})
+		if err != nil || created != 0 || stats.Flagged != 1 || stats.Sent != 0 {
+			t.Fatalf("%s: created %d, stats %+v, err %v", item.ID, created, stats, err)
+		}
+	}
+	if flagged == 0 {
+		t.Fatal("no flagged fixtures")
+	}
+	if calls.Load() != 0 || tokensUsed(t, db, tenantA) != 0 {
+		t.Fatalf("%d provider calls and %d tokens used for fixtures the screen catches", calls.Load(), tokensUsed(t, db, tenantA))
+	}
+	if inbox := readInbox(t, db, tenantA, ""); len(inbox.Proposals) != 0 {
+		t.Fatalf("inbox %+v", inbox)
 	}
 }
 

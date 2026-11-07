@@ -1,8 +1,8 @@
 // Package llmgw is the LLM gateway (ADR-0081). Every model call ipso makes goes through it. It
 // picks the tenant's routes, which are EU-resident unless the tenant brought its own key and
 // accepted otherwise (ADR-0014), charges the tenant's monthly token budget, and redacts secrets
-// before a prompt leaves the server. It logs no prompt and no answer. The binary does not call it
-// yet: the control plane wires it once row-level security exists (ADR-0050).
+// before a prompt leaves the server. It logs no prompt and no answer. ipso-server webhooks builds it
+// when IPSO_GATEWAY_CONFIG names a configuration (ADR-0103).
 package llmgw
 
 import (
