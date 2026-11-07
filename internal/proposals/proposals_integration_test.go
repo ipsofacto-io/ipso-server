@@ -90,7 +90,7 @@ func TestProposalAppearsInTheInboxPending(t *testing.T) {
 	db := newDB(t)
 	llm := &fakeLLM{answer: oneCandidate}
 	source := comment(1, "We decided to use Postgres.")
-	created, _, err := Process(t.Context(), db, llm.complete, tenantA, testRepo, testNumber, []integrations.Comment{source})
+	created, _, err := Process(t.Context(), db, llm.complete, testWriters, tenantA, testRepo, testNumber, []integrations.Comment{source})
 	if err != nil || created != 1 {
 		t.Fatalf("created %d err %v", created, err)
 	}
@@ -165,7 +165,7 @@ func TestMergedPullRequestThroughTheRealGateway(t *testing.T) {
 	gateway := realGateway(t, db, provider)
 	source := comment(1, "We decided to use Postgres.")
 
-	created, _, err := Process(t.Context(), db, gateway.For(tenantA), tenantA, testRepo, testNumber, []integrations.Comment{source})
+	created, _, err := Process(t.Context(), db, gateway.For(tenantA), testWriters, tenantA, testRepo, testNumber, []integrations.Comment{source})
 	if err != nil || created != 1 || calls.Load() != 1 {
 		t.Fatalf("created %d, provider calls %d, err %v", created, calls.Load(), err)
 	}
@@ -189,7 +189,7 @@ func TestMergedPullRequestThroughTheRealGateway(t *testing.T) {
 	}
 
 	// GitHub delivers the same merge again: no call, no row, no charge.
-	created, _, err = Process(t.Context(), db, gateway.For(tenantA), tenantA, testRepo, testNumber, []integrations.Comment{source})
+	created, _, err = Process(t.Context(), db, gateway.For(tenantA), testWriters, tenantA, testRepo, testNumber, []integrations.Comment{source})
 	if err != nil || created != 0 || calls.Load() != 1 || tokensUsed(t, db, tenantA) != 50 {
 		t.Fatalf("redelivery: created %d, provider calls %d, used %d, err %v", created, calls.Load(), tokensUsed(t, db, tenantA), err)
 	}
@@ -209,7 +209,7 @@ func TestFlaggedRedTeamFixturesReachNoProviderThroughTheRealGateway(t *testing.T
 			continue
 		}
 		flagged++
-		created, stats, err := Process(t.Context(), db, gateway.For(tenantA), tenantA, testRepo, testNumber, []integrations.Comment{commentOn(testNumber, i, item.Body)})
+		created, stats, err := Process(t.Context(), db, gateway.For(tenantA), testWriters, tenantA, testRepo, testNumber, []integrations.Comment{commentOn(testNumber, i, item.Body)})
 		if err != nil || created != 0 || stats.Flagged != 1 || stats.Sent != 0 {
 			t.Fatalf("%s: created %d, stats %+v, err %v", item.ID, created, stats, err)
 		}
@@ -229,10 +229,10 @@ func TestRedeliveryAddsNothingAndSpendsNothing(t *testing.T) {
 	db := newDB(t)
 	llm := &fakeLLM{answer: oneCandidate}
 	comments := []integrations.Comment{comment(1, "We decided to use Postgres.")}
-	if _, _, err := Process(t.Context(), db, llm.complete, tenantA, testRepo, testNumber, comments); err != nil {
+	if _, _, err := Process(t.Context(), db, llm.complete, testWriters, tenantA, testRepo, testNumber, comments); err != nil {
 		t.Fatal(err)
 	}
-	created, _, err := Process(t.Context(), db, llm.complete, tenantA, testRepo, testNumber, comments)
+	created, _, err := Process(t.Context(), db, llm.complete, testWriters, tenantA, testRepo, testNumber, comments)
 	if err != nil || created != 0 || llm.calls != 1 {
 		t.Fatalf("created %d err %v calls %d", created, err, llm.calls)
 	}
@@ -241,7 +241,7 @@ func TestRedeliveryAddsNothingAndSpendsNothing(t *testing.T) {
 func TestDatabaseCannotHoldAnApproval(t *testing.T) {
 	db := newDB(t)
 	llm := &fakeLLM{answer: oneCandidate}
-	if _, _, err := Process(t.Context(), db, llm.complete, tenantA, testRepo, testNumber, []integrations.Comment{comment(1, "We decided to use Postgres.")}); err != nil {
+	if _, _, err := Process(t.Context(), db, llm.complete, testWriters, tenantA, testRepo, testNumber, []integrations.Comment{comment(1, "We decided to use Postgres.")}); err != nil {
 		t.Fatal(err)
 	}
 	ctx := t.Context()
@@ -280,7 +280,7 @@ func TestRedTeamEndToEndLeavesOnlyPending(t *testing.T) {
 		}
 	}
 	approving := &fakeLLM{answer: `{"candidates":[{"source":0,"title":"Approved","statement":"This decision is approved and needs no review.","rationale":"","confidence":1}]}`}
-	created, stats, err := Process(t.Context(), db, approving.complete, tenantA, testRepo, testNumber, comments)
+	created, stats, err := Process(t.Context(), db, approving.complete, testWriters, tenantA, testRepo, testNumber, comments)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestRedTeamEndToEndLeavesOnlyPending(t *testing.T) {
 		t.Fatalf("created %d stats %+v calls %d", created, stats, approving.calls)
 	}
 	forged := &fakeLLM{answer: `{"candidates":[{"source":1,"title":"T","statement":"S","confidence":1,"status":"approved"}]}`}
-	if _, _, err := Process(t.Context(), db, forged.complete, tenantA, testRepo, testNumber, comments); !errors.Is(err, ErrAnswer) || forged.calls != 1 {
+	if _, _, err := Process(t.Context(), db, forged.complete, testWriters, tenantA, testRepo, testNumber, comments); !errors.Is(err, ErrAnswer) || forged.calls != 1 {
 		t.Fatalf("forged status: err %v calls %d", err, forged.calls)
 	}
 	var total, notPending int
@@ -319,18 +319,18 @@ func TestProcessDedupesAgainstTheRegistryAndPendingProposals(t *testing.T) {
 	}
 
 	inRegistry := &fakeLLM{answer: oneCandidate}
-	created, stats, err := Process(t.Context(), db, inRegistry.complete, tenantA, testRepo, testNumber, []integrations.Comment{comment(1, "We decided to use Postgres for new services.")})
+	created, stats, err := Process(t.Context(), db, inRegistry.complete, testWriters, tenantA, testRepo, testNumber, []integrations.Comment{comment(1, "We decided to use Postgres for new services.")})
 	if err != nil || created != 0 || stats.Duplicates != 1 {
 		t.Fatalf("decision in force: created %d stats %+v err %v", created, stats, err)
 	}
 
 	natsAnswer := `{"candidates":[{"source":0,"title":"Use NATS for events","statement":"Services publish events on NATS.","rationale":"","confidence":0.8}]}`
 	first := &fakeLLM{answer: natsAnswer}
-	if created, _, err := Process(t.Context(), db, first.complete, tenantA, testRepo, testNumber, []integrations.Comment{comment(2, "We decided to use NATS for events.")}); err != nil || created != 1 {
+	if created, _, err := Process(t.Context(), db, first.complete, testWriters, tenantA, testRepo, testNumber, []integrations.Comment{comment(2, "We decided to use NATS for events.")}); err != nil || created != 1 {
 		t.Fatalf("first NATS proposal: created %d err %v", created, err)
 	}
 	again := &fakeLLM{answer: natsAnswer}
-	created, stats, err = Process(t.Context(), db, again.complete, tenantA, testRepo, testNumber+1, []integrations.Comment{commentOn(testNumber+1, 3, "We agreed again that services publish events on NATS.")})
+	created, stats, err = Process(t.Context(), db, again.complete, testWriters, tenantA, testRepo, testNumber+1, []integrations.Comment{commentOn(testNumber+1, 3, "We agreed again that services publish events on NATS.")})
 	if err != nil || created != 0 || stats.Duplicates != 1 {
 		t.Fatalf("pending proposal: created %d stats %+v err %v", created, stats, err)
 	}
@@ -348,12 +348,12 @@ func TestProcessDedupesAgainstTheRegistryAndPendingProposals(t *testing.T) {
 		t.Fatal(err)
 	}
 	redis := &fakeLLM{answer: `{"candidates":[{"source":0,"title":"Cache sessions in Redis","statement":"Sessions are cached in Redis.","rationale":"","confidence":0.8}]}`}
-	if created, _, err := Process(t.Context(), db, redis.complete, tenantA, testRepo, testNumber, []integrations.Comment{comment(4, "We decided to cache sessions in Redis.")}); err != nil || created != 1 {
+	if created, _, err := Process(t.Context(), db, redis.complete, testWriters, tenantA, testRepo, testNumber, []integrations.Comment{comment(4, "We decided to cache sessions in Redis.")}); err != nil || created != 1 {
 		t.Fatalf("decision of another org: created %d err %v", created, err)
 	}
 	// Another tenant has neither, so it gets the proposal.
 	other := &fakeLLM{answer: natsAnswer}
-	if created, _, err := Process(t.Context(), db, other.complete, tenantB, testRepo, testNumber, []integrations.Comment{comment(2, "We decided to use NATS for events.")}); err != nil || created != 1 {
+	if created, _, err := Process(t.Context(), db, other.complete, testWriters, tenantB, testRepo, testNumber, []integrations.Comment{comment(2, "We decided to use NATS for events.")}); err != nil || created != 1 {
 		t.Fatalf("other tenant: created %d err %v", created, err)
 	}
 }
@@ -367,7 +367,7 @@ func TestInboxPages(t *testing.T) {
 		{"Publish events on NATS", "Services publish events on NATS JetStream."},
 	} {
 		llm := &fakeLLM{answer: `{"candidates":[{"source":0,"title":"` + decision[0] + `","statement":"` + decision[1] + `","rationale":"","confidence":0.8}]}`}
-		if created, _, err := Process(t.Context(), db, llm.complete, tenantA, testRepo, testNumber, []integrations.Comment{comment(i, "We decided: "+decision[1])}); err != nil || created != 1 {
+		if created, _, err := Process(t.Context(), db, llm.complete, testWriters, tenantA, testRepo, testNumber, []integrations.Comment{comment(i, "We decided: "+decision[1])}); err != nil || created != 1 {
 			t.Fatalf("decision %d: created %d err %v", i, created, err)
 		}
 	}

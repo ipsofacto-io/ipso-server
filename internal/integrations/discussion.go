@@ -12,22 +12,24 @@ const (
 	discussionPages  = 3
 )
 
-// Comment is one piece of pull request discussion, as the API returned it. Body is untrusted.
+// Comment is one piece of pull request discussion, as the API returned it. Body is untrusted, and
+// so is Author until GitHub says the login can write to the repository (RepoClient.CanWrite).
 type Comment struct {
-	ExternalID  string
-	URL         string
-	Body        string
-	Association string
-	AuthorType  string
+	ExternalID string
+	URL        string
+	Body       string
+	// Author is the login of the account that wrote it, empty when the account is gone.
+	Author     string
+	AuthorType string
 }
 
 type apiComment struct {
-	ID          int64  `json:"id"`
-	HTMLURL     string `json:"html_url"`
-	Body        string `json:"body"`
-	Association string `json:"author_association"`
-	User        struct {
-		Type string `json:"type"`
+	ID      int64  `json:"id"`
+	HTMLURL string `json:"html_url"`
+	Body    string `json:"body"`
+	User    struct {
+		Login string `json:"login"`
+		Type  string `json:"type"`
 	} `json:"user"`
 }
 
@@ -40,11 +42,11 @@ func (c *RepoClient) Discussion(ctx context.Context, number int) ([]Comment, err
 		return nil, fmt.Errorf("read the pull request: %w", err)
 	}
 	comments := []Comment{{
-		ExternalID:  "pull-" + strconv.Itoa(number),
-		URL:         pull.HTMLURL,
-		Body:        pull.Body,
-		Association: pull.Association,
-		AuthorType:  pull.User.Type,
+		ExternalID: "pull-" + strconv.Itoa(number),
+		URL:        pull.HTMLURL,
+		Body:       pull.Body,
+		Author:     pull.User.Login,
+		AuthorType: pull.User.Type,
 	}}
 	for _, source := range []struct{ prefix, path string }{
 		{"issuecomment-", fmt.Sprintf("/issues/%d/comments", number)},
@@ -59,11 +61,11 @@ func (c *RepoClient) Discussion(ctx context.Context, number int) ([]Comment, err
 			}
 			for _, item := range batch {
 				comments = append(comments, Comment{
-					ExternalID:  source.prefix + strconv.FormatInt(item.ID, 10),
-					URL:         item.HTMLURL,
-					Body:        item.Body,
-					Association: item.Association,
-					AuthorType:  item.User.Type,
+					ExternalID: source.prefix + strconv.FormatInt(item.ID, 10),
+					URL:        item.HTMLURL,
+					Body:       item.Body,
+					Author:     item.User.Login,
+					AuthorType: item.User.Type,
 				})
 			}
 			if len(batch) < discussionPerGet {

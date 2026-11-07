@@ -36,17 +36,26 @@ type Comment struct {
 }
 
 // Expected reports whether a correct pipeline proposes a decision from this comment. ADR-0062
-// reads only people who can already write to the repository, so a decision stated by anyone else
-// is not expected.
+// and ADR-0104 read only people who can already write to the repository, so a decision stated by
+// anyone else is not expected.
 func (c Comment) Expected() bool {
-	if len(c.Decision) == 0 || c.Known {
-		return false
-	}
-	switch c.Author {
+	return len(c.Decision) > 0 && !c.Known && writes(c.Author)
+}
+
+// writes reports whether a dataset label names an author who can write to the repository. The labels
+// are the author associations the datasets were written with, and the harness gives them the meaning
+// the repository permission has in production (ADR-0104).
+func writes(label string) bool {
+	switch label {
 	case "OWNER", "MEMBER", "COLLABORATOR":
 		return true
 	}
 	return false
+}
+
+// canWrite is the WriteAccess of the harness: the label of an author says what the author can do.
+func canWrite(_ context.Context, label string) (bool, error) {
+	return writes(label), nil
 }
 
 func (c Comment) externalID() string {
@@ -56,16 +65,16 @@ func (c Comment) externalID() string {
 func (t Thread) comments() []integrations.Comment {
 	out := make([]integrations.Comment, 0, len(t.Comments))
 	for _, c := range t.Comments {
-		authorType, association := "User", c.Author
+		authorType := "User"
 		if c.Author == "bot" {
-			authorType, association = "Bot", "NONE"
+			authorType = "Bot"
 		}
 		out = append(out, integrations.Comment{
-			ExternalID:  c.externalID(),
-			URL:         fmt.Sprintf("https://github.com/%s/pull/%d#%s", t.Repo, t.Number, c.externalID()),
-			Body:        c.Body,
-			Association: association,
-			AuthorType:  authorType,
+			ExternalID: c.externalID(),
+			URL:        fmt.Sprintf("https://github.com/%s/pull/%d#%s", t.Repo, t.Number, c.externalID()),
+			Body:       c.Body,
+			Author:     c.Author,
+			AuthorType: authorType,
 		})
 	}
 	return out
@@ -101,14 +110,17 @@ func PRSuite(t *testing.T, ctx context.Context, complete CompleteFunc, threads [
 			}
 		}
 		comments := thread.comments()
-		sent := proposals.Screen(thread.Repo, thread.Number, comments)
+		sent, err := proposals.Screen(ctx, canWrite, thread.Repo, thread.Number, comments)
+		if err != nil {
+			return nil, fmt.Errorf("thread %s: %w", thread.ID, err)
+		}
 		for _, id := range sent {
 			screened++
 			if byID[id].Expected() {
 				screenedHits++
 			}
 		}
-		found, stats, err := proposals.Extract(ctx, proposals.CompleteFunc(complete), thread.Repo, thread.Number, comments, nil)
+		found, stats, err := proposals.Extract(ctx, proposals.CompleteFunc(complete), canWrite, thread.Repo, thread.Number, comments, nil)
 		if stats.Sent > 0 {
 			asked++
 		}
