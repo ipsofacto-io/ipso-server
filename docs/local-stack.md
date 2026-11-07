@@ -63,11 +63,11 @@ echo "127.0.0.1 dex" | sudo tee -a /etc/hosts
 docker compose cp certs:/certs/ca.pem ./ca.pem
 ```
 
-Trust `ca.pem` in your browser or operating system for this session, or accept the warning for `https://dex:5556`. Then open exactly `http://localhost:8080/auth/login/dex`. `localhost` and `127.0.0.1` are different hosts to a cookie, and the sign-in origin is `http://localhost:8080`. Sign in as the test user (`IPSO_DEX_USER` and `IPSO_DEX_PASSWORD` of `.env`). The browser lands on `/`, which answers 401 because there is no web app yet, and the session cookie is set. Open `http://localhost:8080/v1/scopes` in the same browser to see the API answer with it.
+Trust `ca.pem` in your browser or operating system for this session, or accept the warning for `https://dex:5556`. Then open exactly `http://localhost:8080/auth/login/dex`. `localhost` and `127.0.0.1` are different hosts to a cookie, and the sign-in origin is `http://localhost:8080`. Sign in as the test user (`IPSO_DEX_USER` and `IPSO_DEX_PASSWORD` of `.env`). The browser lands on `/`, which is the web app ([docs/web-app.md](web-app.md)), and the session cookie is set, so the app shows the registry. Open `http://localhost:8080/` without signing in to see its sign-in page, and `http://localhost:8080/v1/scopes` in the same browser to see the API answer with the cookie.
 
 To sign out, run `fetch('/auth/logout', {method: 'POST'})` in the console of `http://localhost:8080`. The test user is the one the seed bound, so the sign-in works for it and for nobody else: a person Dex would let in and the seed never bound gets 403 `unknown_login`.
 
-`GET /healthz` needs no token. The routes are in [api/openapi.yaml](../api/openapi.yaml). The registry is empty, and no route writes yet (IPSO-134).
+`GET /healthz` needs no token. The routes are in [api/openapi.yaml](../api/openapi.yaml). The registry is empty, and no route writes yet (IPSO-134), so the web app reads and writes nothing.
 
 A token minted for `other-app` is refused with 401, and a valid token whose subject the tenant never bound is refused with 403. The tenant is never read from the request: a `tenant` key in the query is 400.
 

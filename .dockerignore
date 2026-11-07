@@ -8,3 +8,6 @@ api
 deploy
 **/*_test.go
 **/testdata
+# A build of web/ made on this machine is never the one the image embeds.
+web/node_modules
+internal/webapp/dist/app

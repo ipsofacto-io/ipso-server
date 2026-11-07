@@ -29,6 +29,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/proposals"
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
+	"github.com/ipsofacto-io/ipso-server/internal/webapp"
 	"github.com/ipsofacto-io/ipso-server/internal/worker"
 )
 
@@ -288,6 +289,7 @@ func apiCmd(ctx context.Context, stderr io.Writer, d deps) int {
 	defer func() { _ = db.Close() }()
 	cfg.DB = db
 	cfg.Version = Version
+	cfg.Web = webapp.Files()
 	cfg.Log = slog.New(slog.NewJSONHandler(stderr, nil))
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", address)
 	if err != nil {

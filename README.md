@@ -61,7 +61,11 @@ A request needs a bearer token in the `Authorization` header, or, when sign-in i
 
 Browser sign-in turns on when `IPSO_PUBLIC_URL` and `IPSO_LOGIN_PROVIDERS` are set ([ADR-0099](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0099-browser-login-sessions.md), [docs/login.md](docs/login.md)). `internal/login` is a relying party for Google, Microsoft, a self-hosted OpenID Connect provider, and GitHub, which has its own adapter because it returns no ID token. It runs the authorization code flow with PKCE, `state`, and a nonce, binds the provider's issuer and subject to a principal only through `identity.login`, and creates no person, so a person the tenant never bound gets 403 and the two values to bind. A session is a row of `identity.session` behind the cookie `__Host-ipso-session`, which is HttpOnly, Secure, and SameSite=Strict, ends after 8 hours, and is read by the API only when no `Authorization` header is sent. A request that could change state and comes from another origin is refused before the cookie is looked up, and the lookups of cookies a process has not kept are limited. ipso stores no password, so MFA is the provider's policy.
 
-The contract tests check that the document is valid OpenAPI 3.1, that it lists exactly the routes `internal/api` mounts, that every route but `POST /v1/resolve` is a GET, and that every request and answer of the integration tests matches it. [api/pacts/ipso-web-ipso-server.json](api/pacts/ipso-web-ipso-server.json) is the pact of the web app, consumer `ipso-web`. A pact-go consumer test writes it, and `ci / pact` verifies it against the handler on PostgreSQL and fails when the committed file differs ([ADR-0091](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0091-api-contract-tests-and-pact.md)).
+The contract tests check that the document is valid OpenAPI 3.1, that it lists exactly the routes `internal/api` mounts, that every route but `POST /v1/resolve` is a GET, and that every request and answer of the integration tests matches it. [api/pacts/ipso-web-ipso-server.json](api/pacts/ipso-web-ipso-server.json) is the pact of the web app, consumer `ipso-web`. The pact-js tests of the web app write it (`npm run test:pact` in `web/`), and `ci / pact` verifies it against the handler on PostgreSQL and fails when the committed file differs ([ADR-0091](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0091-api-contract-tests-and-pact.md)).
+
+## Web app
+
+[web/](web) is the web app of the control plane: a React, Vite and TypeScript single-page app for the registry, the review queues, the waivers and the audit questions, in the ipso brand ([ADR-0106](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0106-web-app-stack-and-serving.md), [ADR-0107](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0107-brand-kit-visual-system.md), [docs/web-app.md](docs/web-app.md)). `npm run build` in `web/` writes it to `internal/webapp/dist/app`, `go build` embeds it, and `--role=api` serves it at every path that is not the API's or the sign-in's, with a content security policy that lets a page load only its own files. It signs in with the session cookie above, holds no token, and is read-only until IPSO-134.
 
 ## Remote MCP
 
@@ -109,14 +113,20 @@ go test ./...
 go test -tags integration -count=1 ./...
 ```
 
+The web app needs Node 24. `go build` works without it and serves a sentence at `/`. To build it in:
+
+```sh
+cd web && npm ci && npm test && npm run build
+```
+
 The smoke test of the Compose stack runs in CI with `-tags compose`, against a running stack.
 
 The integration tests start PostgreSQL 18 with Testcontainers, so they need a Docker-compatible socket. They use synthetic rows only.
 
-The Pact tests link the Pact FFI 0.5 (`libpact_ffi`), so they need it on the linker path. `ci / pact` installs a pinned release and runs them:
+The web app writes the pact with its own tests, and the Go provider test verifies it. The provider test links the Pact FFI 0.5 (`libpact_ffi`), so it needs it on the linker path. `ci / pact` installs a pinned release and runs both:
 
 ```sh
-go test -tags pact -run TestPactConsumer -count=1 ./internal/api
+(cd web && npm run test:pact)
 go test -tags 'integration pact' -run TestPactProvider -count=1 ./internal/api
 ```
 

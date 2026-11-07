@@ -31,11 +31,13 @@ const (
 	maxCode  = 4096
 )
 
-// Handler serves /auth/login/{provider}, /auth/callback/{provider}, and POST /auth/logout. Every answer
+// Handler serves GET /auth/providers, /auth/login/{provider}, /auth/callback/{provider}, and POST
+// /auth/logout. Every answer
 // carries no-store and no-referrer: a callback URL holds a one-time code, and none of it should be
 // cached or sent on.
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/auth/providers", s.providerList)
 	mux.HandleFunc("/auth/login/{provider}", s.start)
 	mux.HandleFunc("/auth/callback/{provider}", s.callback)
 	mux.HandleFunc("/auth/logout", s.logout)
@@ -46,6 +48,32 @@ func (s *Service) Handler() http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// listedProvider is what a sign-in page may know of a provider: the id to link to and the kind that
+// says which button to draw. The issuer, the client id and the secret stay in the configuration.
+type listedProvider struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+}
+
+// providerList names the providers a person can sign in with, so the web app can link to
+// /auth/login/{id} without a copy of the configuration. It needs no session, because a person who has not
+// signed in has none, so a bucket of its own limits it.
+func (s *Service) providerList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	if wait, ok := s.lists.Allow(s.tenant, s.now()); !ok {
+		w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
+		writeJSON(w, http.StatusTooManyRequests, codeRateLimited)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Providers []listedProvider `json:"providers"`
+	}{s.listed})
 }
 
 // start sends the browser to the provider with a new state, nonce, and PKCE challenge, and keeps what
