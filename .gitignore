@@ -19,8 +19,12 @@
 coverage.out
 coverage.html
 bin/
-dist/
+/dist/
 vendor/
+
+# The Vite build of web/ is embedded into the binary (internal/webapp). Only the placeholder is kept.
+/internal/webapp/dist/*
+!/internal/webapp/dist/.keep
 
 # Node
 node_modules/

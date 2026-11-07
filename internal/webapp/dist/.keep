@@ -1,0 +1,2 @@
+The Vite build of web/ writes the web app to dist/app. This file keeps the directory in the repository,
+so that a build without Node (go build, go test) still compiles the embed.

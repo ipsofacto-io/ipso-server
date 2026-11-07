@@ -1,6 +1,6 @@
 // Package controlplane starts the HTTP side of the control plane: the API of ADR-0090, the remote MCP
-// handler of ADR-0077 when its own issuer is configured (ADR-0094), and the browser sign-in of ADR-0099
-// when providers are configured. Nothing is served until the start gates pass, in this order: the
+// handler of ADR-0077 when its own issuer is configured (ADR-0094), the browser sign-in of ADR-0099
+// when providers are configured, and the web app of ADR-0106 at every other path. Nothing is served until the start gates pass, in this order: the
 // connected role cannot bypass row-level security, the tenant has a row, and each authorization server
 // and each sign-in provider answers its metadata over https.
 package controlplane
@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -29,6 +30,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
+	"github.com/ipsofacto-io/ipso-server/internal/webapp"
 )
 
 const (
@@ -63,6 +65,9 @@ type Config struct {
 	CIAudience   string
 	CIIssuer     string
 	Repositories Repositories
+	// Web is the built web app, rooted at its index.html (webapp.Files). Nil serves a sentence at the paths
+	// the app would have, and logs it once at start.
+	Web fs.FS
 	// Limits bound every request of both handlers. A zero field takes its default.
 	Limits api.Limits
 	// Client reads the authorization servers' metadata. Default: a client with a 10 second timeout.
@@ -155,15 +160,30 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		return nil, err
 	}
 
+	var web http.Handler
+	if cfg.Web != nil {
+		if web, err = webapp.New(cfg.Web); err != nil {
+			return nil, fmt.Errorf("the web app: %w", err)
+		}
+	} else {
+		cfg.Log.Warn("the web app is not built into this binary, so / serves a sentence and the API is served at /v1")
+		web = webapp.Missing()
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", svc.health)
+	// Every route of the API is under /v1. It answers 401 before it says whether a route exists.
+	mux.Handle("/v1/", apiHandler)
 	if signIn != nil {
 		// Outside the API's document and its guard, like /healthz: a person who has not signed in has
 		// no token to show. Remote MCP never reads the session cookie.
 		mux.Handle("/auth/", signIn.Handler())
+	} else {
+		// With no provider there is no /auth, and the API's own 401 answers, as it does at /v1.
+		mux.Handle("/auth/", apiHandler)
 	}
-	// Anything else is the API's, which answers 401 before it says whether a route exists.
-	mux.Handle("/", apiHandler)
+	// Anything else is the web app's: a file of the build, or the page, whose router draws the view.
+	mux.Handle("/", web)
 
 	if mcpOn {
 		mcpVerifier, err := mcpremote.Discover(ctx, cfg.Client, cfg.MCPIssuer, cfg.MCPResourceURL)

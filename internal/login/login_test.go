@@ -302,6 +302,65 @@ func TestOnlyGETStartsOrFinishesASignIn(t *testing.T) {
 	}
 }
 
+func TestProvidersAreListedByIDWithTheirKindAndNothingElse(t *testing.T) {
+	r := newRig(t)
+	rec := httptest.NewRecorder()
+	r.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/providers", nil))
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("providers = %d %v", rec.Code, rec.Header())
+	}
+	if got, want := strings.TrimSpace(rec.Body.String()), `{"providers":[{"id":"fake","kind":"oidc"}]}`; got != want {
+		t.Errorf("body = %s, want %s", got, want)
+	}
+	for _, secret := range []string{r.auth.Server.URL, clientID, clientSecret, secretEnv} {
+		if strings.Contains(rec.Body.String(), secret) {
+			t.Errorf("the list holds %q", secret)
+		}
+	}
+	if len(r.tokenForms) != 0 {
+		t.Error("the token endpoint was called")
+	}
+}
+
+func TestTheProviderListIsLimitedInABucketOfItsOwn(t *testing.T) {
+	r := newRig(t, withLimits(1, 2))
+	r.store.bind(r.auth.Server.URL, subjectOne, identity.KindHuman)
+	var statuses []int
+	for range 4 {
+		rec := httptest.NewRecorder()
+		r.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/providers", nil))
+		statuses = append(statuses, rec.Code)
+		if rec.Code == http.StatusTooManyRequests && rec.Header().Get("Retry-After") == "" {
+			t.Error("no Retry-After")
+		}
+	}
+	if statuses[0] != http.StatusOK || statuses[1] != http.StatusOK || statuses[2] != http.StatusTooManyRequests || statuses[3] != http.StatusTooManyRequests {
+		t.Fatalf("statuses %v", statuses)
+	}
+	// The callbacks have their own bucket, so a sign-in still goes through.
+	_, a := r.start("fake")
+	if rec := r.callback("fake", a, goodQuery(a)); rec.Code != http.StatusSeeOther {
+		t.Errorf("a callback after the list was limited: %d", rec.Code)
+	}
+	r.now = r.now.Add(10 * time.Second)
+	rec := httptest.NewRecorder()
+	r.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/providers", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("after the bucket refilled: %d", rec.Code)
+	}
+}
+
+func TestOnlyGETListsProviders(t *testing.T) {
+	r := newRig(t)
+	for _, method := range []string{http.MethodHead, http.MethodPost, http.MethodDelete} {
+		rec := httptest.NewRecorder()
+		r.handler.ServeHTTP(rec, httptest.NewRequest(method, "/auth/providers", nil))
+		if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodGet {
+			t.Errorf("%s = %d %v", method, rec.Code, rec.Header())
+		}
+	}
+}
+
 func TestAnUnknownProviderOrPathIs404(t *testing.T) {
 	r := newRig(t)
 	for _, path := range []string{"/auth/login/nobody", "/auth/callback/nobody?code=a&state=b", "/auth/nothing", "/auth/login/", "/auth/login/fake/extra"} {
@@ -323,6 +382,7 @@ func TestEveryAnswerIsNotCachedAndSendsNoReferrer(t *testing.T) {
 		httptest.NewRequest(http.MethodPost, "/auth/logout", nil),
 		httptest.NewRequest(http.MethodGet, "/auth/nothing", nil),
 		httptest.NewRequest(http.MethodGet, "/auth/logout", nil),
+		httptest.NewRequest(http.MethodGet, "/auth/providers", nil),
 	}
 	good := httptest.NewRequest(http.MethodGet, "/auth/callback/fake?"+goodQuery(a).Encode(), nil)
 	good.AddCookie(&http.Cookie{Name: a.cookie.Name, Value: a.cookie.Value})

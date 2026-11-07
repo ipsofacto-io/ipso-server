@@ -54,6 +54,7 @@ A login of an agent cannot start a browser session. The route that binds a perso
 
 ## What a session is
 
+- `GET /auth/providers` lists the providers the server is configured with, as `{"providers":[{"id":"dex","kind":"oidc"}]}`, so the sign-in page of the web app can link to each. It needs no session, names no issuer, client id or secret, and has a rate limit of its own, so reading it never spends the bucket of the callbacks.
 - `GET /auth/login/{id}` sends the browser to the provider and keeps the state of the attempt in the cookie `__Host-ipso-login` for ten minutes.
 - `GET /auth/callback/{id}` finishes it, clears that cookie on every outcome, and answers 303 to `/` with the cookie `__Host-ipso-session`.
 - `POST /auth/logout` ends the session and clears the cookie. It is a POST, and a request from another site is refused.
@@ -65,7 +66,7 @@ A session belongs to the one tenant the process serves, and each tenant process 
 ## Limits to know
 
 - Logout does not sign the person out of the provider.
-- The cookie is SameSite=Strict, and the redirect to `/` after a sign-in follows a navigation that began at the provider, so a browser may load that first page without the cookie. A page that needs the session on its first request should fetch it from the same origin once loaded, and every such fetch carries the cookie.
+- The cookie is SameSite=Strict, and the redirect to `/` after a sign-in follows a navigation that began at the provider, so a browser may load that first page without the cookie. A page that needs the session on its first request should fetch it from the same origin once loaded, and every such fetch carries the cookie. The web app does that: it loads, then asks.
 - Two tabs that start a sign-in at once overwrite each other's state cookie, and the first to return fails. Start again.
 - The `__Host-` cookies need https. For development, open exactly the origin in `IPSO_PUBLIC_URL`: `localhost` and `127.0.0.1` are different hosts to a cookie, and Safari does not accept a Secure cookie over plain http.
 - A provider that sends keys of its own on the callback is fine. Google adds `scope`, `authuser`, and `prompt`. A `state` or `code` that is repeated is refused.

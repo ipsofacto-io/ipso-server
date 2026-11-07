@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -84,15 +86,20 @@ type Service struct {
 	origin    string
 	check     *http.CrossOriginProtection
 	providers map[string]provider
-	store     store
-	log       *slog.Logger
-	now       func() time.Time
+	// listed is what /auth/providers answers: the id and kind of each provider, by id.
+	listed []listedProvider
+	store  store
+	log    *slog.Logger
+	now    func() time.Time
 
 	known *sessionCache
 	// misses charges the lookups of a session this process has not kept, and callbacks charges each
 	// code exchange. Both are per process, like the API's own limit.
 	misses    *ratelimit.Limiter
 	callbacks *ratelimit.Limiter
+	// lists charges GET /auth/providers, which needs no session, in a bucket of its own: a client that
+	// reads the list must not be able to spend the callbacks' bucket and stop people signing in.
+	lists *ratelimit.Limiter
 }
 
 // New validates the configuration, discovers every OpenID Connect provider, and returns the service.
@@ -142,6 +149,7 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 	providers := map[string]provider{}
+	listed := make([]listedProvider, 0, len(opts.Providers))
 	for _, cfg := range opts.Providers {
 		secret := opts.Secret(cfg.ClientSecretEnv)
 		switch cfg.Kind {
@@ -154,18 +162,22 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 		case KindGitHub:
 			providers[cfg.ID] = newGitHub(&client, cfg, secret)
 		}
+		listed = append(listed, listedProvider{ID: cfg.ID, Kind: cfg.Kind})
 	}
+	slices.SortFunc(listed, func(a, b listedProvider) int { return strings.Compare(a.ID, b.ID) })
 	return &Service{
 		tenant:    opts.Tenant,
 		origin:    origin,
 		check:     check,
 		providers: providers,
+		listed:    listed,
 		store:     opts.store,
 		log:       opts.Log,
 		now:       opts.Now,
 		known:     newSessionCache(sessionTTL, maxKnownSessions),
 		misses:    ratelimit.New(opts.Rate, opts.Burst),
 		callbacks: ratelimit.New(opts.Rate, opts.Burst),
+		lists:     ratelimit.New(opts.Rate, opts.Burst),
 	}, nil
 }
 

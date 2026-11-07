@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/google/uuid"
 	"github.com/lestrrat-go/jwx/v3/jwt"
@@ -154,7 +155,9 @@ func subject(sub string) authntest.TokenOption {
 
 func TestTheAPIServesTheTokenOfABoundLoginOnly(t *testing.T) {
 	s := newStack(t)
-	handler := s.handler(t, s.config(false))
+	cfg := s.config(false)
+	cfg.Web = fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>ipso</title>")}}
+	handler := s.handler(t, cfg)
 
 	if rec := get(handler, "/healthz", ""); rec.Code != http.StatusNoContent {
 		t.Errorf("health: status %d, want 204", rec.Code)
@@ -179,9 +182,9 @@ func TestTheAPIServesTheTokenOfABoundLoginOnly(t *testing.T) {
 	if rec := get(handler, "/v1/scopes", s.mcpAuth.Token(apiAudience, nil, subject("person-1"))); rec.Code != http.StatusUnauthorized {
 		t.Errorf("a token from another issuer: status %d, want 401", rec.Code)
 	}
-	// Without an MCP issuer the MCP path is not served.
-	if rec := list(handler, s.mcpAuth.Token(mcpResource, nil, subject("agent-1"))); rec.Code != http.StatusUnauthorized {
-		t.Errorf("the MCP path without an MCP issuer: status %d, want the API's 401", rec.Code)
+	// Without an MCP issuer the MCP path is not served: it is a path of the web app, which takes no POST.
+	if rec := list(handler, s.mcpAuth.Token(mcpResource, nil, subject("agent-1"))); rec.Code != http.StatusMethodNotAllowed || strings.Contains(rec.Body.String(), "decisions.applicable") {
+		t.Errorf("the MCP path without an MCP issuer: status %d, want the web app's 405", rec.Code)
 	}
 }
 
@@ -505,6 +508,85 @@ func TestWithoutProvidersThereIsNoSignInAndNoCookie(t *testing.T) {
 	cookie := &http.Cookie{Name: "__Host-ipso-session", Value: strings.Repeat("A", 43)}
 	if rec := request(handler, http.MethodGet, "/v1/scopes", nil, cookie); rec.Code != http.StatusUnauthorized || cookieOf(rec, cookie.Name) != nil {
 		t.Errorf("a cookie with sign-in off: status %d", rec.Code)
+	}
+}
+
+// The API owns /v1, the sign-in owns /auth, and the web app owns the rest (ADR-0106). The page needs no
+// session, the API still answers 401 to a caller without one, and a path under /v1 is never the page.
+func TestTheWebAppIsServedAtEveryPathButTheAPIsAndTheSignIns(t *testing.T) {
+	s := newStack(t)
+	in := newSignIn(t)
+	page := "<!doctype html><title>ipso</title>"
+	files := fstest.MapFS{"index.html": {Data: []byte(page)}, "assets/app-1a2b3c.js": {Data: []byte("1")}}
+
+	cfg := in.config(s)
+	cfg.Web = files
+	handler := s.handler(t, cfg)
+	for _, target := range []string{"/", "/decisions", "/decisions/use-postgresql", "/audit/merges"} {
+		if rec := request(handler, http.MethodGet, target, nil); rec.Code != http.StatusOK || rec.Body.String() != page || rec.Header().Get("Content-Security-Policy") == "" {
+			t.Errorf("%s: status %d %q", target, rec.Code, rec.Body)
+		}
+	}
+	if rec := request(handler, http.MethodGet, "/assets/app-1a2b3c.js", nil); rec.Code != http.StatusOK || rec.Body.String() != "1" {
+		t.Errorf("an asset: status %d", rec.Code)
+	}
+	if rec := request(handler, http.MethodGet, "/assets/gone.js", nil); rec.Code != http.StatusNotFound {
+		t.Errorf("a missing asset: status %d", rec.Code)
+	}
+	// The API answers under /v1 and never serves the page: an unknown route is the 401 of a caller with
+	// no session, and a made-up one is the 404 of the API once there is a session.
+	for _, target := range []string{"/v1/scopes", "/v1/nothing", "/v1/"} {
+		rec := request(handler, http.MethodGet, target, nil)
+		if rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), "<title>") {
+			t.Errorf("%s: status %d %q", target, rec.Code, rec.Body)
+		}
+	}
+	if rec := request(handler, http.MethodPost, "/", nil); rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /: status %d", rec.Code)
+	}
+	// The sign-in answers under /auth, the list of providers included, and /healthz stays outside both.
+	rec := request(handler, http.MethodGet, "/auth/providers", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `{"id":"idp","kind":"oidc"}`) {
+		t.Errorf("/auth/providers: status %d %q", rec.Code, rec.Body)
+	}
+	if rec := request(handler, http.MethodGet, "/auth/nothing", nil); rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "<title>") {
+		t.Errorf("/auth/nothing: status %d %q", rec.Code, rec.Body)
+	}
+	if rec := request(handler, http.MethodGet, "/healthz", nil); rec.Code != http.StatusNoContent {
+		t.Errorf("/healthz: status %d", rec.Code)
+	}
+
+	// With no provider, /auth is the API's 401, as before, and the page is still served.
+	cfg = s.config(false)
+	cfg.Web = files
+	handler = s.handler(t, cfg)
+	if rec := request(handler, http.MethodGet, "/auth/providers", nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("/auth/providers without providers: status %d, want the API's 401", rec.Code)
+	}
+	if rec := request(handler, http.MethodGet, "/", nil); rec.Code != http.StatusOK || rec.Body.String() != page {
+		t.Errorf("/ without providers: status %d %q", rec.Code, rec.Body)
+	}
+}
+
+// A binary built without the web app still serves the API, and says why / shows no page.
+func TestWithoutAWebAppThePathsOfTheAppAnswerWithASentence(t *testing.T) {
+	s := newStack(t)
+	handler := s.handler(t, s.config(false))
+	rec := request(handler, http.MethodGet, "/decisions", nil)
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "not built into this binary") {
+		t.Errorf("status %d %q", rec.Code, rec.Body)
+	}
+	if rec := request(handler, http.MethodGet, "/v1/scopes", nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("/v1/scopes: status %d", rec.Code)
+	}
+}
+
+func TestStartRefusesABuildOfTheWebAppWithoutItsPage(t *testing.T) {
+	s := newStack(t)
+	cfg := s.config(false)
+	cfg.Web = fstest.MapFS{"assets/app.js": {Data: []byte("1")}}
+	if _, err := New(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "the web app") {
+		t.Errorf("err = %v", err)
 	}
 }
 
