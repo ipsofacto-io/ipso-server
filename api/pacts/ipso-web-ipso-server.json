@@ -4,6 +4,67 @@
   },
   "interactions": [
     {
+      "description": "a request for an audit answer from a viewer",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "the session belongs to a viewer of tenant A"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/audit/decisions",
+        "query": {
+          "known": [
+            "2099-01-01T00:00:00Z"
+          ],
+          "repo": [
+            "acme/api"
+          ],
+          "valid": [
+            "2026-06-01T00:00:00Z"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "error": "forbidden"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": 403
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
       "description": "a request for how the beliefs about a subject changed",
       "pending": false,
       "providerStates": [

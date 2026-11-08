@@ -57,6 +57,7 @@ func (f *fixture) uploadHandler(t *testing.T, limits Limits) (http.Handler, *ci)
 			caller, ok := f.callers[claims.Subject]
 			return caller, ok
 		},
+		Policy: testPolicy(t),
 		Uploads: &Uploads{Verifier: verifier, Lookup: func(_ context.Context, run authn.RunClaims) (Mapping, MappingStatus) {
 			if mapping, ok := runs.maps[run.RepositoryID]; ok {
 				return mapping, MappingFound

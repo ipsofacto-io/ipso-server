@@ -11,8 +11,8 @@ export function ErrorNotice({ error, onRetry }: { error: ApiError; onRetry?: () 
   let text: string;
   switch (true) {
     case error.status === 403:
-      title = 'Your sign-in is not bound to a person of this tenant.';
-      text = 'Ask a tenant admin to bind it.';
+      title = 'You do not have a role that allows this.';
+      text = 'Ask a tenant admin for one.';
       break;
     case error.status === 429:
       title = 'Too many requests.';

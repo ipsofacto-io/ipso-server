@@ -81,7 +81,7 @@ The answer is 201 with the id of the upload, or 200 with the id of the first one
 
 ## Read the results
 
-`GET /v1/verdicts` lists the stored verdicts of the tenant, newest first, as a person with a bearer token or a session. It takes `repo` (owner/name, in any case), `decision` (an EDR id or a slug), `limit` and `before`, as the other lists do. Each item is one decision check with the run it came from: the repository, commit, ref, event, workflow, run and its link, the check, the environment, the times, the report and SARIF digests, and the hashes, paths and engine version that only that check's report has. Any principal of the tenant can read it until the role model of IPSO-66 exists.
+`GET /v1/verdicts` lists the stored verdicts of the tenant, newest first, as a person with a bearer token or a session. It takes `repo` (owner/name, in any case), `decision` (an EDR id or a slug), `limit` and `before`, as the other lists do. Each item is one decision check with the run it came from: the repository, commit, ref, event, workflow, run and its link, the check, the environment, the times, the report and SARIF digests, and the hashes, paths and engine version that only that check's report has. Any role of the tenant can read it ([docs/roles.md](roles.md)).
 
 ## Failures
 

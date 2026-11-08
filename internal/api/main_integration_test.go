@@ -39,12 +39,17 @@ func runTests(m *testing.M) int {
 
 const audience = "https://ipso.example.test/api"
 
-// Who the test tokens speak for, by subject. ghost names a principal that tenant A does not have.
+// Who the test tokens speak for, by subject. personA and personB are the admins of their tenants and
+// agentA holds the agent role. viewerA, auditorA and nobodyA are people of tenant A who hold the viewer
+// role, the auditor role, and no role. ghost names a principal that tenant A does not have.
 const (
-	personA = "person-a"
-	agentA  = "agent-a"
-	personB = "person-b"
-	ghost   = "ghost"
+	personA  = "person-a"
+	agentA   = "agent-a"
+	personB  = "person-b"
+	viewerA  = "viewer-a"
+	auditorA = "auditor-a"
+	nobodyA  = "nobody-a"
+	ghost    = "ghost"
 )
 
 // fixture is a migrated database with the same rows in two tenants, so a read that crossed tenants
@@ -88,11 +93,22 @@ func newFixture(t *testing.T) *fixture {
 		people[tenant] = f.insert(t, `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'Ada') RETURNING id`, tenant)
 	}
 	agent := f.insert(t, `INSERT INTO identity.principal (tenant_id, kind, name, sponsor_id) VALUES ($1, 'agent', 'claude-code', $2) RETURNING id`, tenantA, people[tenantA])
+	person := func(name string) uuid.UUID {
+		return f.insert(t, `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', $2) RETURNING id`, tenantA, name)
+	}
+	viewer, auditor, nobody := person("Vera"), person("Otto"), person("Noor")
 	f.callers = map[string]Caller{
-		personA: {Tenant: tenantA, Principal: people[tenantA]},
-		agentA:  {Tenant: tenantA, Principal: agent},
-		personB: {Tenant: tenantB, Principal: people[tenantB]},
-		ghost:   {Tenant: tenantA, Principal: people[tenantB]},
+		personA:  {Tenant: tenantA, Principal: people[tenantA]},
+		agentA:   {Tenant: tenantA, Principal: agent},
+		personB:  {Tenant: tenantB, Principal: people[tenantB]},
+		viewerA:  {Tenant: tenantA, Principal: viewer},
+		auditorA: {Tenant: tenantA, Principal: auditor},
+		nobodyA:  {Tenant: tenantA, Principal: nobody},
+		ghost:    {Tenant: tenantA, Principal: people[tenantB]},
+	}
+	for subject, role := range map[string]string{personA: "admin", personB: "admin", agentA: "agent", viewerA: "viewer", auditorA: "auditor"} {
+		c := f.callers[subject]
+		f.exec(t, `INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ($1, $2, $3)`, c.Tenant, c.Principal, role)
 	}
 
 	scope := func(tenant uuid.UUID, parent any, kind, selector string) uuid.UUID {
@@ -212,6 +228,7 @@ func (f *fixture) handlerWith(t *testing.T, limits Limits, sessions *Sessions) h
 			caller, ok := f.callers[claims.Subject]
 			return caller, ok
 		},
+		Policy:   testPolicy(t),
 		Sessions: sessions,
 		Limits:   limits,
 	})

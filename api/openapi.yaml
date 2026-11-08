@@ -4,9 +4,10 @@ info:
   version: 0.1.0
   summary: Read the decision registry, the review queues, the audit answers and the CI verdicts of one tenant.
   description: >-
-    Every route reads but one, and none writes before authorization exists (IPSO-66). The exception is
-    POST /v1/verdicts, which a CI job calls with its own GitHub Actions token and which stores the verdicts of
-    one run (ADR-0102). The tenant is always the one the bearer token or the session cookie speaks for, or,
+    Every route reads but one. The exception is POST /v1/verdicts, which a CI job calls with its own GitHub
+    Actions token and which stores the verdicts of one run (ADR-0102). Every other route asks the role policy
+    before it runs, and a principal no role of which allows the route gets 403 (ADR-0108). The five audit
+    routes need the auditor or the admin role. The tenant is always the one the bearer token or the session cookie speaks for, or,
     for that upload, the one that owns the installation of the repository the signed token names. So no
     route takes a tenant, and a query key `tenant` or `tenant_id` is 400. A request that carries an Authorization header is read as a bearer call, whatever
     cookie it also carries.
@@ -709,7 +710,7 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     Forbidden:
-      description: The token speaks for no principal of a tenant here, or a request that could change state came from another origin with a session cookie.
+      description: The token speaks for no principal of a tenant here, no role of the principal allows this operation, or a request that could change state came from another origin with a session cookie. The answer says nothing more about the resource.
       content:
         application/json:
           schema:

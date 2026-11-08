@@ -25,6 +25,7 @@ import (
 	"github.com/ipsofacto-io/ipso/pkg/mcptools"
 
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
+	"github.com/ipsofacto-io/ipso-server/internal/authz"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 )
 
@@ -60,6 +61,11 @@ type CallerFunc func(context.Context, authn.Claims) (Caller, bool)
 
 // BackendFunc returns the tools for one caller.
 type BackendFunc func(Caller) mcptools.Backend
+
+// AuthorizeFunc asks the role policy whether the caller may take the action (ADR-0108).
+// internal/controlplane supplies it from the caller's role bindings. An error means no decision, and
+// the call is refused.
+type AuthorizeFunc func(ctx context.Context, caller Caller, action authz.Action) (bool, error)
 
 // Config describes this resource. ResourceURL is the canonical URL of the MCP endpoint (RFC 8707)
 // and must be https, or http on a loopback address for a test.
@@ -99,12 +105,13 @@ type handler struct {
 	verifier    authn.Verifier
 	callers     CallerFunc
 	backends    BackendFunc
+	authorize   AuthorizeFunc
 	limiter     *ratelimit.Limiter
 	now         func() time.Time
 }
 
 // NewHandler returns the MCP endpoint and its Protected Resource Metadata (RFC 9728).
-func NewHandler(cfg Config, verifier authn.Verifier, callers CallerFunc, backends BackendFunc) (http.Handler, error) {
+func NewHandler(cfg Config, verifier authn.Verifier, callers CallerFunc, backends BackendFunc, authorize AuthorizeFunc) (http.Handler, error) {
 	resource, err := url.Parse(cfg.ResourceURL)
 	if err != nil {
 		return nil, fmt.Errorf("the resource URL: %w", err)
@@ -118,8 +125,8 @@ func NewHandler(cfg Config, verifier authn.Verifier, callers CallerFunc, backend
 	if len(cfg.AuthorizationServers) == 0 {
 		return nil, errors.New("at least one authorization server is required")
 	}
-	if verifier == nil || callers == nil || backends == nil {
-		return nil, errors.New("a verifier, a caller function, and a backend function are required")
+	if verifier == nil || callers == nil || backends == nil || authorize == nil {
+		return nil, errors.New("a verifier, a caller function, a backend function, and an authorize function are required")
 	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = defaultTimeout
@@ -139,6 +146,7 @@ func NewHandler(cfg Config, verifier authn.Verifier, callers CallerFunc, backend
 		verifier:    verifier,
 		callers:     callers,
 		backends:    backends,
+		authorize:   authorize,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+metadataPrefix+resource.Path, h.metadata)
@@ -225,9 +233,21 @@ func (h *handler) post(w http.ResponseWriter, r *http.Request) {
 		writeRPCError(w, http.StatusBadRequest, req.ID, failure)
 		return
 	}
-	if scope := requiredScope(req); scope != "" && !slices.Contains(claims.Scopes, scope) {
+	scope, action := needsOf(req)
+	if scope != "" && !slices.Contains(claims.Scopes, scope) {
 		w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer error="insufficient_scope", scope=%q, resource_metadata=%q`, scope, h.metadataURL))
 		writeFailure(w, http.StatusForbidden, "this token lacks the scope "+scope)
+		return
+	}
+	// The scope says what the token may ask for, and the role policy what the principal may do. A
+	// refused call reaches no tool, so it is not logged as an action.
+	allowed, err := h.authorize(r.Context(), caller, action)
+	if err != nil {
+		writeFailure(w, http.StatusInternalServerError, "the call could not be authorized")
+		return
+	}
+	if !allowed {
+		writeFailure(w, http.StatusForbidden, "no role of this principal allows this")
 		return
 	}
 	server := mcptools.NewServer(h.cfg.Version, h.backends(caller))
@@ -347,18 +367,22 @@ func trimOWS(value string) string {
 	return strings.Trim(value, " \t")
 }
 
-// requiredScope is the least a request needs. Learning what the server offers needs only a valid token.
-func requiredScope(req rpcRequest) string {
+// needsOf is what a request asks for, once, so the token's scope and the principal's role cannot be
+// worked out from two different readings of it. The scope is the least the token needs, and learning
+// what the server offers needs only a valid token. The action is what the role policy is asked:
+// proposing is the one tool that writes, every other tool and the list read the registry, and the
+// handshake needs only a role.
+func needsOf(req rpcRequest) (scope string, action authz.Action) {
 	switch req.Method {
 	case "tools/list":
-		return ScopeRead
+		return ScopeRead, authz.RegistryRead
 	case "tools/call":
 		if req.Params.Name == mcptools.ToolPropose {
-			return ScopePropose
+			return ScopePropose, authz.ProposalCreate
 		}
-		return ScopeRead
+		return ScopeRead, authz.RegistryRead
 	default:
-		return ""
+		return "", authz.Member
 	}
 }
 

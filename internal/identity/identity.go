@@ -19,6 +19,20 @@ const (
 	KindAgent = "agent"
 )
 
+// Roles a binding can give, section 13.2 of the specification and ADR-0108.
+const (
+	RoleViewer        = "viewer"
+	RoleContributor   = "contributor"
+	RoleDecisionOwner = "decision-owner"
+	RoleApprover      = "approver"
+	RoleAdmin         = "admin"
+	RoleAuditor       = "auditor"
+	RoleAgent         = "agent"
+)
+
+// Roles is every role, in the order section 13.2 lists them.
+var Roles = []string{RoleViewer, RoleContributor, RoleDecisionOwner, RoleApprover, RoleAdmin, RoleAuditor, RoleAgent}
+
 // ErrInvalidQuery is returned for a nil tenant or principal, or a bound that is not usable.
 var ErrInvalidQuery = errors.New("invalid query")
 
@@ -31,12 +45,25 @@ var ErrUnknownLogin = errors.New("unknown login")
 // maxActions bounds one read of the log.
 const maxActions = 1000
 
-// Principal is one person or agent. Sponsor is uuid.Nil for a person.
+// maxGrants bounds the role bindings one principal reads. A principal with more is refused rather than
+// judged on part of its bindings.
+const maxGrants = 1000
+
+// Principal is one person or agent. Sponsor is uuid.Nil for a person. Grants are its role bindings, in
+// no particular order (ADR-0108).
 type Principal struct {
 	ID      uuid.UUID
 	Kind    string
 	Name    string
 	Sponsor uuid.UUID
+	Grants  []Grant
+}
+
+// Grant is one role binding. Scope is uuid.Nil for a binding that covers the whole tenant, and otherwise
+// the scope whose subtree it covers.
+type Grant struct {
+	Role  string
+	Scope uuid.UUID
 }
 
 // Action is one entry in the log, with the person answerable for it.
@@ -76,7 +103,8 @@ func PrincipalFor(ctx context.Context, db *sql.DB, tenant uuid.UUID, issuer, sub
 	return principal, nil
 }
 
-// Get reads one principal. The tenant must be the authenticated one, because Get trusts it.
+// Get reads one principal and its role bindings in one transaction, so a binding removed before the
+// call is not seen. Nothing caches them. The tenant must be the authenticated one, because Get trusts it.
 func Get(ctx context.Context, db *sql.DB, tenant, id uuid.UUID) (Principal, error) {
 	if tenant == uuid.Nil || id == uuid.Nil {
 		return Principal{}, fmt.Errorf("%w: a tenant and a principal are required", ErrInvalidQuery)
@@ -84,11 +112,16 @@ func Get(ctx context.Context, db *sql.DB, tenant, id uuid.UUID) (Principal, erro
 	var principal Principal
 	var sponsor uuid.NullUUID
 	err := inTenant(ctx, db, tenant, true, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
+		err := tx.QueryRowContext(ctx, `
 			SELECT id, kind, name, sponsor_id
 			FROM identity.principal
 			WHERE tenant_id = ipso.current_tenant() AND id = $1`, id).
 			Scan(&principal.ID, &principal.Kind, &principal.Name, &sponsor)
+		if err != nil {
+			return err
+		}
+		principal.Grants, err = grants(ctx, tx, id)
+		return err
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return Principal{}, ErrUnknownPrincipal
@@ -98,6 +131,36 @@ func Get(ctx context.Context, db *sql.DB, tenant, id uuid.UUID) (Principal, erro
 	}
 	principal.Sponsor = sponsor.UUID
 	return principal, nil
+}
+
+// grants reads the role bindings of one principal, at most maxGrants of them.
+func grants(ctx context.Context, tx *sql.Tx, principal uuid.UUID) ([]Grant, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT role, scope_id
+		FROM identity.role_binding
+		WHERE tenant_id = ipso.current_tenant() AND principal_id = $1
+		LIMIT $2`, principal, maxGrants+1)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Grant
+	for rows.Next() {
+		var g Grant
+		var scope uuid.NullUUID
+		if err := rows.Scan(&g.Role, &scope); err != nil {
+			return nil, err
+		}
+		g.Scope = scope.UUID
+		out = append(out, g)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) > maxGrants {
+		return nil, fmt.Errorf("the principal has more than %d role bindings", maxGrants)
+	}
+	return out, nil
 }
 
 // RecordAction logs one action and returns the person answerable for it, which the database decides

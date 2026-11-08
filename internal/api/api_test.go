@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
+	"github.com/ipsofacto-io/ipso-server/internal/authz"
 )
 
 const documentPath = "../../api/openapi.yaml"
@@ -146,7 +148,7 @@ func TestRoutesReadTheDocumentsQueryKeys(t *testing.T) {
 
 // Every operation reads but two. POST /v1/resolve reads too: a list of paths does not fit a URL. POST
 // /v1/verdicts is the one that writes, and a CI job calls it with its own token (ADR-0102). No other
-// endpoint writes before authorization (IPSO-66).
+// endpoint writes until IPSO-134.
 func TestEveryOperationIsAGetButTheTwoPosts(t *testing.T) {
 	for pattern := range operations(t, loadDocument(t)) {
 		if !strings.HasPrefix(pattern, "GET ") && pattern != "POST /v1/resolve" && pattern != "POST /v1/verdicts" {
@@ -206,6 +208,21 @@ var (
 	someone = uuid.MustParse("00000000-0000-4000-8000-0000000000aa")
 )
 
+// testPolicy is the role policy the server runs, compiled once for the package's tests.
+var testPolicy = func() func(t testing.TB) *authz.Policy {
+	var once sync.Once
+	var policy *authz.Policy
+	var err error
+	return func(t testing.TB) *authz.Policy {
+		t.Helper()
+		once.Do(func() { policy, err = authz.New(context.Background()) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return policy
+	}
+}()
+
 func callerOf(tenant uuid.UUID) CallerFunc {
 	return func(context.Context, authn.Claims) (Caller, bool) {
 		return Caller{Tenant: tenant, Principal: someone}, true
@@ -219,7 +236,7 @@ func newAPI(t *testing.T, callers CallerFunc, limits Limits) http.Handler {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	handler, err := New(Config{DB: db, Verifier: fakeVerifier{}, Callers: callers, Limits: limits})
+	handler, err := New(Config{DB: db, Verifier: fakeVerifier{}, Callers: callers, Policy: testPolicy(t), Limits: limits})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,9 +278,10 @@ func TestNewRefusesAnIncompleteConfig(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 	for name, cfg := range map[string]Config{
-		"no database": {Verifier: fakeVerifier{}, Callers: callerOf(tenantA)},
-		"no verifier": {DB: db, Callers: callerOf(tenantA)},
-		"no callers":  {DB: db, Verifier: fakeVerifier{}},
+		"no database": {Verifier: fakeVerifier{}, Callers: callerOf(tenantA), Policy: testPolicy(t)},
+		"no verifier": {DB: db, Callers: callerOf(tenantA), Policy: testPolicy(t)},
+		"no callers":  {DB: db, Verifier: fakeVerifier{}, Policy: testPolicy(t)},
+		"no policy":   {DB: db, Verifier: fakeVerifier{}, Callers: callerOf(tenantA)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := New(cfg); err == nil {
@@ -471,14 +489,15 @@ func TestLoggedSubjectIsOneBoundedLine(t *testing.T) {
 }
 
 // A worker evaluation is a system action (ADR-0053, ADR-0098). No route runs a probe or writes an
-// evaluation, a reason, a clearance, or an allowlist row, and none can until the role policy of IPSO-66
-// is in place. A route named for one of these is a decision to make there, so this test fails first.
+// evaluation, a reason, a clearance, or an allowlist row yet: IPSO-134 serves those writes behind the
+// premise.write and allowlist.write actions of the role policy (ADR-0108). A route named for one of
+// these is a decision to make there, so this test fails first.
 func TestNoRouteRunsOrRecordsAPremise(t *testing.T) {
 	for _, rt := range routes(nil, time.Now) {
 		named := strings.ToLower(rt.pattern + " " + rt.op)
 		for _, word := range []string{"premise", "probe", "evaluation", "reason", "clearance", "allowlist"} {
 			if strings.Contains(named, word) {
-				t.Errorf("%s (%s) is named for %q: no route may run or record a premise before IPSO-66", rt.pattern, rt.op, word)
+				t.Errorf("%s (%s) is named for %q: no route may run or record a premise before IPSO-134", rt.pattern, rt.op, word)
 			}
 		}
 	}

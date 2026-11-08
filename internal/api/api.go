@@ -6,7 +6,8 @@
 // (ADR-0094). A token maps to a tenant and a principal only through a stored login for its issuer
 // and subject (ADR-0093). Every route reads but one: POST /v1/verdicts stores the verdicts of a CI job,
 // behind its own guard, and takes its tenant from the installation of the job's repository (ADR-0102).
-// No other endpoint writes before authorization (IPSO-66).
+// Every other route names an action, and the guard asks the role policy for it before the route runs
+// (ADR-0108). The write routes come with IPSO-134.
 package api
 
 import (
@@ -23,6 +24,8 @@ import (
 
 	"github.com/ipsofacto-io/ipso-server/internal/audit"
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
+	"github.com/ipsofacto-io/ipso-server/internal/authz"
+	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/proposals"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 	"github.com/ipsofacto-io/ipso-server/internal/verification"
@@ -139,7 +142,9 @@ type Config struct {
 	Sessions *Sessions
 	// Uploads turns on the CI upload route. The session cookie is never read on it.
 	Uploads *Uploads
-	Limits  Limits
+	// Policy is the role policy every route but the upload asks (ADR-0108). It is required.
+	Policy *authz.Policy
+	Limits Limits
 	// Now is the clock that a read without valid or known defaults to. Default time.Now.
 	Now func() time.Time
 	// Log receives what an operator needs: refused answers and calls that could not be logged. It
@@ -148,67 +153,75 @@ type Config struct {
 }
 
 // route is one operation. op is its operationId in api/openapi.yaml and, for an agent's call, the
-// action written to the log as "api." + op. keys are the query keys it reads, the ones the document
+// action written to the log as "api." + op. action is what the guard asks the role policy for, and a
+// route with none is refused to everyone. keys are the query keys it reads, the ones the document
 // lists, and the guard refuses any other.
 type route struct {
 	pattern string
 	op      string
+	action  authz.Action
 	keys    []string
 	handler http.Handler
 }
 
 // New returns the API.
 func New(cfg Config) (http.Handler, error) {
-	if cfg.DB == nil || cfg.Verifier == nil || cfg.Callers == nil {
-		return nil, errors.New("a database, a verifier, and a caller function are required")
+	g, limits, err := newGuard(cfg)
+	if err != nil {
+		return nil, err
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	var ci []route
+	if g.uploads != nil {
+		ci = ciRoutes(cfg.DB, g.log)
+	}
+	mux, table := mount(routes(cfg.DB, cfg.Now), ci)
+	return bounded(g.serve(mux, table), limits, g.log), nil
+}
+
+// newGuard checks the configuration and builds the guard every request passes.
+func newGuard(cfg Config) (*guard, Limits, error) {
+	if cfg.DB == nil || cfg.Verifier == nil || cfg.Callers == nil || cfg.Policy == nil {
+		return nil, Limits{}, errors.New("a database, a verifier, a caller function, and a role policy are required")
 	}
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.DiscardHandler)
 	}
 	limits := cfg.Limits.WithDefaults()
+	db := cfg.DB
 	g := &guard{
-		db:       cfg.DB,
+		db:       db,
 		verifier: cfg.Verifier,
 		callers:  cfg.Callers,
 		sessions: cfg.Sessions,
 		limiter:  ratelimit.New(limits.Rate, limits.Burst),
-		maxBody:  limits.RequestBytes,
-		now:      time.Now,
-		log:      cfg.Log,
+		policy:   cfg.Policy,
+		principals: func(ctx context.Context, tenant, id uuid.UUID) (identity.Principal, error) {
+			return identity.Get(ctx, db, tenant, id)
+		},
+		maxBody: limits.RequestBytes,
+		now:     time.Now,
+		log:     cfg.Log,
 	}
 	if cfg.Sessions != nil {
 		if cfg.Sessions.Lookup == nil {
-			return nil, errors.New("sessions need a lookup")
+			return nil, Limits{}, errors.New("sessions need a lookup")
 		}
 		origin, err := authn.NewOriginCheck(cfg.Sessions.Origin)
 		if err != nil {
-			return nil, fmt.Errorf("sessions need an origin: %w", err)
+			return nil, Limits{}, fmt.Errorf("sessions need an origin: %w", err)
 		}
 		g.origin = origin
 	}
-	mux := http.NewServeMux()
 	if cfg.Uploads != nil {
 		if cfg.Uploads.Verifier == nil || cfg.Uploads.Lookup == nil {
-			return nil, errors.New("uploads need a verifier and a lookup")
+			return nil, Limits{}, errors.New("uploads need a verifier and a lookup")
 		}
 		g.uploads = cfg.Uploads
 	}
-	for _, rt := range routes(cfg.DB, cfg.Now) {
-		mux.Handle(rt.pattern, g.wrap(rt.op, rt.keys, rt.handler))
-	}
-	if g.uploads != nil {
-		for _, rt := range ciRoutes(cfg.DB, cfg.Log) {
-			mux.Handle(rt.pattern, g.wrapUpload(rt.keys, rt.handler))
-		}
-	}
-	// Anything else is 404, and only to a caller with a token, so the routes cannot be listed without one.
-	mux.Handle("/", g.wrap("", nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusNotFound, errNotFound)
-	})))
-	return bounded(mux, limits, cfg.Log), nil
+	return g, limits, nil
 }
 
 // routes is every operation the API serves. Each reads the tenant from the caller that wrap put in
@@ -219,29 +232,30 @@ func routes(db *sql.DB, now func() time.Time) []route {
 	reviews := proposals.Handler(db, tenantOf)
 	verdicts := &verdictRoutes{db: db}
 	return []route{
-		{"POST /v1/resolve", "resolve", nil, http.HandlerFunc(reg.resolve)},
-		{"GET /v1/decisions", "list_decisions", []string{"valid", "known", "limit", "before"}, http.HandlerFunc(reg.decisions)},
-		{"GET /v1/decisions/{ref}", "get_decision", []string{"valid", "known"}, http.HandlerFunc(reg.decision)},
-		{"GET /v1/scopes", "list_scopes", []string{"known", "limit", "before"}, http.HandlerFunc(reg.scopes)},
-		{"GET /v1/waivers", "list_waivers", []string{"valid", "known", "limit", "before"}, http.HandlerFunc(reg.waivers)},
-		{"GET /v1/proposals", "list_proposals", []string{"limit", "before"}, reviews},
-		{"GET /v1/agent-proposals", "list_agent_proposals", []string{"limit", "before"}, reviews},
-		{"GET /v1/check-proposals", "list_check_proposals", []string{"limit", "before"}, reviews},
-		{"GET /v1/audit/decisions", "audit_decisions", []string{"repo", "path", "env", "valid", "known"}, audits},
-		{"GET /v1/audit/beliefs", "audit_beliefs", []string{"repo", "path", "env", "valid", "then", "now"}, audits},
-		{"GET /v1/audit/merges", "audit_merges", []string{"repo", "path", "env", "at", "known"}, audits},
-		{"GET /v1/audit/supersessions/{decisionID}", "audit_supersessions", []string{"known"}, audits},
-		{"GET /v1/audit/waivers", "audit_waivers", []string{"known", "now"}, audits},
-		{"GET /v1/verdicts", "list_verdicts", []string{"repo", "decision", "limit", "before"}, http.HandlerFunc(verdicts.list)},
+		{"POST /v1/resolve", "resolve", authz.RegistryRead, nil, http.HandlerFunc(reg.resolve)},
+		{"GET /v1/decisions", "list_decisions", authz.RegistryRead, []string{"valid", "known", "limit", "before"}, http.HandlerFunc(reg.decisions)},
+		{"GET /v1/decisions/{ref}", "get_decision", authz.RegistryRead, []string{"valid", "known"}, http.HandlerFunc(reg.decision)},
+		{"GET /v1/scopes", "list_scopes", authz.RegistryRead, []string{"known", "limit", "before"}, http.HandlerFunc(reg.scopes)},
+		{"GET /v1/waivers", "list_waivers", authz.RegistryRead, []string{"valid", "known", "limit", "before"}, http.HandlerFunc(reg.waivers)},
+		{"GET /v1/proposals", "list_proposals", authz.ProposalsRead, []string{"limit", "before"}, reviews},
+		{"GET /v1/agent-proposals", "list_agent_proposals", authz.ProposalsRead, []string{"limit", "before"}, reviews},
+		{"GET /v1/check-proposals", "list_check_proposals", authz.ProposalsRead, []string{"limit", "before"}, reviews},
+		{"GET /v1/audit/decisions", "audit_decisions", authz.AuditRead, []string{"repo", "path", "env", "valid", "known"}, audits},
+		{"GET /v1/audit/beliefs", "audit_beliefs", authz.AuditRead, []string{"repo", "path", "env", "valid", "then", "now"}, audits},
+		{"GET /v1/audit/merges", "audit_merges", authz.AuditRead, []string{"repo", "path", "env", "at", "known"}, audits},
+		{"GET /v1/audit/supersessions/{decisionID}", "audit_supersessions", authz.AuditRead, []string{"known"}, audits},
+		{"GET /v1/audit/waivers", "audit_waivers", authz.AuditRead, []string{"known", "now"}, audits},
+		{"GET /v1/verdicts", "list_verdicts", authz.VerdictsRead, []string{"repo", "decision", "limit", "before"}, http.HandlerFunc(verdicts.list)},
 	}
 }
 
 // ciRoutes are the operations a CI job calls with its own OIDC token instead of a person's. They are
-// mounted only when uploads are on (ADR-0102).
+// mounted only when uploads are on (ADR-0102). The CI identity and the installation mapping authorize
+// them, not a role, so they name no action.
 func ciRoutes(db *sql.DB, log *slog.Logger) []route {
 	verdicts := &verdictRoutes{db: db, log: log}
 	return []route{
-		{"POST /v1/verdicts", "upload_verdicts", nil, http.HandlerFunc(verdicts.upload)},
+		{"POST /v1/verdicts", "upload_verdicts", "", nil, http.HandlerFunc(verdicts.upload)},
 	}
 }
 

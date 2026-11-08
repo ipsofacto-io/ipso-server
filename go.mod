@@ -8,6 +8,7 @@ require (
 	github.com/ipsofacto-io/ipso v0.4.1-0.20261105183009-d21c3756d314
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/lestrrat-go/jwx/v3 v3.3.0
+	github.com/open-policy-agent/opa v1.21.4
 	github.com/pact-foundation/pact-go/v2 v2.8.0 // pact tests only
 	github.com/pb33f/libopenapi v0.41.3 // tests only
 	github.com/pb33f/libopenapi-validator v0.16.1 // tests only
@@ -75,7 +76,6 @@ require (
 	github.com/moby/sys/user v0.4.1 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect
 	github.com/moby/term v0.5.2 // indirect
-	github.com/open-policy-agent/opa v1.21.4 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/pb33f/go-yaml v0.1.1 // indirect

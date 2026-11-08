@@ -220,14 +220,48 @@ func TestProvisionCreatesAnIsolatedTenantAndARepeatChangesNothing(t *testing.T) 
 	if l.count(t, "identity.principal", tenantB) != 0 || l.count(t, "identity.principal", tenantA) != 1 {
 		t.Error("the person was not bound to tenant A only")
 	}
+	// The first person is the tenant's admin, over the whole tenant, so someone can grant the other roles.
+	var role string
+	var scoped bool
+	if err := pgtest.Scan(t.Context(), l.app, tenantA, `SELECT role, scope_id IS NOT NULL FROM identity.role_binding WHERE principal_id = $1::uuid`, []any{person.ID.String()}, &role, &scoped); err != nil || role != "admin" || scoped {
+		t.Errorf("the first person holds %q (scoped %v), want admin over the tenant (%v)", role, scoped, err)
+	}
 
 	before := l.rows(t, "tenancy.tenant_key", tenantA)
 	again := l.provision(t, tenantA, "acme", person)
 	if again.Created || again.KeyCreated || again.PersonBound {
 		t.Fatalf("repeat = %+v, want no change", again)
 	}
+	if n := l.count(t, "identity.role_binding", tenantA); n != 1 {
+		t.Errorf("a repeat left %d bindings, want the one admin binding", n)
+	}
 	if after := l.rows(t, "tenancy.tenant_key", tenantA); strings.Join(after, "") != strings.Join(before, "") {
 		t.Error("a repeat replaced the wrapped key")
+	}
+
+	// A revoke is kept while the tenant has another admin, and a tenant left with none gets its first
+	// person back as admin from create.
+	run := func(query string, args ...any) {
+		t.Helper()
+		if _, err := pgtest.Exec(t.Context(), l.app, tenantA, query, args...); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+	}
+	var other string
+	if err := pgtest.Scan(t.Context(), l.app, tenantA, `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1::uuid, 'human', 'Bea') RETURNING id::text`, []any{tenantA}, &other); err != nil {
+		t.Fatal(err)
+	}
+	run(`INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ($1::uuid, $2::uuid, 'admin')`, tenantA, other)
+	run(`DELETE FROM identity.role_binding WHERE tenant_id = $1::uuid AND principal_id = $2::uuid`, tenantA, person.ID.String())
+	if again := l.provision(t, tenantA, "acme", person); again.PersonBound {
+		t.Errorf("create restored a revoked admin while another admin exists: %+v", again)
+	}
+	if n := l.count(t, "identity.role_binding", tenantA); n != 1 {
+		t.Errorf("%d bindings after the revoke, want the other admin's", n)
+	}
+	run(`DELETE FROM identity.role_binding WHERE tenant_id = $1::uuid AND principal_id = $2::uuid`, tenantA, other)
+	if again := l.provision(t, tenantA, "acme", person); !again.PersonBound {
+		t.Errorf("create did not restore the admin of a tenant with none: %+v", again)
 	}
 }
 

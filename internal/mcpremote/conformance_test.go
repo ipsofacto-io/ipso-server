@@ -42,7 +42,8 @@ func TestConformance(t *testing.T) {
 		func(context.Context, authn.Claims) (Caller, bool) {
 			return Caller{Tenant: testTenant, Principal: testPrincipal}, true
 		},
-		func(Caller) mcptools.Backend { return &recordingBackend{} })
+		func(Caller) mcptools.Backend { return &recordingBackend{} },
+		anAgent(t))
 	if err != nil {
 		t.Fatal(err)
 	}

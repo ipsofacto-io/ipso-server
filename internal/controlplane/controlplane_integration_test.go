@@ -56,8 +56,8 @@ const (
 
 var tenant = uuid.MustParse("00000000-0000-4000-8000-00000000000a")
 
-// stack is a migrated database with one tenant, a person bound to the API issuer, and an agent bound
-// to the MCP issuer. Every row is synthetic.
+// stack is a migrated database with one tenant, an admin bound to the API issuer, and an agent that
+// holds the agent role, bound to the MCP issuer. Every row is synthetic.
 type stack struct {
 	database *pgtest.Database
 	app      *sql.DB
@@ -93,7 +93,27 @@ func newStack(t *testing.T) *stack {
 	s.agent = scan(`INSERT INTO identity.principal (tenant_id, kind, name, sponsor_id) VALUES ($1, 'agent', 'Agent', $2) RETURNING id`, tenant, s.person)
 	exec(`INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1, $2, $3, 'person-1')`, tenant, s.person, s.apiAuth.Server.URL)
 	exec(`INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1, $2, $3, 'agent-1')`, tenant, s.agent, s.mcpAuth.Server.URL)
+	exec(`INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ($1, $2, 'admin')`, tenant, s.person)
+	exec(`INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ($1, $2, 'agent')`, tenant, s.agent)
 	return s
+}
+
+// mustExec runs one statement in the tenant as the application role.
+func (s *stack) mustExec(t *testing.T, query string, args ...any) {
+	t.Helper()
+	if _, err := pgtest.Exec(t.Context(), s.app, tenant.String(), query, args...); err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
+}
+
+// scanID runs one statement in the tenant as the application role and returns the id it returns.
+func (s *stack) scanID(t *testing.T, query string, args ...any) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := pgtest.Scan(t.Context(), s.app, tenant.String(), query, args, &id); err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
+	return id
 }
 
 func (s *stack) config(mcp bool) Config {
@@ -241,6 +261,34 @@ func TestMCPSpeaksForTheLoginsPrincipalAndNamesItsSponsor(t *testing.T) {
 	if rec := mcpCall(handler, s.mcpAuth.Token(mcpResource, []string{"ipso.read"}, subject("stranger")), "tools/call", body); rec.Code != http.StatusForbidden {
 		t.Errorf("an unbound subject: status %d, want 403", rec.Code)
 	}
+}
+
+// A login bound to a person who holds no role is refused by both handlers, as the role policy asks
+// the principal of the login on every call, and a role bound or removed applies on the next call
+// (ADR-0108).
+func TestBothHandlersAskTheRolesOfTheLoginsPrincipal(t *testing.T) {
+	s := newStack(t)
+	handler := s.handler(t, s.config(true))
+	noor := s.scanID(t, `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'Noor') RETURNING id`, tenant)
+	for _, login := range []struct{ subject, issuer string }{{"noor-api", s.apiAuth.Server.URL}, {"noor-mcp", s.mcpAuth.Server.URL}} {
+		s.mustExec(t, `INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1, $2, $3, $4)`, tenant, noor, login.issuer, login.subject)
+	}
+	apiToken := s.apiAuth.Token(apiAudience, nil, subject("noor-api"))
+	mcpToken := s.mcpAuth.Token(mcpResource, []string{"ipso.read"}, subject("noor-mcp"))
+	expect := func(when string, api, mcp int) {
+		t.Helper()
+		if rec := get(handler, "/v1/scopes", apiToken); rec.Code != api {
+			t.Errorf("the API %s: status %d, want %d: %s", when, rec.Code, api, rec.Body)
+		}
+		if rec := list(handler, mcpToken); rec.Code != mcp {
+			t.Errorf("MCP %s: status %d, want %d: %s", when, rec.Code, mcp, rec.Body)
+		}
+	}
+	expect("with no role", http.StatusForbidden, http.StatusForbidden)
+	s.mustExec(t, `INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ($1, $2, 'viewer')`, tenant, noor)
+	expect("with the viewer role", http.StatusOK, http.StatusOK)
+	s.mustExec(t, `DELETE FROM identity.role_binding WHERE tenant_id = $1 AND principal_id = $2`, tenant, noor)
+	expect("after the role was removed", http.StatusForbidden, http.StatusForbidden)
 }
 
 func TestMCPLimitsACallerPerTenant(t *testing.T) {

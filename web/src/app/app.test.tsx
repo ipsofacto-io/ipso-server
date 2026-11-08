@@ -70,10 +70,11 @@ describe('a refusal', () => {
     expect(screen.queryByRole('heading', { name: 'Sign in to ipso' })).not.toBeInTheDocument();
   });
 
-  it('says a sign-in is not bound to a person', async () => {
+  it('says no role of the person allows the page', async () => {
     refuse(403, { error: 'forbidden' });
     renderApp('/decisions');
-    expect(await screen.findByText('Your sign-in is not bound to a person of this tenant.')).toBeInTheDocument();
+    expect(await screen.findByText('You do not have a role that allows this.')).toBeInTheDocument();
+    expect(screen.getByText('Ask a tenant admin for one.')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Sign in to ipso' })).not.toBeInTheDocument();
   });
 
