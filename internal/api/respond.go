@@ -19,6 +19,7 @@ const (
 	errUnauthorized     = "unauthorized"
 	errForbidden        = "forbidden"
 	errNotFound         = "not found"
+	errConflict         = "conflict"
 	errTooLarge         = "too large"
 	errUnsupportedMedia = "unsupported media type"
 	errRateLimited      = "rate limited"

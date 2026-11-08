@@ -110,11 +110,16 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 		        'https://github.com/acme/payments/pull/8', decode(repeat('ab', 32), 'hex'), 0)
 		RETURNING id`, []any{tenant}, &proposal)
 	mustExec(`
-		INSERT INTO proposals.approval (tenant_id, proposal_id, approver_id, outcome)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'approved')`, tenant, proposal, person)
-	mustExec(`
+		INSERT INTO proposals.approval (tenant_id, proposal_id, approver_id, outcome, decision_id)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'approved', $4::uuid)`, tenant, proposal, person, DecisionKeep)
+	var agentProposal string
+	mustScan(`
 		INSERT INTO proposals.agent_proposal (tenant_id, principal_id, payload)
-		VALUES ($1::uuid, $2::uuid, '{"title":"Pin versions"}')`, tenant, person)
+		VALUES ($1::uuid, $2::uuid, '{"title":"Pin versions"}')
+		RETURNING id`, []any{tenant, person}, &agentProposal)
+	mustExec(`
+		INSERT INTO proposals.agent_approval (tenant_id, proposal_id, approver_id, outcome, decision_id)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'approved', $4::uuid)`, tenant, agentProposal, person, DecisionTo)
 	mustExec(`
 		INSERT INTO proposals.check_proposal
 			(tenant_id, decision_id, decision_version, spec, rego, rego_sha256, fixtures, fixtures_total, fixtures_passed, repaired, model_id, prompt_version)

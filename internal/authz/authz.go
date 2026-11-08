@@ -23,9 +23,9 @@ import (
 // Action is what a route or a tool asks the policy for.
 type Action string
 
-// The actions of the policy. The routes of internal/api and the remote MCP tools name the read
-// actions and proposal.create today. The others are the writes that IPSO-134, IPSO-137 and IPSO-142
-// serve, decided here so that the seven roles differ before those routes exist.
+// The actions of the policy. The routes of internal/api name the read actions and the writes of
+// IPSO-134 (ADR-0109), and the remote MCP tools name the read actions and proposal.create.
+// principal.manage and tenant.export are the writes that IPSO-137, IPSO-142 and IPSO-147 serve.
 const (
 	// Member is what an unknown route and the MCP handshake ask: that the principal holds any role.
 	Member            Action = "member"
@@ -51,8 +51,19 @@ var Actions = []Action{
 	AllowlistWrite, PrincipalManage, TenantExport,
 }
 
-// maxTargets bounds the scopes one action names. A decision names at most 100 (ADR-0051).
-const maxTargets = 100
+// MaxTargets bounds the scopes one question to the policy names. A decision names at most 100 (ADR-0051), so
+// a call that names more asks in chunks of this size.
+const MaxTargets = 100
+
+// scoped are the actions that name the scopes they act on, the same set as policy.rego. A test checks that
+// the two agree.
+var scoped = map[Action]bool{
+	DecisionApprove: true, WaiverRecord: true, DecisionSupersede: true, PremiseWrite: true, ScopeWrite: true,
+}
+
+// Scoped reports whether the action names the scopes it acts on, so a binding covers it only inside its
+// subtree and a call needs at least one target.
+func Scoped(a Action) bool { return scoped[a] }
 
 //go:embed policy.rego
 var policySource string
@@ -75,7 +86,8 @@ type Input struct {
 
 // Policy is the compiled role policy. It is safe for concurrent use.
 type Policy struct {
-	query rego.PreparedEvalQuery
+	allow   rego.PreparedEvalQuery
+	mayTake rego.PreparedEvalQuery
 }
 
 // New compiles the embedded policy. A policy that does not compile is an error, so a process that
@@ -93,15 +105,22 @@ func New(ctx context.Context) (*Policy, error) {
 	if compiler.Failed() {
 		return nil, fmt.Errorf("compile the role policy: %w", compiler.Errors)
 	}
-	query, err := rego.New(
-		rego.Compiler(compiler),
-		rego.Query("data.ipso.authz.allow"),
-		rego.StrictBuiltinErrors(true),
-	).PrepareForEval(ctx)
+	prepare := func(rule string) (rego.PreparedEvalQuery, error) {
+		return rego.New(
+			rego.Compiler(compiler),
+			rego.Query("data.ipso.authz."+rule),
+			rego.StrictBuiltinErrors(true),
+		).PrepareForEval(ctx)
+	}
+	allow, err := prepare("allow")
 	if err != nil {
 		return nil, fmt.Errorf("prepare the role policy: %w", err)
 	}
-	return &Policy{query: query}, nil
+	mayTake, err := prepare("may_take")
+	if err != nil {
+		return nil, fmt.Errorf("prepare the role policy: %w", err)
+	}
+	return &Policy{allow: allow, mayTake: mayTake}, nil
 }
 
 func capabilities() *ast.Capabilities {
@@ -127,9 +146,28 @@ func (p *Policy) Allow(ctx context.Context, in Input) (bool, error) {
 	if in.Action == "" || len(in.Grants) == 0 {
 		return false, nil
 	}
-	if len(in.Targets) > maxTargets {
-		return false, fmt.Errorf("an action names at most %d scopes", maxTargets)
+	if len(in.Targets) > MaxTargets {
+		return false, fmt.Errorf("an action names at most %d scopes", MaxTargets)
 	}
+	return p.eval(ctx, p.allow, in)
+}
+
+// MayTake reports whether the principal could take the action on some scope: a binding of a role that
+// grants it, held by a principal of a kind that may take it. It ignores the targets, so it is the cheap
+// question a guard asks before it reads the body of a scoped call. A yes decides nothing, and Allow still
+// has to cover every target.
+func (p *Policy) MayTake(ctx context.Context, in Input) (bool, error) {
+	if p == nil {
+		return false, errors.New("no role policy")
+	}
+	if in.Action == "" || len(in.Grants) == 0 {
+		return false, nil
+	}
+	in.Targets = nil
+	return p.eval(ctx, p.mayTake, in)
+}
+
+func (p *Policy) eval(ctx context.Context, query rego.PreparedEvalQuery, in Input) (bool, error) {
 	grants := make([]any, 0, len(in.Grants))
 	for _, g := range in.Grants {
 		scope := ""
@@ -146,7 +184,7 @@ func (p *Policy) Allow(ctx context.Context, in Input) (bool, error) {
 		}
 		targets = append(targets, ids)
 	}
-	rs, err := p.query.Eval(ctx, rego.EvalInput(map[string]any{
+	rs, err := query.Eval(ctx, rego.EvalInput(map[string]any{
 		"kind":    in.Kind,
 		"action":  string(in.Action),
 		"grants":  grants,
@@ -170,8 +208,8 @@ func (p *Policy) Allow(ctx context.Context, in Input) (bool, error) {
 // scopes. A scope the tenant does not have gets an empty chain, which only a binding over the whole
 // tenant covers. The tenant must be the authenticated one, because Targets trusts it.
 func Targets(ctx context.Context, db *sql.DB, tenant uuid.UUID, scopes []uuid.UUID) ([][]uuid.UUID, error) {
-	if tenant == uuid.Nil || len(scopes) == 0 || len(scopes) > maxTargets {
-		return nil, fmt.Errorf("a tenant and 1 to %d scopes are required", maxTargets)
+	if tenant == uuid.Nil || len(scopes) == 0 || len(scopes) > MaxTargets {
+		return nil, fmt.Errorf("a tenant and 1 to %d scopes are required", MaxTargets)
 	}
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {

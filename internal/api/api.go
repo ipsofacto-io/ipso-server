@@ -1,13 +1,15 @@
-// Package api is the control plane HTTP API of ADR-0090: the read routes of each bounded context
+// Package api is the control plane HTTP API of ADR-0090: the routes of each bounded context
 // behind one chain that authenticates the caller, takes the tenant from the token, and bounds every
 // request. api/openapi.yaml describes exactly the routes mounted here.
 //
 // ipso-server --role=api serves this handler after internal/rls.Check and the tenant check
 // (ADR-0094). A token maps to a tenant and a principal only through a stored login for its issuer
-// and subject (ADR-0093). Every route reads but one: POST /v1/verdicts stores the verdicts of a CI job,
-// behind its own guard, and takes its tenant from the installation of the job's repository (ADR-0102).
-// Every other route names an action, and the guard asks the role policy for it before the route runs
-// (ADR-0108). The write routes come with IPSO-134.
+// and subject (ADR-0093). Most routes read. POST /v1/verdicts stores the verdicts of a CI job, behind its
+// own guard, and takes its tenant from the installation of the job's repository (ADR-0102). Every other
+// route names an action, and the guard asks the role policy for it before the route runs (ADR-0108). The
+// routes that write are in writes.go (ADR-0109): each is an action only a person takes, the guard reads
+// the scopes the request names and has the policy cover every one, and the write and its entry in the
+// action log are one transaction.
 package api
 
 import (
@@ -28,6 +30,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/proposals"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
+	"github.com/ipsofacto-io/ipso-server/internal/registry"
 	"github.com/ipsofacto-io/ipso-server/internal/verification"
 )
 
@@ -155,12 +158,15 @@ type Config struct {
 // route is one operation. op is its operationId in api/openapi.yaml and, for an agent's call, the
 // action written to the log as "api." + op. action is what the guard asks the role policy for, and a
 // route with none is refused to everyone. keys are the query keys it reads, the ones the document
-// lists, and the guard refuses any other.
+// lists, and the guard refuses any other. targets is set on a route whose action names the scopes it
+// acts on: it reads them from the request, and the guard asks the policy to cover each one (ADR-0109).
+// A scoped action with no targets function is refused.
 type route struct {
 	pattern string
 	op      string
 	action  authz.Action
 	keys    []string
+	targets targetsFunc
 	handler http.Handler
 }
 
@@ -177,7 +183,7 @@ func New(cfg Config) (http.Handler, error) {
 	if g.uploads != nil {
 		ci = ciRoutes(cfg.DB, g.log)
 	}
-	mux, table := mount(routes(cfg.DB, cfg.Now), ci)
+	mux, table := mount(routes(cfg.DB, cfg.Now, g.log), ci)
 	return bounded(g.serve(mux, table), limits, g.log), nil
 }
 
@@ -200,6 +206,12 @@ func newGuard(cfg Config) (*guard, Limits, error) {
 		policy:   cfg.Policy,
 		principals: func(ctx context.Context, tenant, id uuid.UUID) (identity.Principal, error) {
 			return identity.Get(ctx, db, tenant, id)
+		},
+		decisionScopes: func(ctx context.Context, tenant uuid.UUID, decisions []uuid.UUID) ([]uuid.UUID, int, error) {
+			return registry.DecisionScopes(ctx, db, tenant, decisions)
+		},
+		chains: func(ctx context.Context, tenant uuid.UUID, scopes []uuid.UUID) ([][]uuid.UUID, error) {
+			return authz.Targets(ctx, db, tenant, scopes)
 		},
 		maxBody: limits.RequestBytes,
 		now:     time.Now,
@@ -225,28 +237,29 @@ func newGuard(cfg Config) (*guard, Limits, error) {
 }
 
 // routes is every operation the API serves. Each reads the tenant from the caller that wrap put in
-// the request context.
-func routes(db *sql.DB, now func() time.Time) []route {
+// the request context. The reads come first, and the writes of ADR-0109 after them.
+func routes(db *sql.DB, now func() time.Time, log *slog.Logger) []route {
 	reg := &registryRoutes{db: db, now: now}
 	audits := audit.Handler(db, tenantOf)
 	reviews := proposals.Handler(db, tenantOf)
 	verdicts := &verdictRoutes{db: db}
-	return []route{
-		{"POST /v1/resolve", "resolve", authz.RegistryRead, nil, http.HandlerFunc(reg.resolve)},
-		{"GET /v1/decisions", "list_decisions", authz.RegistryRead, []string{"valid", "known", "limit", "before"}, http.HandlerFunc(reg.decisions)},
-		{"GET /v1/decisions/{ref}", "get_decision", authz.RegistryRead, []string{"valid", "known"}, http.HandlerFunc(reg.decision)},
-		{"GET /v1/scopes", "list_scopes", authz.RegistryRead, []string{"known", "limit", "before"}, http.HandlerFunc(reg.scopes)},
-		{"GET /v1/waivers", "list_waivers", authz.RegistryRead, []string{"valid", "known", "limit", "before"}, http.HandlerFunc(reg.waivers)},
-		{"GET /v1/proposals", "list_proposals", authz.ProposalsRead, []string{"limit", "before"}, reviews},
-		{"GET /v1/agent-proposals", "list_agent_proposals", authz.ProposalsRead, []string{"limit", "before"}, reviews},
-		{"GET /v1/check-proposals", "list_check_proposals", authz.ProposalsRead, []string{"limit", "before"}, reviews},
-		{"GET /v1/audit/decisions", "audit_decisions", authz.AuditRead, []string{"repo", "path", "env", "valid", "known"}, audits},
-		{"GET /v1/audit/beliefs", "audit_beliefs", authz.AuditRead, []string{"repo", "path", "env", "valid", "then", "now"}, audits},
-		{"GET /v1/audit/merges", "audit_merges", authz.AuditRead, []string{"repo", "path", "env", "at", "known"}, audits},
-		{"GET /v1/audit/supersessions/{decisionID}", "audit_supersessions", authz.AuditRead, []string{"known"}, audits},
-		{"GET /v1/audit/waivers", "audit_waivers", authz.AuditRead, []string{"known", "now"}, audits},
-		{"GET /v1/verdicts", "list_verdicts", authz.VerdictsRead, []string{"repo", "decision", "limit", "before"}, http.HandlerFunc(verdicts.list)},
+	reads := []route{
+		{"POST /v1/resolve", "resolve", authz.RegistryRead, nil, nil, http.HandlerFunc(reg.resolve)},
+		{"GET /v1/decisions", "list_decisions", authz.RegistryRead, []string{"valid", "known", "limit", "before"}, nil, http.HandlerFunc(reg.decisions)},
+		{"GET /v1/decisions/{ref}", "get_decision", authz.RegistryRead, []string{"valid", "known"}, nil, http.HandlerFunc(reg.decision)},
+		{"GET /v1/scopes", "list_scopes", authz.RegistryRead, []string{"known", "limit", "before"}, nil, http.HandlerFunc(reg.scopes)},
+		{"GET /v1/waivers", "list_waivers", authz.RegistryRead, []string{"valid", "known", "limit", "before"}, nil, http.HandlerFunc(reg.waivers)},
+		{"GET /v1/proposals", "list_proposals", authz.ProposalsRead, []string{"limit", "before"}, nil, reviews},
+		{"GET /v1/agent-proposals", "list_agent_proposals", authz.ProposalsRead, []string{"limit", "before"}, nil, reviews},
+		{"GET /v1/check-proposals", "list_check_proposals", authz.ProposalsRead, []string{"limit", "before"}, nil, reviews},
+		{"GET /v1/audit/decisions", "audit_decisions", authz.AuditRead, []string{"repo", "path", "env", "valid", "known"}, nil, audits},
+		{"GET /v1/audit/beliefs", "audit_beliefs", authz.AuditRead, []string{"repo", "path", "env", "valid", "then", "now"}, nil, audits},
+		{"GET /v1/audit/merges", "audit_merges", authz.AuditRead, []string{"repo", "path", "env", "at", "known"}, nil, audits},
+		{"GET /v1/audit/supersessions/{decisionID}", "audit_supersessions", authz.AuditRead, []string{"known"}, nil, audits},
+		{"GET /v1/audit/waivers", "audit_waivers", authz.AuditRead, []string{"known", "now"}, nil, audits},
+		{"GET /v1/verdicts", "list_verdicts", authz.VerdictsRead, []string{"repo", "decision", "limit", "before"}, nil, http.HandlerFunc(verdicts.list)},
 	}
+	return append(reads, writeRoutes(db, log)...)
 }
 
 // ciRoutes are the operations a CI job calls with its own OIDC token instead of a person's. They are
@@ -255,7 +268,7 @@ func routes(db *sql.DB, now func() time.Time) []route {
 func ciRoutes(db *sql.DB, log *slog.Logger) []route {
 	verdicts := &verdictRoutes{db: db, log: log}
 	return []route{
-		{"POST /v1/verdicts", "upload_verdicts", "", nil, http.HandlerFunc(verdicts.upload)},
+		{"POST /v1/verdicts", "upload_verdicts", "", nil, nil, http.HandlerFunc(verdicts.upload)},
 	}
 }
 

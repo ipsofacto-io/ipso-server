@@ -58,6 +58,16 @@ allow if {
 	}
 }
 
+# The question that comes before the body of a scoped call is read: could this principal take the action
+# on some scope at all. It names no target, so a yes only lets the call go on to allow, which decides.
+default may_take := false
+
+may_take if {
+	kind_may_act
+	some grant in input.grants
+	counts(grant)
+}
+
 kind_may_act if {
 	input.kind == "human"
 }

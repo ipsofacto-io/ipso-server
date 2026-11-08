@@ -222,8 +222,9 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 		return
 	}
 	t.Run("every operation is covered", func(t *testing.T) {
-		// 14 are called above as a person. upload_verdicts is called as a CI job in upload_integration_test.go.
-		if got, want := 14+1, len(operations(t, loadDocument(t))); got != want {
+		// 14 are called above as a person, and the writes in writes_integration_test.go. upload_verdicts is called
+		// as a CI job in upload_integration_test.go.
+		if got, want := 14+len(writeOps)+1, len(operations(t, loadDocument(t))); got != want {
 			t.Fatalf("%d operations covered, the document has %d", got, want)
 		}
 	})
@@ -236,7 +237,7 @@ func TestEveryOperationRefusesARequestWithoutAToken(t *testing.T) {
 	handler := f.handler(t, Limits{})
 	for pattern := range operations(t, loadDocument(t)) {
 		method, path, _ := strings.Cut(pattern, " ")
-		path = strings.NewReplacer("{ref}", "use-tls", "{decisionID}", f.old.String()).Replace(path)
+		path = strings.NewReplacer("{ref}", "use-tls", "{decisionID}", f.old.String(), "{id}", f.org.String(), "{premiseID}", "tls-version").Replace(path)
 		t.Run(pattern, func(t *testing.T) {
 			w := c.exchange(t, handler, method, path, "", "", nil)
 			if w.Code != http.StatusUnauthorized || errorOf(t, w) != errUnauthorized {

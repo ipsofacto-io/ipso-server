@@ -25,6 +25,7 @@ import (
 
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/authz"
+	"github.com/ipsofacto-io/ipso-server/internal/identity"
 )
 
 const documentPath = "../../api/openapi.yaml"
@@ -80,7 +81,7 @@ func TestDocumentIsValidOpenAPI31(t *testing.T) {
 
 // allRoutes is every route the API can mount: the ones behind a person's token and the one behind a CI job's.
 func allRoutes() []route {
-	return slices.Concat(routes(nil, time.Now), ciRoutes(nil, nil))
+	return slices.Concat(routes(nil, time.Now, nil), ciRoutes(nil, nil))
 }
 
 // The document describes exactly the routes the API mounts, under the same operationIds, so a route
@@ -146,13 +147,57 @@ func TestRoutesReadTheDocumentsQueryKeys(t *testing.T) {
 	}
 }
 
-// Every operation reads but two. POST /v1/resolve reads too: a list of paths does not fit a URL. POST
-// /v1/verdicts is the one that writes, and a CI job calls it with its own token (ADR-0102). No other
-// endpoint writes until IPSO-134.
-func TestEveryOperationIsAGetButTheTwoPosts(t *testing.T) {
-	for pattern := range operations(t, loadDocument(t)) {
-		if !strings.HasPrefix(pattern, "GET ") && pattern != "POST /v1/resolve" && pattern != "POST /v1/verdicts" {
-			t.Errorf("%s is not a read", pattern)
+// Every operation reads but the ones that write. POST /v1/resolve reads too: a list of paths does not fit a URL.
+// POST /v1/verdicts writes and a CI job calls it with its own token (ADR-0102). Every other operation that is
+// not a GET is a write of ADR-0109, so it is in writeOps and names an action only a person takes.
+func TestEveryOperationIsAGetOrANamedWrite(t *testing.T) {
+	for pattern, op := range operations(t, loadDocument(t)) {
+		if strings.HasPrefix(pattern, "GET ") || pattern == "POST /v1/resolve" || pattern == "POST /v1/verdicts" {
+			continue
+		}
+		if !slices.Contains(writeOps, op) {
+			t.Errorf("%s (%s) writes and is not one of the writes of ADR-0109", pattern, op)
+		}
+	}
+}
+
+// Every write is an action only a person takes: an agent, which holds the agent role and nothing else, may
+// not take it, and a person with the role of the matrix may (ADR-0076, ADR-0108).
+func TestEveryWriteIsAPersonAction(t *testing.T) {
+	policy := testPolicy(t)
+	seen := 0
+	for _, rt := range routes(nil, time.Now, nil) {
+		if !slices.Contains(writeOps, rt.op) {
+			continue
+		}
+		seen++
+		agent, err := policy.MayTake(t.Context(), authz.Input{Kind: identity.KindAgent, Grants: []identity.Grant{{Role: identity.RoleAgent}}, Action: rt.action})
+		if err != nil || agent {
+			t.Errorf("%s: an agent may take %s (%v)", rt.op, rt.action, err)
+		}
+		person := false
+		for _, role := range mayCall[rt.op] {
+			ok, err := policy.MayTake(t.Context(), authz.Input{Kind: identity.KindHuman, Grants: []identity.Grant{{Role: role}}, Action: rt.action})
+			if err != nil {
+				t.Fatal(err)
+			}
+			person = person || ok
+		}
+		if !person {
+			t.Errorf("%s: no person of the matrix may take %s", rt.op, rt.action)
+		}
+	}
+	if seen != len(writeOps) {
+		t.Errorf("%d of the %d writes are mounted", seen, len(writeOps))
+	}
+}
+
+// A route whose action names scopes reads them from the request, and a route that reads them names such an
+// action, so a scoped write cannot be mounted with no way to say what it acts on (ADR-0109).
+func TestEveryScopedRouteReadsItsTargets(t *testing.T) {
+	for _, rt := range routes(nil, time.Now, nil) {
+		if authz.Scoped(rt.action) != (rt.targets != nil) {
+			t.Errorf("%s: action %s scoped %v, targets set %v", rt.op, rt.action, authz.Scoped(rt.action), rt.targets != nil)
 		}
 	}
 }
@@ -489,16 +534,32 @@ func TestLoggedSubjectIsOneBoundedLine(t *testing.T) {
 }
 
 // A worker evaluation is a system action (ADR-0053, ADR-0098). No route runs a probe or writes an
-// evaluation, a reason, a clearance, or an allowlist row yet: IPSO-134 serves those writes behind the
-// premise.write and allowlist.write actions of the role policy (ADR-0108). A route named for one of
-// these is a decision to make there, so this test fails first.
-func TestNoRouteRunsOrRecordsAPremise(t *testing.T) {
-	for _, rt := range routes(nil, time.Now) {
+// evaluation or a review reason, and no route writes a waiver notice, which the hourly sweep records. A person
+// clears a reason and edits the allowlist (ADR-0109), and those two routes are the only ones named for a
+// premise. A route named for another of these is a decision to make, so this test fails first.
+func TestNoRouteRunsOrRecordsAnEvaluation(t *testing.T) {
+	people := map[string]bool{"clear_premise_reason": true, "allow_premise_host": true}
+	for _, rt := range routes(nil, time.Now, nil) {
 		named := strings.ToLower(rt.pattern + " " + rt.op)
-		for _, word := range []string{"premise", "probe", "evaluation", "reason", "clearance", "allowlist"} {
+		for _, word := range []string{"probe", "evaluation", "notice"} {
 			if strings.Contains(named, word) {
-				t.Errorf("%s (%s) is named for %q: no route may run or record a premise before IPSO-134", rt.pattern, rt.op, word)
+				t.Errorf("%s (%s) is named for %q: the worker runs and records those", rt.pattern, rt.op, word)
 			}
+		}
+		for _, word := range []string{"premise", "reason", "clearance", "allowlist"} {
+			if strings.Contains(named, word) && !people[rt.op] {
+				t.Errorf("%s (%s) is named for %q: only a human clearance and an allowlist change are routes", rt.pattern, rt.op, word)
+			}
+		}
+	}
+}
+
+// Only a refusal that depends on what the registry holds is a conflict. A NOT NULL violation or a syntax
+// error is a defect of the server and is a 500.
+func TestOnlyStateRefusalsAreConflicts(t *testing.T) {
+	for code, want := range map[string]bool{"23505": true, "23503": true, "23P01": true, "23514": true, "23502": false, "23000": false, "22001": false, "42P01": false, "": false} {
+		if got := conflicts(code); got != want {
+			t.Errorf("conflicts(%q) = %v, want %v", code, got, want)
 		}
 	}
 }

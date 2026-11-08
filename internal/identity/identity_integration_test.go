@@ -133,8 +133,8 @@ func TestAnAgentCannotApproveAProposal(t *testing.T) {
 	item := proposal(t, db, tenantA)
 	approve := func(approver uuid.UUID) error {
 		_, err := pgtest.Exec(t.Context(), db, tenantA.String(), `
-			INSERT INTO proposals.approval (tenant_id, proposal_id, approver_id, outcome)
-			VALUES ($1, $2, $3, 'approved')`, tenantA, item, approver)
+			INSERT INTO proposals.approval (tenant_id, proposal_id, approver_id, outcome, decision_id)
+			VALUES ($1, $2, $3, 'approved', uuidv7())`, tenantA, item, approver)
 		return err
 	}
 	if err := approve(agent); err == nil || !strings.Contains(err.Error(), "agent cannot approve") {
@@ -156,8 +156,8 @@ func TestOneTenantsPersonCannotApproveInAnother(t *testing.T) {
 	outsider := principal(t, db, tenantB, identity.KindHuman, "Bea", nil)
 	item := proposal(t, db, tenantA)
 	_, err := pgtest.Exec(t.Context(), db, tenantA.String(), `
-		INSERT INTO proposals.approval (tenant_id, proposal_id, approver_id, outcome)
-		VALUES ($1, $2, $3, 'approved')`, tenantA, item, outsider)
+		INSERT INTO proposals.approval (tenant_id, proposal_id, approver_id, outcome, decision_id)
+		VALUES ($1, $2, $3, 'approved', uuidv7())`, tenantA, item, outsider)
 	if err == nil {
 		t.Fatal("a principal of another tenant approved")
 	}
@@ -232,6 +232,8 @@ func TestApplicationRoleCannotRewriteIdentity(t *testing.T) {
 		`DELETE FROM identity.action_log`,
 		`UPDATE proposals.approval SET outcome = 'approved'`,
 		`DELETE FROM proposals.approval`,
+		`UPDATE proposals.agent_approval SET outcome = 'approved'`,
+		`DELETE FROM proposals.agent_approval`,
 	} {
 		if _, err := db.ExecContext(t.Context(), statement); err == nil {
 			t.Errorf("the application role ran %s", statement)
@@ -345,4 +347,144 @@ func TestALoginNeedsATenantRow(t *testing.T) {
 	if err := bind(t, db, tenantA, ada, idp, "subject-ada"); err == nil {
 		t.Error("a login was bound in a tenant that has no row")
 	}
+}
+
+// A write and its log entry are one transaction: a write that cannot be logged does not run, and an entry
+// never outlives a write that failed (ADR-0109).
+func TestWithActionLogsTheWriteInTheSameTransaction(t *testing.T) {
+	db := migrated(t)
+	ctx := t.Context()
+	person := principal(t, db, tenantA, identity.KindHuman, "Ada", nil)
+	write := func(tx *sql.Tx, subject string) (string, error) {
+		_, err := tx.ExecContext(ctx, `INSERT INTO registry.premise_host_allow (tenant_id, host, allowed) VALUES ($1, 'example.com', true)`, tenantA)
+		return subject, err
+	}
+	hosts := func() int {
+		var n int
+		if err := pgtest.Scan(ctx, db, tenantA.String(), `SELECT count(*) FROM registry.premise_host_allow`, nil, &n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	logged := func() []identity.Action {
+		actions, err := identity.Actions(ctx, db, tenantA, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return actions
+	}
+
+	if err := identity.WithAction(ctx, db, tenantA, person, "api.allow_premise_host", func(tx *sql.Tx) (string, error) { return write(tx, "allowlist row") }); err != nil {
+		t.Fatal(err)
+	}
+	if actions := logged(); hosts() != 1 || len(actions) != 1 || actions[0].Action != "api.allow_premise_host" || actions[0].Principal != person || actions[0].Responsible != person {
+		t.Fatalf("a write left %d hosts and %+v", hosts(), logged())
+	}
+
+	// An entry the log refuses rolls the write back.
+	err := identity.WithAction(ctx, db, tenantA, person, "NOT AN ACTION", func(tx *sql.Tx) (string, error) { return write(tx, "allowlist row") })
+	if err == nil || hosts() != 1 || len(logged()) != 1 {
+		t.Fatalf("a write that could not be logged ran: %v, %d hosts, %d entries", err, hosts(), len(logged()))
+	}
+	// So does a subject the log refuses.
+	err = identity.WithAction(ctx, db, tenantA, person, "api.allow_premise_host", func(tx *sql.Tx) (string, error) { return write(tx, "line\nbreak") })
+	if err == nil || hosts() != 1 || len(logged()) != 1 {
+		t.Fatalf("a write with a subject the log refuses ran: %v, %d hosts, %d entries", err, hosts(), len(logged()))
+	}
+	// A write that fails leaves no entry, and its error comes back as it was.
+	boom := errors.New("boom")
+	err = identity.WithAction(ctx, db, tenantA, person, "api.allow_premise_host", func(tx *sql.Tx) (string, error) { return "", boom })
+	if !errors.Is(err, boom) || len(logged()) != 1 {
+		t.Fatalf("a failed write: %v, %d entries", err, len(logged()))
+	}
+	// A principal of another tenant cannot be logged here, and the write goes with it.
+	outsider := principal(t, db, tenantB, identity.KindHuman, "Bea", nil)
+	err = identity.WithAction(ctx, db, tenantA, outsider, "api.allow_premise_host", func(tx *sql.Tx) (string, error) { return write(tx, "allowlist row") })
+	if err == nil || hosts() != 1 {
+		t.Fatalf("a principal of another tenant logged a write: %v, %d hosts", err, hosts())
+	}
+	// A call with no tenant or principal never starts.
+	if err := identity.WithAction(ctx, db, uuid.Nil, person, "api.x", func(*sql.Tx) (string, error) { return "", nil }); !errors.Is(err, identity.ErrInvalidQuery) {
+		t.Fatalf("no tenant: %v", err)
+	}
+	// An agent's write names its sponsor as the one answerable.
+	agent := principal(t, db, tenantA, identity.KindAgent, "claude-code", person)
+	if err := identity.WithAction(ctx, db, tenantA, agent, "api.allow_premise_host", func(tx *sql.Tx) (string, error) { return "x", nil }); err != nil {
+		t.Fatal(err)
+	}
+	if latest := logged()[0]; latest.Principal != agent || latest.Responsible != person {
+		t.Fatalf("an agent's entry names %+v", latest)
+	}
+}
+
+// An approval names the decision it wrote exactly when it approves, one decision comes from at most one
+// approval, and an agent proposal has an approval table of its own with the same rules (ADR-0076, ADR-0109).
+func TestAnApprovalCarriesItsDecisionExactlyWhenItApproves(t *testing.T) {
+	db := migrated(t)
+	ctx := t.Context()
+	person := principal(t, db, tenantA, identity.KindHuman, "Ada", nil)
+	agent := principal(t, db, tenantA, identity.KindAgent, "claude-code", person)
+	var agentProposal uuid.UUID
+	if err := pgtest.Scan(ctx, db, tenantA.String(), `
+		INSERT INTO proposals.agent_proposal (tenant_id, principal_id, payload) VALUES ($1, $2, '{"title":"Pin"}') RETURNING id`,
+		[]any{tenantA, agent}, &agentProposal); err != nil {
+		t.Fatal(err)
+	}
+	decision := uuid.MustParse("00000000-0000-7000-8000-0000000000f1")
+	for name, c := range map[string]struct {
+		table, proposal, outcome string
+		decision                 any
+		ok                       bool
+	}{
+		"an approval with a decision":       {"proposals.approval", "p1", "approved", decision, true},
+		"an approval with no decision":      {"proposals.approval", "p2", "approved", nil, false},
+		"a rejection with a decision":       {"proposals.approval", "p3", "rejected", decision, false},
+		"a rejection with none":             {"proposals.approval", "p4", "rejected", nil, true},
+		"a second approval of one decision": {"proposals.approval", "p5", "approved", decision, false},
+		"an agent approval with a decision": {"proposals.agent_approval", "a1", "approved", decision, true},
+		"an agent approval with none":       {"proposals.agent_approval", "a2", "approved", nil, false},
+	} {
+		var proposal uuid.UUID
+		switch {
+		case strings.HasPrefix(c.proposal, "a"):
+			proposal = agentProposal
+		default:
+			proposal = uuidFor(t, db, c.proposal)
+		}
+		_, err := pgtest.Exec(ctx, db, tenantA.String(),
+			`INSERT INTO `+c.table+` (tenant_id, proposal_id, approver_id, outcome, decision_id) VALUES ($1, $2, $3, $4, $5)`,
+			tenantA, proposal, person, c.outcome, c.decision)
+		if (err == nil) != c.ok {
+			t.Errorf("%s: %v, want success %v", name, err, c.ok)
+		}
+	}
+	// An agent cannot approve a proposal of the agent queue, and it is decided once.
+	if _, err := pgtest.Exec(ctx, db, tenantA.String(),
+		`INSERT INTO proposals.agent_approval (tenant_id, proposal_id, approver_id, outcome) VALUES ($1, $2, $3, 'rejected')`, tenantA, agentProposal, agent); err == nil || !strings.Contains(err.Error(), "agent cannot approve") {
+		t.Errorf("an agent approved an agent proposal: %v", err)
+	}
+	if _, err := pgtest.Exec(ctx, db, tenantA.String(),
+		`INSERT INTO proposals.agent_approval (tenant_id, proposal_id, approver_id, outcome) VALUES ($1, $2, $3, 'rejected')`, tenantA, agentProposal, person); err == nil {
+		t.Error("an agent proposal was decided twice")
+	}
+	// Another tenant's person cannot approve it.
+	outsider := principal(t, db, tenantB, identity.KindHuman, "Bea", nil)
+	if _, err := pgtest.Exec(ctx, db, tenantA.String(),
+		`INSERT INTO proposals.agent_approval (tenant_id, proposal_id, approver_id, outcome) VALUES ($1, $2, $3, 'rejected')`, tenantA, agentProposal, outsider); err == nil {
+		t.Error("a principal of another tenant approved")
+	}
+}
+
+// uuidFor makes a proposal of tenant A for the named case.
+func uuidFor(t *testing.T, db *sql.DB, name string) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := pgtest.Scan(t.Context(), db, tenantA.String(), `
+		INSERT INTO proposals.proposal
+			(tenant_id, payload, confidence, model_id, prompt_version, repo, pr_number, external_id, source_url, source_sha256, candidate_index)
+		VALUES ($1, '{}'::jsonb, 0.5, 'model', 'v1', 'acme/app', 1, $2, 'https://github.com/acme/app/pull/1', sha256($2::text::bytea), 0)
+		RETURNING id`, []any{tenantA, "comment-" + strings.TrimPrefix(name, "p")}, &id); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }

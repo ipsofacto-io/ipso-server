@@ -223,7 +223,7 @@ func TestANilPolicyAndTooManyTargetsAreErrors(t *testing.T) {
 		t.Errorf("a nil policy answered %v, %v", ok, err)
 	}
 	p := newPolicy(t)
-	many := make([][]uuid.UUID, maxTargets+1)
+	many := make([][]uuid.UUID, MaxTargets+1)
 	if ok, err := p.Allow(t.Context(), Input{Kind: identity.KindHuman, Grants: []identity.Grant{{Role: identity.RoleDecisionOwner}}, Action: DecisionApprove, Targets: many}); ok || err == nil {
 		t.Errorf("%d targets answered %v, %v", len(many), ok, err)
 	}
@@ -264,6 +264,88 @@ x := opa.runtime()`,
 		compiler.Compile(map[string]*ast.Module{"p.rego": module})
 		if !compiler.Failed() {
 			t.Errorf("a policy compiled with a forbidden builtin:\n%s", src)
+		}
+	}
+}
+
+func mayTake(t *testing.T, p *Policy, in Input) bool {
+	t.Helper()
+	ok, err := p.MayTake(t.Context(), in)
+	if err != nil {
+		t.Fatalf("%+v: %v", in, err)
+	}
+	return ok
+}
+
+// MayTake asks whether a role could take the action somewhere, so a scoped binding answers the same as a
+// binding over the whole tenant, whatever its scope and whatever targets are passed.
+func TestMayTakeNamesNoTarget(t *testing.T) {
+	p := newPolicy(t)
+	for _, role := range identity.Roles {
+		for _, action := range Actions {
+			want := slices.Contains(granted[role], action)
+			if got := mayTake(t, p, Input{Kind: kindOf(role), Grants: []identity.Grant{{Role: role}}, Action: action}); got != want {
+				t.Errorf("%s over the tenant, %s: may take %v, want %v", role, action, got, want)
+			}
+			if slices.Contains(scopableRoles, role) {
+				scoped := []identity.Grant{{Role: role, Scope: other}}
+				if got := mayTake(t, p, Input{Kind: kindOf(role), Grants: scoped, Action: action, Targets: [][]uuid.UUID{chainOf[target]}}); got != want {
+					t.Errorf("%s on a scope, %s: may take %v, want %v", role, action, got, want)
+				}
+			}
+		}
+	}
+}
+
+func TestMayTakeRefusesEveryDoubt(t *testing.T) {
+	p := newPolicy(t)
+	admin := []identity.Grant{{Role: identity.RoleAdmin}}
+	owner := []identity.Grant{{Role: identity.RoleDecisionOwner}}
+	for _, c := range []struct {
+		name string
+		in   Input
+	}{
+		{"no binding", Input{Kind: identity.KindHuman, Action: DecisionApprove}},
+		{"no action", Input{Kind: identity.KindHuman, Grants: owner}},
+		{"an action the policy does not know", Input{Kind: identity.KindHuman, Grants: owner, Action: "registry.write"}},
+		{"a role that does not grant the action", Input{Kind: identity.KindHuman, Grants: admin, Action: DecisionApprove}},
+		{"a kind the policy does not know", Input{Kind: "service", Grants: owner, Action: DecisionApprove}},
+		{"no kind", Input{Grants: owner, Action: DecisionApprove}},
+		{"an agent that holds a person's role", Input{Kind: identity.KindAgent, Grants: owner, Action: DecisionApprove}},
+		{"an agent that holds the agent role", Input{Kind: identity.KindAgent, Grants: []identity.Grant{{Role: identity.RoleAgent}}, Action: ScopeWrite}},
+		{"a person that holds the agent role", Input{Kind: identity.KindHuman, Grants: []identity.Grant{{Role: identity.RoleAgent}}, Action: ProposalCreate}},
+	} {
+		if mayTake(t, p, c.in) {
+			t.Errorf("%s may take the action", c.name)
+		}
+	}
+	var none *Policy
+	if ok, err := none.MayTake(t.Context(), Input{Kind: identity.KindHuman, Grants: owner, Action: DecisionApprove}); ok || err == nil {
+		t.Errorf("a nil policy answered %v, %v", ok, err)
+	}
+}
+
+// Scoped is written in Go and in policy.rego. The policy refuses a scoped action that names no target to
+// every principal, so the two agree when the holder of the action is refused exactly for the scoped ones.
+func TestScopedAgreesWithThePolicy(t *testing.T) {
+	p := newPolicy(t)
+	for _, action := range Actions {
+		var holder string
+		for _, role := range identity.Roles {
+			if slices.Contains(granted[role], action) && role != identity.RoleAgent {
+				holder = role
+				break
+			}
+		}
+		if holder == "" {
+			holder = identity.RoleAgent
+		}
+		in := Input{Kind: kindOf(holder), Grants: []identity.Grant{{Role: holder}}, Action: action}
+		if refused := !ask(t, p, in); refused != Scoped(action) {
+			t.Errorf("%s: the policy refuses a call with no target %v, Scoped says %v", action, refused, Scoped(action))
+		}
+		if Scoped(action) != isScoped(action) {
+			t.Errorf("%s: Scoped says %v, the test matrix says %v", action, Scoped(action), isScoped(action))
 		}
 	}
 }

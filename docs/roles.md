@@ -16,7 +16,7 @@ A principal holds a role through a row of `identity.role_binding`. A principal w
 | `auditor` | yes | yes | | | | | |
 | `agent` | yes | | yes | | | | |
 
-Today the API has read routes only, so most of the table waits for its routes: approving, waiving and the decision writes come with IPSO-134, and managing people with IPSO-137. The five `GET /v1/audit/*` routes need `auditor` or `admin`. Every other read, and the MCP tools, need any role. Proposing over MCP needs `contributor`, `decision-owner`, `approver` or `agent`.
+The write routes of the table are served ([ADR-0109](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0109-control-plane-write-routes.md)), apart from managing people, which comes with IPSO-137. The five `GET /v1/audit/*` routes need `auditor` or `admin`. Every other read, and the MCP tools, need any role. Proposing over MCP needs `contributor`, `decision-owner`, `approver` or `agent`.
 
 An admin manages people and structure and does not approve or waive, so the person who grants a role is not the person who approves a decision.
 
@@ -32,7 +32,26 @@ Only `contributor`, `decision-owner`, `approver` and `agent` may be bound to a s
 
 A scoped action, such as approving a decision, is allowed only when every scope the decision names is covered by a binding of a role that grants it. A decision with one scope outside the binding is refused whole.
 
-A scope that is still bound cannot be retired. Remove the bindings on it first.
+A scope that is still bound cannot be retired, and the API answers 409. Remove the bindings on it first.
+
+## The write routes
+
+Every write is an action only a person takes, so an agent is refused all of them whatever it holds. A binding to a scope covers the scoped actions only at that scope and below it, and a call that names several scopes needs every one of them covered. The scopes a call names are the ones in this table, and a decision the tenant has no row for is covered only by a binding over the whole tenant.
+
+| Route | Action | Roles | Scopes the binding must cover |
+| --- | --- | --- | --- |
+| `POST /v1/scopes` | `scope.write` | decision-owner, admin | the parent, or the whole tenant for an org |
+| `PUT /v1/scopes/{id}/parent` | `scope.write` | decision-owner, admin | the scope and its new parent |
+| `DELETE /v1/scopes/{id}` | `scope.write` | decision-owner, admin | the scope |
+| `POST /v1/supersessions` | `decision.supersede` | decision-owner | every scope of both decisions |
+| `POST /v1/decisions/{decisionID}/grandfather-period` | `decision.supersede` | decision-owner | every scope of the decision |
+| `POST /v1/decisions/{decisionID}/baselines` | `decision.supersede` | decision-owner | every scope of the decision |
+| `POST /v1/waivers` | `waiver.record` | approver, decision-owner | the waiver's one scope |
+| `POST /v1/decisions/{decisionID}/premises/{premiseID}/clearance` | `premise.write` | decision-owner | every scope of the decision |
+| `POST /v1/premise-hosts` | `allowlist.write` | admin | none, the action is tenant-wide |
+| `POST /v1/proposals/{id}/approval` and `POST /v1/agent-proposals/{id}/approval` | `decision.approve` | approver, decision-owner | an approval: every scope of the decision it writes. A rejection: the whole tenant |
+
+The approver of a waiver or an approval is the authenticated person and is never in the body. An approval writes the first version of the decision in the same transaction, so a decision version exists only through the approval of a person. A premise evaluation, a review reason and a waiver notice are not routes: the worker writes them. Each write is logged with the person's id in the same transaction, in `identity.action_log`, which the audit log of IPSO-68 builds on.
 
 ## Bind and revoke
 

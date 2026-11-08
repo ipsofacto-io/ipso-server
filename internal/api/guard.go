@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
 	"slices"
@@ -18,6 +21,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/authz"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
+	"github.com/ipsofacto-io/ipso-server/internal/registry"
 	"github.com/ipsofacto-io/ipso-server/internal/verification"
 )
 
@@ -38,9 +42,14 @@ type guard struct {
 	limiter    *ratelimit.Limiter
 	policy     *authz.Policy
 	principals func(ctx context.Context, tenant, id uuid.UUID) (identity.Principal, error)
-	maxBody    int64
-	now        func() time.Time
-	log        *slog.Logger
+	// decisionScopes and chains read what a scoped call acts on, and are fields so that a test can stand in
+	// for the store: the scopes the decisions name and how many of them the tenant has no row for, and the
+	// ancestor chains of the scopes (ADR-0109).
+	decisionScopes func(ctx context.Context, tenant uuid.UUID, decisions []uuid.UUID) ([]uuid.UUID, int, error)
+	chains         func(ctx context.Context, tenant uuid.UUID, scopes []uuid.UUID) ([][]uuid.UUID, error)
+	maxBody        int64
+	now            func() time.Time
+	log            *slog.Logger
 }
 
 // mounted is a route on the mux, and whether a CI job calls it instead of a person.
@@ -67,7 +76,7 @@ func mount(routes, ciRoutes []route) (*http.ServeMux, map[string]mounted) {
 	}
 	// Anything else is 404, and only to a caller who holds a role, so the routes cannot be listed
 	// without one.
-	add(route{"/", "", authz.Member, nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	add(route{"/", "", authz.Member, nil, nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, errNotFound)
 	})}, false)
 	return mux, table
@@ -118,15 +127,17 @@ func (g *guard) guardPerson(w http.ResponseWriter, r *http.Request, rt route, ne
 		writeError(w, http.StatusInternalServerError, errInternal)
 		return
 	}
-	allowed, err := g.policy.Allow(r.Context(), authz.Input{Kind: principal.Kind, Grants: principal.Grants, Action: rt.action})
-	if err != nil {
-		g.log.Error("the role policy could not decide, so the call was refused", "tenant", caller.Tenant, "op", rt.op, "action", rt.action)
-		writeError(w, http.StatusInternalServerError, errInternal)
-		return
-	}
-	if !allowed {
-		g.log.Info("the role policy refused a call", "tenant", caller.Tenant, "principal", caller.Principal, "op", rt.op, "action", rt.action)
-		writeError(w, http.StatusForbidden, errForbidden)
+	in := authz.Input{Kind: principal.Kind, Grants: principal.Grants, Action: rt.action}
+	// A scoped action reads its body before the policy can decide, because the scopes it acts on are in the
+	// body. The body is read only for a principal who could take the action somewhere, and the handler gets the
+	// bytes the targets were read from.
+	var body []byte
+	if authz.Scoped(rt.action) {
+		var ok bool
+		if body, ok = g.coverTargets(w, r, rt, caller, in); !ok {
+			return
+		}
+	} else if !g.allow(w, r, rt, caller, in) {
 		return
 	}
 	// An agent's call is logged before it runs, and the log names its sponsor (ADR-0076). A call
@@ -138,8 +149,187 @@ func (g *guard) guardPerson(w http.ResponseWriter, r *http.Request, rt route, ne
 			return
 		}
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, g.maxBody)
+	if body != nil {
+		r.Body = io.NopCloser(bytes.NewReader(body))
+	} else {
+		r.Body = http.MaxBytesReader(w, r.Body, g.maxBody)
+	}
 	next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, caller)))
+}
+
+// allow asks the role policy about an action that names no scope, and writes the refusal when the call may not run.
+func (g *guard) allow(w http.ResponseWriter, r *http.Request, rt route, caller Caller, in authz.Input) bool {
+	allowed, err := g.policy.Allow(r.Context(), in)
+	if err != nil {
+		g.log.Error("the role policy could not decide, so the call was refused", "tenant", caller.Tenant, "op", rt.op, "action", rt.action)
+		writeError(w, http.StatusInternalServerError, errInternal)
+		return false
+	}
+	return allowed || g.refuse(w, caller, rt)
+}
+
+// refuse writes the plain 403 of ADR-0108 and logs the refusal. It returns false for the caller to return.
+func (g *guard) refuse(w http.ResponseWriter, caller Caller, rt route) bool {
+	g.log.Info("the role policy refused a call", "tenant", caller.Tenant, "principal", caller.Principal, "op", rt.op, "action", rt.action)
+	writeError(w, http.StatusForbidden, errForbidden)
+	return false
+}
+
+// maxCallTargets bounds the scopes one call may name. A decision names at most 100, and a supersession names
+// two decisions, so a call that names more is refused rather than judged in part.
+const maxCallTargets = 1000
+
+// named is what a scoped route acts on, as the request names it. root is set when the call acts on the
+// tenant as a whole, such as creating an org or rejecting a proposal, which only a binding over the whole
+// tenant covers.
+type named struct {
+	scopes    []uuid.UUID
+	decisions []uuid.UUID
+	root      bool
+}
+
+// targetsFunc reads from a request, after the guard has read its body whole, what the route acts on. params
+// are the wildcards of the route's pattern. The handler reads the same bytes with the same decoder, so what
+// the role policy covers is what the handler writes (ADR-0109).
+type targetsFunc func(params map[string]string, body []byte) (named, error)
+
+// coverTargets decides a scoped action. It asks, in the order that reveals least and spends least, whether
+// the principal could take the action anywhere, which needs no body. Only then does it read the body, read
+// the targets from it, turn the decisions into their scopes, read the ancestor chains, and ask the policy
+// about every one, in chunks of authz.MaxTargets. It returns the body for the handler, or false after it has
+// written the refusal. A route with no targets function is refused, and so is a call with no target.
+func (g *guard) coverTargets(w http.ResponseWriter, r *http.Request, rt route, caller Caller, in authz.Input) ([]byte, bool) {
+	ctx := r.Context()
+	may, err := g.policy.MayTake(ctx, in)
+	if err != nil {
+		g.log.Error("the role policy could not decide, so the call was refused", "tenant", caller.Tenant, "op", rt.op, "action", rt.action)
+		writeError(w, http.StatusInternalServerError, errInternal)
+		return nil, false
+	}
+	if !may {
+		return nil, g.refuse(w, caller, rt)
+	}
+	if rt.targets == nil {
+		g.log.Error("a scoped route names no targets, so it is refused", "op", rt.op, "action", rt.action)
+		return nil, g.refuse(w, caller, rt)
+	}
+	body, ok := g.readBody(w, r)
+	if !ok {
+		return nil, false
+	}
+	params, ok := pathParams(rt.pattern, r.URL.EscapedPath())
+	if !ok {
+		writeError(w, http.StatusBadRequest, errInvalidQuery)
+		return nil, false
+	}
+	n, err := rt.targets(params, body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errInvalidQuery)
+		return nil, false
+	}
+	scopes := slices.Clone(n.scopes)
+	root := n.root
+	if len(n.decisions) > 0 {
+		fromDecisions, missing, err := g.decisionScopes(ctx, caller.Tenant, n.decisions)
+		if err != nil {
+			g.log.Error("the scopes of a call could not be read, so it was refused", "tenant", caller.Tenant, "op", rt.op)
+			writeError(w, http.StatusInternalServerError, errInternal)
+			return nil, false
+		}
+		scopes = append(scopes, fromDecisions...)
+		// A decision the tenant has no row for is covered by nothing but a binding over the whole tenant, so a
+		// scoped principal cannot tell it from a decision outside its scope.
+		root = root || missing > 0
+	}
+	scopes = registry.UniqueIDs(scopes)
+	if len(scopes) > maxCallTargets {
+		g.log.Warn("a call names too many scopes, so it was refused", "tenant", caller.Tenant, "op", rt.op, "scopes", len(scopes))
+		return nil, g.refuse(w, caller, rt)
+	}
+	var chains [][]uuid.UUID
+	if root {
+		chains = append(chains, nil)
+	}
+	for chunk := range slices.Chunk(scopes, authz.MaxTargets) {
+		read, err := g.chains(ctx, caller.Tenant, chunk)
+		if err != nil {
+			g.log.Error("the ancestors of a call could not be read, so it was refused", "tenant", caller.Tenant, "op", rt.op)
+			writeError(w, http.StatusInternalServerError, errInternal)
+			return nil, false
+		}
+		chains = append(chains, read...)
+	}
+	if len(chains) == 0 {
+		return nil, g.refuse(w, caller, rt)
+	}
+	for chunk := range slices.Chunk(chains, authz.MaxTargets) {
+		in.Targets = chunk
+		allowed, err := g.policy.Allow(ctx, in)
+		if err != nil {
+			g.log.Error("the role policy could not decide, so the call was refused", "tenant", caller.Tenant, "op", rt.op, "action", rt.action)
+			writeError(w, http.StatusInternalServerError, errInternal)
+			return nil, false
+		}
+		if !allowed {
+			return nil, g.refuse(w, caller, rt)
+		}
+	}
+	return body, true
+}
+
+// readBody reads the whole body of a write, within the request cap. A route that takes a body takes JSON,
+// and DELETE takes none. The bytes come back non-nil, so the guard knows to hand them on.
+func (g *guard) readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	if r.Method == http.MethodPost || r.Method == http.MethodPut {
+		if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
+			writeError(w, http.StatusUnsupportedMediaType, errUnsupportedMedia)
+			return nil, false
+		}
+	}
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, g.maxBody))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, errTooLarge)
+		} else {
+			writeError(w, http.StatusBadRequest, errInvalidQuery)
+		}
+		return nil, false
+	}
+	if data == nil {
+		data = []byte{}
+	}
+	return data, true
+}
+
+// pathParams reads the wildcards of a route's pattern from the escaped path of a request, the way the mux
+// does, so a value with an escaped slash stays one value. It reports false for a path the pattern does not
+// match, which the mux would not have routed here.
+func pathParams(pattern, escapedPath string) (map[string]string, bool) {
+	_, pat, found := strings.Cut(pattern, " ")
+	if !found {
+		pat = pattern
+	}
+	want := strings.Split(strings.Trim(pat, "/"), "/")
+	got := strings.Split(strings.Trim(escapedPath, "/"), "/")
+	if len(want) != len(got) {
+		return nil, false
+	}
+	out := make(map[string]string)
+	for i, segment := range want {
+		if name, ok := strings.CutPrefix(segment, "{"); ok {
+			value, err := url.PathUnescape(got[i])
+			if err != nil || value == "" {
+				return nil, false
+			}
+			out[strings.TrimSuffix(name, "}")] = value
+			continue
+		}
+		if segment != got[i] {
+			return nil, false
+		}
+	}
+	return out, true
 }
 
 // guardUpload guards the route a CI job calls. It runs in the order that reveals least and spends least

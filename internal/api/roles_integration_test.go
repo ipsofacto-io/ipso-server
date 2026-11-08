@@ -53,8 +53,9 @@ func TestEveryOperationAsksTheRoleOfTheCaller(t *testing.T) {
 	// Three subjects make 14 calls each for one tenant, past the default burst of 20.
 	handler := f.handler(t, Limits{Rate: 1000, Burst: 1000})
 	operations := f.operations(t)
-	if len(operations) != len(mayCall) {
-		t.Fatalf("%d operations here, %d in the matrix", len(operations), len(mayCall))
+	// The writes are called in writes_integration_test.go, each as every role.
+	if len(operations)+len(writeOps) != len(mayCall) {
+		t.Fatalf("%d operations here and %d writes, %d in the matrix", len(operations), len(writeOps), len(mayCall))
 	}
 	contentType := func(o operation) string {
 		if o.body != nil {

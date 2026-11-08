@@ -67,7 +67,7 @@ Trust `ca.pem` in your browser or operating system for this session, or accept t
 
 To sign out, run `fetch('/auth/logout', {method: 'POST'})` in the console of `http://localhost:8080`. The test user is the one the seed bound, so the sign-in works for it and for nobody else: a person Dex would let in and the seed never bound gets 403 `unknown_login`.
 
-`GET /healthz` needs no token. The routes are in [api/openapi.yaml](../api/openapi.yaml). The registry is empty, and no route writes yet (IPSO-134), so the web app reads and writes nothing.
+`GET /healthz` needs no token. The routes are in [api/openapi.yaml](../api/openapi.yaml). The registry is empty. The seeded person is an admin, who may create scopes and edit the premise allowlist, and the other writes need the roles of [docs/roles.md](roles.md). The web app only reads until IPSO-146.
 
 A token minted for `other-app` is refused with 401, and a valid token whose subject the tenant never bound is refused with 403. The tenant is never read from the request: a `tenant` key in the query is 400.
 
