@@ -108,7 +108,7 @@ func TestTargetsReadsTheChainsOfTheTenantsOwnScopes(t *testing.T) {
 	}{
 		{"no tenant", uuid.Nil, []uuid.UUID{repo}},
 		{"no scope", tenantA, nil},
-		{"too many scopes", tenantA, make([]uuid.UUID, maxTargets+1)},
+		{"too many scopes", tenantA, make([]uuid.UUID, MaxTargets+1)},
 	} {
 		if _, err := Targets(t.Context(), db, c.tenant, c.scopes); err == nil {
 			t.Errorf("%s: no error", c.name)

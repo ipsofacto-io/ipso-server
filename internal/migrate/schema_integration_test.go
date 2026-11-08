@@ -496,6 +496,8 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 	want := []trigger{
 		{"identity.action_log", "action_log_open_sys_period", 1 | 2 | 4},
 		{"identity.action_log", "action_log_stamp", 1 | 2 | 4},
+		{"proposals.agent_approval", "agent_approval_approver", 1 | 2 | 4},
+		{"proposals.agent_approval", "agent_approval_open_sys_period", 1 | 2 | 4},
 		{"proposals.agent_proposal", "agent_proposal_open_sys_period", 1 | 2 | 4},
 		{"proposals.approval", "approval_approver", 1 | 2 | 4},
 		{"proposals.approval", "approval_open_sys_period", 1 | 2 | 4},

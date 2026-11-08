@@ -239,3 +239,27 @@ func inTenantAt(ctx context.Context, db *sql.DB, tenant uuid.UUID, level sql.Iso
 	}
 	return tx.Commit()
 }
+
+// WithAction runs fn and logs the action in the same transaction, so a write that cannot be logged does
+// not run and a log entry never outlives a write that failed (ADR-0109). The transaction is READ
+// COMMITTED with ipso.tenant set, because the scope and supersession triggers refuse a repeatable read
+// transaction. fn returns the subject of the entry: the ids it wrote, never a reason, a ticket or a body.
+// The database names the person answerable, the sponsor for an agent, whatever the caller sends. fn's
+// error is returned as it is. The tenant must be the authenticated one, because WithAction trusts it.
+func WithAction(ctx context.Context, db *sql.DB, tenant, principal uuid.UUID, action string, fn func(*sql.Tx) (string, error)) error {
+	if tenant == uuid.Nil || principal == uuid.Nil {
+		return fmt.Errorf("%w: a tenant and a principal are required", ErrInvalidQuery)
+	}
+	return inTenantAt(ctx, db, tenant, sql.LevelReadCommitted, false, func(tx *sql.Tx) error {
+		subject, err := fn(tx)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO identity.action_log (tenant_id, principal_id, responsible_id, action, subject)
+			VALUES ($1, $2, $2, $3, $4)`, tenant, principal, action, subject); err != nil {
+			return fmt.Errorf("record the action: %w", err)
+		}
+		return nil
+	})
+}

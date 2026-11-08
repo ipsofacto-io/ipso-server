@@ -41,15 +41,21 @@ const audience = "https://ipso.example.test/api"
 
 // Who the test tokens speak for, by subject. personA and personB are the admins of their tenants and
 // agentA holds the agent role. viewerA, auditorA and nobodyA are people of tenant A who hold the viewer
-// role, the auditor role, and no role. ghost names a principal that tenant A does not have.
+// role, the auditor role, and no role. ownerA, approverA and contributorA hold the decision-owner, approver
+// and contributor roles over the whole tenant, and repoApproverA holds the approver role at the scope of
+// one repo and below. ghost names a principal that tenant A does not have.
 const (
-	personA  = "person-a"
-	agentA   = "agent-a"
-	personB  = "person-b"
-	viewerA  = "viewer-a"
-	auditorA = "auditor-a"
-	nobodyA  = "nobody-a"
-	ghost    = "ghost"
+	personA       = "person-a"
+	agentA        = "agent-a"
+	personB       = "person-b"
+	viewerA       = "viewer-a"
+	auditorA      = "auditor-a"
+	nobodyA       = "nobody-a"
+	ownerA        = "owner-a"
+	approverA     = "approver-a"
+	contributorA  = "contributor-a"
+	repoApproverA = "repo-approver-a"
+	ghost         = "ghost"
 )
 
 // fixture is a migrated database with the same rows in two tenants, so a read that crossed tenants
@@ -64,6 +70,8 @@ type fixture struct {
 	org, repo, docs, prod uuid.UUID
 	tls, api, old, other  uuid.UUID
 	waiver                uuid.UUID
+	// proposal and agentProposal are the pending proposals of tenant A.
+	proposal, agentProposal uuid.UUID
 	// uploads is the one verdict upload seeded for each tenant.
 	uploads map[uuid.UUID]uuid.UUID
 }
@@ -97,6 +105,7 @@ func newFixture(t *testing.T) *fixture {
 		return f.insert(t, `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', $2) RETURNING id`, tenantA, name)
 	}
 	viewer, auditor, nobody := person("Vera"), person("Otto"), person("Noor")
+	owner, approver, contributor, repoApprover := person("Olga"), person("Alma"), person("Cleo"), person("Rae")
 	f.callers = map[string]Caller{
 		personA:  {Tenant: tenantA, Principal: people[tenantA]},
 		agentA:   {Tenant: tenantA, Principal: agent},
@@ -105,8 +114,16 @@ func newFixture(t *testing.T) *fixture {
 		auditorA: {Tenant: tenantA, Principal: auditor},
 		nobodyA:  {Tenant: tenantA, Principal: nobody},
 		ghost:    {Tenant: tenantA, Principal: people[tenantB]},
+
+		ownerA:        {Tenant: tenantA, Principal: owner},
+		approverA:     {Tenant: tenantA, Principal: approver},
+		contributorA:  {Tenant: tenantA, Principal: contributor},
+		repoApproverA: {Tenant: tenantA, Principal: repoApprover},
 	}
-	for subject, role := range map[string]string{personA: "admin", personB: "admin", agentA: "agent", viewerA: "viewer", auditorA: "auditor"} {
+	for subject, role := range map[string]string{
+		personA: "admin", personB: "admin", agentA: "agent", viewerA: "viewer", auditorA: "auditor",
+		ownerA: "decision-owner", approverA: "approver", contributorA: "contributor",
+	} {
 		c := f.callers[subject]
 		f.exec(t, `INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ($1, $2, $3)`, c.Tenant, c.Principal, role)
 	}
@@ -119,6 +136,8 @@ func newFixture(t *testing.T) *fixture {
 	f.docs = scope(tenantA, f.repo, "path", "docs/**")
 	f.prod = scope(tenantA, f.repo, "env", "prod")
 	globex := scope(tenantB, nil, "org", "globex")
+	f.exec(t, `INSERT INTO identity.role_binding (tenant_id, principal_id, role, scope_id) VALUES ($1, $2, 'approver', $3)`,
+		tenantA, repoApprover, f.repo)
 
 	decision := func(tenant, id uuid.UUID, slug, valid string, scope uuid.UUID) {
 		t.Helper()
@@ -141,18 +160,22 @@ func newFixture(t *testing.T) *fixture {
 		RETURNING id`, tenantA, f.api, f.repo, people[tenantA])
 
 	for _, tenant := range []uuid.UUID{tenantA, tenantB} {
-		f.exec(t, `
+		proposal := f.insert(t, `
 			INSERT INTO proposals.proposal
 				(tenant_id, payload, confidence, model_id, prompt_version, repo, pr_number, external_id, source_url, source_sha256, candidate_index)
-			VALUES ($1, '{"title":"Use Postgres"}', 0.8, 'm', 'p', 'acme/api', 8, 'pull-8', 'https://github.com/acme/api/pull/8', $2, 0)`,
+			VALUES ($1, '{"title":"Use Postgres"}', 0.8, 'm', 'p', 'acme/api', 8, 'pull-8', 'https://github.com/acme/api/pull/8', $2, 0)
+			RETURNING id`,
 			tenant, make([]byte, 32))
+		if tenant == tenantA {
+			f.proposal = proposal
+		}
 		f.exec(t, `
 			INSERT INTO proposals.check_proposal
 				(tenant_id, decision_id, decision_version, spec, rego, rego_sha256, fixtures, fixtures_total, fixtures_passed, repaired, model_id, prompt_version)
 			VALUES ($1, $2, 1, '{"rules":[]}', 'package p', sha256(convert_to('package p', 'UTF8')), '[{}, {}]', 2, 2, false, 'm', 'p')`,
 			tenant, f.tls)
 	}
-	f.exec(t, `INSERT INTO proposals.agent_proposal (tenant_id, principal_id, payload) VALUES ($1, $2, '{"title":"Pin API versions"}')`, tenantA, agent)
+	f.agentProposal = f.insert(t, `INSERT INTO proposals.agent_proposal (tenant_id, principal_id, payload) VALUES ($1, $2, '{"title":"Pin API versions"}') RETURNING id`, tenantA, agent)
 	f.uploads = map[uuid.UUID]uuid.UUID{}
 	for tenant, repo := range map[uuid.UUID]string{tenantA: "acme/api", tenantB: "globex/web"} {
 		upload := f.insert(t, `

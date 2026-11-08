@@ -71,7 +71,131 @@ export interface paths {
         /** List the scope tree as it was known. */
         get: operations["list_scopes"];
         put?: never;
+        /**
+         * Create a scope.
+         * @description Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). A scope is insert-only: a typo is corrected by retiring the node and creating another. An org has no parent and every other kind has one, and the parent must be of a kind the node can sit under (ADR-0051). Creating an org needs the role over the whole tenant.
+         */
+        post: operations["create_scope"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/scopes/{id}/parent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Move a scope under another parent.
+         * @description Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). The node keeps its id, so every decision, waiver and role binding that names it follows (ADR-0056). The role must cover the node and the new parent. A move under the node itself or one of its descendants, a parent of a kind the node cannot sit under, and a repo whose owner is not the org above the new parent are 409.
+         */
+        put: operations["reparent_scope"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/scopes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Retire a scope.
+         * @description Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). A scope that still has a child, or that a role binding still names, is 409: retire the children and remove the bindings first (ADR-0056, ADR-0108). A waiver or a decision that names the scope is kept.
+         */
+        delete: operations["retire_scope"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/supersessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record that a decision replaces another from an instant.
+         * @description Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). The role must cover every scope of both decisions. The insert closes the old decision in the same transaction (ADR-0052). An instant that the two decisions do not both span, a decision that is already superseded, and a decision that already has a successor are 409.
+         */
+        post: operations["record_supersession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/decisions/{decisionID}/grandfather-period": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record the grandfather period of a decision.
+         * @description Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). The role must cover every scope of the decision. A decision has one period, ever, so a second is 409 (ADR-0052). A period with no end is a baseline.
+         */
+        post: operations["record_grandfather_period"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/decisions/{decisionID}/baselines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record the baseline of a decision in one repository.
+         * @description Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). The role must cover every scope of the decision. A baseline holds the fingerprints of the violations that already exist, as digests and never paths or messages (ADR-0052, ADR-0059). The decision needs its grandfather period first, and there is one baseline for each decision and repository, so a missing period and a second baseline are 409.
+         */
+        post: operations["record_baseline"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/decisions/{decisionID}/premises/{premiseID}/clearance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clear the open review reason of a premise.
+         * @description Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). The role must cover every scope of the decision. The clearance says an owner looked, and it does not change the decision (ADR-0053). A premise with no open reason is 404. The worker writes the evaluation and the reason, and no route does. The body is an empty object.
+         */
+        post: operations["clear_premise_reason"];
         delete?: never;
         options?: never;
         head?: never;
@@ -91,7 +215,31 @@ export interface paths {
          */
         get: operations["list_waivers"];
         put?: never;
-        post?: never;
+        /**
+         * Record a waiver with an expiry.
+         * @description Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). The approver is the authenticated person and is never in the body (ADR-0076, ADR-0054). The period is half open and at most 90 days, and it must sit inside a current row of the decision. A waiver whose scope is not on or under the scopes of the decision, or whose period the decision does not contain, is 409. The answer leaves out the reason and the approver, as the read does.
+         */
+        post: operations["record_waiver"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/premise-hosts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Allow or withdraw a host a premise probe may dial.
+         * @description Only an admin who is a person takes it (ADR-0108). The latest row for a host decides, and a tenant with no row allows no host (ADR-0053, ADR-0098). A host is a DNS name in lowercase ASCII, in punycode when it is not, and never an address.
+         */
+        post: operations["allow_premise_host"];
         delete?: never;
         options?: never;
         head?: never;
@@ -115,6 +263,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/proposals/{id}/approval": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve or reject a pull request proposal.
+         * @description Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). An approval carries the decision the person wrote, and it writes the first version of that decision in the same transaction, so a decision version exists only through the approval of a person (ADR-0076). The role must cover every scope of the decision. A rejection carries no decision and needs the role over the whole tenant. A proposal is decided once, and a second answer is 409. The body of the decision is at most 1 MiB in the text form the database stores, and a larger one is 413 and is not stored (ADR-0051, ADR-0092).
+         */
+        post: operations["approve_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agent-proposals": {
         parameters: {
             query?: never;
@@ -126,6 +294,26 @@ export interface paths {
         get: operations["list_agent_proposals"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent-proposals/{id}/approval": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve or reject a agent proposal.
+         * @description Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). An approval carries the decision the person wrote, and it writes the first version of that decision in the same transaction, so a decision version exists only through the approval of a person (ADR-0076). The role must cover every scope of the decision. A rejection carries no decision and needs the role over the whole tenant. A proposal is decided once, and a second answer is 409. The body of the decision is at most 1 MiB in the text form the database stores, and a larger one is 413 and is not stored (ADR-0051, ADR-0092).
+         */
+        post: operations["approve_agent_proposal"];
         delete?: never;
         options?: never;
         head?: never;
@@ -365,7 +553,7 @@ export interface components {
         };
         Error: {
             /** @enum {string} */
-            error: "invalid query" | "unauthorized" | "forbidden" | "not found" | "too large" | "unsupported media type" | "rate limited" | "timeout" | "unavailable" | "response too large" | "internal";
+            error: "invalid query" | "unauthorized" | "forbidden" | "not found" | "conflict" | "too large" | "unsupported media type" | "rate limited" | "timeout" | "unavailable" | "response too large" | "internal";
         };
         Decision: {
             /** Format: uuid */
@@ -446,6 +634,130 @@ export interface components {
             /** Format: date-time */
             known: string;
             waivers: components["schemas"]["Waiver"][];
+        };
+        CreateScopeRequest: {
+            /**
+             * Format: uuid
+             * @description Absent or null for an org, and the parent for every other kind.
+             */
+            parent_id?: string | null;
+            /** @enum {string} */
+            kind: "org" | "domain" | "service" | "repo" | "path" | "env";
+            /** @description Written in the grammar of its kind (ADR-0051). */
+            selector: string;
+        };
+        ReparentScopeRequest: {
+            /** Format: uuid */
+            parent_id: string;
+        };
+        SupersessionRequest: {
+            /** Format: uuid */
+            from_decision: string;
+            /** Format: uuid */
+            to_decision: string;
+            /** Format: date-time */
+            effective_at: string;
+        };
+        Supersession: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            from_decision: string;
+            /** Format: uuid */
+            to_decision: string;
+            /** Format: date-time */
+            effective_at: string;
+        };
+        GrandfatherRequest: {
+            /** Format: date-time */
+            valid_from: string;
+            /**
+             * Format: date-time
+             * @description Absent or null for a period with no deadline, which is a baseline.
+             */
+            valid_until?: string | null;
+        };
+        GrandfatherPeriod: {
+            /** Format: uuid */
+            decision_id: string;
+            /** Format: date-time */
+            valid_from: string;
+            /** Format: date-time */
+            valid_until: string | null;
+        };
+        BaselineRequest: {
+            /** @description A lowercase owner/name. */
+            repo: string;
+            fingerprints: components["schemas"]["Sha256"][];
+        };
+        Baseline: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            decision_id: string;
+            repo: string;
+            fingerprint_count: number;
+        };
+        WaiverRequest: {
+            /** Format: uuid */
+            decision_id: string;
+            /** Format: uuid */
+            scope_id: string;
+            reason: string;
+            ticket_ref: string;
+            /** Format: date-time */
+            valid_from: string;
+            /**
+             * Format: date-time
+             * @description At most 90 days after valid_from (ADR-0054).
+             */
+            expires_at: string;
+        };
+        /** @description A clearance has no field. Send an empty object. */
+        ClearanceRequest: Record<string, never>;
+        Clearance: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            decision_id: string;
+            premise_id: string;
+        };
+        PremiseHostRequest: {
+            host: string;
+            allowed: boolean;
+        };
+        PremiseHost: {
+            /** Format: uuid */
+            id: string;
+            host: string;
+            allowed: boolean;
+        };
+        /** @description The first version of the decision an approval writes. */
+        DecisionDraft: {
+            /** @description A JSON object with a slug of lowercase words joined by hyphens, a title, and at most 20 premises that the premise sweep can probe (ADR-0053, ADR-0098). Its stored text form is at most 1 MiB. */
+            body: Record<string, never>;
+            scope_refs: string[];
+            /** Format: date-time */
+            valid_from: string;
+        };
+        ApprovalRequest: {
+            /** @enum {string} */
+            outcome: "approved" | "rejected";
+            /** @description Required with an approval and refused with a rejection. */
+            decision?: components["schemas"]["DecisionDraft"];
+        };
+        Approval: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            proposal_id: string;
+            /** @enum {string} */
+            outcome: "approved" | "rejected";
+            /**
+             * Format: uuid
+             * @description The decision the approval wrote, and null for a rejection.
+             */
+            decision_id: string | null;
         };
         Proposal: {
             /** Format: uuid */
@@ -628,6 +940,24 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description An id the request names is not one of this tenant's, or a premise has no open review reason. */
+        NotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The registry refuses the change because of what it already holds, such as a repeat, a scope that still has a child or a role binding, a supersession the decisions do not span, or a waiver outside its decision. The answer does not say which. */
+        Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
         /** @description The request ran past its deadline, or GitHub or the store could not say which installation covers the repository. */
         Unavailable: {
             headers: {
@@ -797,6 +1127,247 @@ export interface operations {
             503: components["responses"]["Timeout"];
         };
     };
+    create_scope: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateScopeRequest"];
+            };
+        };
+        responses: {
+            /** @description The scope that was created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Scope"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    reparent_scope: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReparentScopeRequest"];
+            };
+        };
+        responses: {
+            /** @description The scope under its new parent. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Scope"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    retire_scope: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The scope was retired. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    record_supersession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SupersessionRequest"];
+            };
+        };
+        responses: {
+            /** @description The supersession that was recorded. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Supersession"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    record_grandfather_period: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decisionID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrandfatherRequest"];
+            };
+        };
+        responses: {
+            /** @description The period that was recorded. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrandfatherPeriod"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    record_baseline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decisionID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BaselineRequest"];
+            };
+        };
+        responses: {
+            /** @description The baseline that was recorded. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Baseline"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    clear_premise_reason: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decisionID: string;
+                premiseID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClearanceRequest"];
+            };
+        };
+        responses: {
+            /** @description The clearance that was recorded. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Clearance"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
     list_waivers: {
         parameters: {
             query?: {
@@ -826,6 +1397,73 @@ export interface operations {
             400: components["responses"]["InvalidQuery"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    record_waiver: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WaiverRequest"];
+            };
+        };
+        responses: {
+            /** @description The waiver that was recorded. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Waiver"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    allow_premise_host: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PremiseHostRequest"];
+            };
+        };
+        responses: {
+            /** @description The row that was appended to the allowlist. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PremiseHost"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Timeout"];
@@ -863,6 +1501,42 @@ export interface operations {
             503: components["responses"]["Timeout"];
         };
     };
+    approve_proposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description The approval that was recorded. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Approval"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
     list_agent_proposals: {
         parameters: {
             query?: {
@@ -890,6 +1564,42 @@ export interface operations {
             400: components["responses"]["InvalidQuery"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    approve_agent_proposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description The approval that was recorded. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Approval"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Timeout"];

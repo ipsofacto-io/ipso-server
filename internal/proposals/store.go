@@ -306,8 +306,9 @@ func inbox(ctx context.Context, db *sql.DB, tenant uuid.UUID, before any, limit 
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, kind, origin, status, trust_level, payload, confidence, model_id, prompt_version,
 			       repo, pr_number, source_url, lower(sys_period)
-			FROM proposals.proposal
+			FROM proposals.proposal p
 			WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id < $2::uuid)
+			  AND NOT EXISTS (SELECT 1 FROM proposals.approval a WHERE a.tenant_id = p.tenant_id AND a.proposal_id = p.id)
 			ORDER BY id DESC
 			LIMIT $3`, tenant, before, limit)
 		if err != nil {
@@ -347,8 +348,9 @@ func agentInbox(ctx context.Context, db *sql.DB, tenant uuid.UUID, before any, l
 	err := tenantTx(ctx, db, tenant, true, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, principal_id, status, payload, lower(sys_period)
-			FROM proposals.agent_proposal
+			FROM proposals.agent_proposal p
 			WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id < $2::uuid)
+			  AND NOT EXISTS (SELECT 1 FROM proposals.agent_approval a WHERE a.tenant_id = p.tenant_id AND a.proposal_id = p.id)
 			ORDER BY id DESC
 			LIMIT $3`, tenant, before, limit)
 		if err != nil {

@@ -50,7 +50,8 @@ type Evaluation struct {
 // hours ago. The latest evaluation is the greatest (start of sys_period, id), the order the reason
 // trigger uses. Days are fixed 24 hour intervals so the session time zone cannot move a premise across
 // a daylight saving change. There is no next_run column. %s is an extra condition on the decision.
-const premiseState = `
+const (
+	premiseItems = `
 WITH items AS (
     SELECT d.tenant_id, d.decision_id, p.item
     FROM registry.decision_version d
@@ -59,7 +60,12 @@ WITH items AS (
     ) AS p(item)
     WHERE d.tenant_id = ipso.current_tenant()
       AND d.valid_period @> now()
-      %s
+      %s`
+
+	// premiseRecordable reads the fields of each premise item and decides whether it would pass the checks of
+	// registry.premise_evaluation. The sweep and the approval of a decision (IPSO-134) use this one expression, so
+	// a premise a person is allowed to write is one the sweep can probe.
+	premiseRecordable = `
 ), fields AS (
     SELECT i.tenant_id, i.decision_id,
            CASE WHEN jsonb_typeof(i.item -> 'id') = 'string' THEN i.item ->> 'id' END AS premise_id,
@@ -91,7 +97,9 @@ WITH items AS (
                AND octet_length(x.expected::text) <= 1024
                AND (NOT x.has_semver OR (jsonb_typeof(x.semver) = 'string' AND (x.semver #>> '{}') <> '')),
                false) AS recordable
-    FROM expected x
+    FROM expected x`
+
+	premiseDue = `
 ), state AS (
     SELECT r.*,
            (r.recordable AND (latest.evaluated_at IS NULL OR latest.evaluated_at <= now() - r.every_days * interval '24 hours')) AS due
@@ -106,6 +114,9 @@ WITH items AS (
         LIMIT 1
     ) latest ON r.recordable
 )`
+
+	premiseState = premiseItems + premiseRecordable + premiseDue
+)
 
 const (
 	// duePremises reads every premise on a decision in force that is due, and every one that cannot be

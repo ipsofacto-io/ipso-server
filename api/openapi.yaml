@@ -2,9 +2,13 @@ openapi: 3.1.0
 info:
   title: ipso control plane API
   version: 0.1.0
-  summary: Read the decision registry, the review queues, the audit answers and the CI verdicts of one tenant.
+  summary: Read the decision registry, the review queues, the audit answers and the CI verdicts of one tenant, and record what a person decides.
   description: >-
-    Every route reads but one. The exception is POST /v1/verdicts, which a CI job calls with its own GitHub
+    The routes that write (ADR-0109) are actions only a person takes: each asks the role policy, which must cover
+    every scope the request names, and an agent gets 403. A waiver and an approval take the approver from the
+    session or the token and never from the body, and each write is logged with the principal in the same
+    transaction. A repeat, and a change the registry refuses because of what it already holds, is 409. The one
+    route no person calls is POST /v1/verdicts, which a CI job calls with its own GitHub
     Actions token and which stores the verdicts of one run (ADR-0102). Every other route asks the role policy
     before it runs, and a principal no role of which allows the route gets 403 (ADR-0108). The five audit
     routes need the auditor or the admin role. The tenant is always the one the bearer token or the session cookie speaks for, or,
@@ -163,6 +167,319 @@ paths:
           $ref: '#/components/responses/Internal'
         '503':
           $ref: '#/components/responses/Timeout'
+    post:
+      operationId: create_scope
+      tags: [registry]
+      summary: Create a scope.
+      description: >-
+        Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). A scope is insert-only: a typo is corrected by retiring the node and creating another.
+        An org has no parent and every other kind has one, and the parent must be of a kind the node can sit under (ADR-0051).
+        Creating an org needs the role over the whole tenant.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateScopeRequest'
+      responses:
+        '201':
+          description: The scope that was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scope'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/scopes/{id}/parent:
+    put:
+      operationId: reparent_scope
+      tags: [registry]
+      summary: Move a scope under another parent.
+      description: >-
+        Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). The node keeps its id, so every decision, waiver and role binding that names it follows (ADR-0056).
+        The role must cover the node and the new parent. A move under the node itself or one of its descendants, a parent of a kind the node cannot sit under, and a repo whose owner is not the org above the new parent are 409.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReparentScopeRequest'
+      responses:
+        '200':
+          description: The scope under its new parent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scope'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/scopes/{id}:
+    delete:
+      operationId: retire_scope
+      tags: [registry]
+      summary: Retire a scope.
+      description: >-
+        Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). A scope that still has a child, or that a role binding still names, is 409: retire the children and remove the bindings first (ADR-0056, ADR-0108). A waiver or a decision that names the scope is kept.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: The scope was retired.
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/supersessions:
+    post:
+      operationId: record_supersession
+      tags: [registry]
+      summary: Record that a decision replaces another from an instant.
+      description: >-
+        Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). The role must cover every scope of both decisions. The insert closes the old decision in the same transaction (ADR-0052).
+        An instant that the two decisions do not both span, a decision that is already superseded, and a decision that already has a successor are 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SupersessionRequest'
+      responses:
+        '201':
+          description: The supersession that was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Supersession'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/decisions/{decisionID}/grandfather-period:
+    post:
+      operationId: record_grandfather_period
+      tags: [registry]
+      summary: Record the grandfather period of a decision.
+      description: >-
+        Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). The role must cover every scope of the decision. A decision has one period, ever, so a second is 409 (ADR-0052). A period with no end is a baseline.
+      parameters:
+        - name: decisionID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrandfatherRequest'
+      responses:
+        '201':
+          description: The period that was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrandfatherPeriod'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/decisions/{decisionID}/baselines:
+    post:
+      operationId: record_baseline
+      tags: [registry]
+      summary: Record the baseline of a decision in one repository.
+      description: >-
+        Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). The role must cover every scope of the decision. A baseline holds the fingerprints of the violations that already exist, as digests and never paths or messages (ADR-0052, ADR-0059).
+        The decision needs its grandfather period first, and there is one baseline for each decision and repository, so a missing period and a second baseline are 409.
+      parameters:
+        - name: decisionID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BaselineRequest'
+      responses:
+        '201':
+          description: The baseline that was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Baseline'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/decisions/{decisionID}/premises/{premiseID}/clearance:
+    post:
+      operationId: clear_premise_reason
+      tags: [registry]
+      summary: Clear the open review reason of a premise.
+      description: >-
+        Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). The role must cover every scope of the decision. The clearance says an owner looked, and it does not change the decision (ADR-0053).
+        A premise with no open reason is 404. The worker writes the evaluation and the reason, and no route does. The body is an empty object.
+      parameters:
+        - name: decisionID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: premiseID
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClearanceRequest'
+      responses:
+        '201':
+          description: The clearance that was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Clearance'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
   /v1/waivers:
     get:
       operationId: list_waivers
@@ -187,6 +504,84 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+    post:
+      operationId: record_waiver
+      tags: [registry]
+      summary: Record a waiver with an expiry.
+      description: >-
+        Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). The approver is the authenticated person and is never in the body (ADR-0076, ADR-0054). The period is half open and at most 90 days, and it must sit inside a current row of the decision.
+        A waiver whose scope is not on or under the scopes of the decision, or whose period the decision does not contain, is 409. The answer leaves out the reason and the approver, as the read does.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WaiverRequest'
+      responses:
+        '201':
+          description: The waiver that was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Waiver'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/premise-hosts:
+    post:
+      operationId: allow_premise_host
+      tags: [registry]
+      summary: Allow or withdraw a host a premise probe may dial.
+      description: >-
+        Only an admin who is a person takes it (ADR-0108). The latest row for a host decides, and a tenant with no row allows no host (ADR-0053, ADR-0098). A host is a DNS name in lowercase ASCII, in punycode when it is not, and never an address.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PremiseHostRequest'
+      responses:
+        '201':
+          description: The row that was appended to the allowlist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PremiseHost'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -227,6 +622,54 @@ paths:
           $ref: '#/components/responses/Internal'
         '503':
           $ref: '#/components/responses/Timeout'
+  /v1/proposals/{id}/approval:
+    post:
+      operationId: approve_proposal
+      tags: [review]
+      summary: Approve or reject a pull request proposal.
+      description: >-
+        Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). An approval carries the decision the person wrote, and it writes the first version of that decision in the same transaction, so a decision version exists only through the approval of a person (ADR-0076).
+        The role must cover every scope of the decision. A rejection carries no decision and needs the role over the whole tenant. A proposal is decided once, and a second answer is 409. The body of the decision is at most 1 MiB in the text form the database stores, and a larger one is 413 and is not stored (ADR-0051, ADR-0092).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalRequest'
+      responses:
+        '201':
+          description: The approval that was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Approval'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
   /v1/agent-proposals:
     get:
       operationId: list_agent_proposals
@@ -255,6 +698,54 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/agent-proposals/{id}/approval:
+    post:
+      operationId: approve_agent_proposal
+      tags: [review]
+      summary: Approve or reject a agent proposal.
+      description: >-
+        Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). An approval carries the decision the person wrote, and it writes the first version of that decision in the same transaction, so a decision version exists only through the approval of a person (ADR-0076).
+        The role must cover every scope of the decision. A rejection carries no decision and needs the role over the whole tenant. A proposal is decided once, and a second answer is 409. The body of the decision is at most 1 MiB in the text form the database stores, and a larger one is 413 and is not stored (ADR-0051, ADR-0092).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalRequest'
+      responses:
+        '201':
+          description: The approval that was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Approval'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -750,6 +1241,18 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    NotFound:
+      description: An id the request names is not one of this tenant's, or a premise has no open review reason.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: The registry refuses the change because of what it already holds, such as a repeat, a scope that still has a child or a role binding, a supersession the decisions do not span, or a waiver outside its decision. The answer does not say which.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     Unavailable:
       description: The request ran past its deadline, or GitHub or the store could not say which installation covers the repository.
       content:
@@ -994,6 +1497,7 @@ components:
             - unauthorized
             - forbidden
             - not found
+            - conflict
             - too large
             - unsupported media type
             - rate limited
@@ -1155,6 +1659,233 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Waiver'
+    CreateScopeRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, selector]
+      properties:
+        parent_id:
+          type: [string, 'null']
+          format: uuid
+          description: Absent or null for an org, and the parent for every other kind.
+        kind:
+          type: string
+          enum: [org, domain, service, repo, path, env]
+        selector:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Written in the grammar of its kind (ADR-0051).
+    ReparentScopeRequest:
+      type: object
+      additionalProperties: false
+      required: [parent_id]
+      properties:
+        parent_id:
+          type: string
+          format: uuid
+    SupersessionRequest:
+      type: object
+      additionalProperties: false
+      required: [from_decision, to_decision, effective_at]
+      properties:
+        from_decision:
+          type: string
+          format: uuid
+        to_decision:
+          type: string
+          format: uuid
+        effective_at:
+          type: string
+          format: date-time
+    Supersession:
+      type: object
+      additionalProperties: false
+      required: [id, from_decision, to_decision, effective_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        from_decision:
+          type: string
+          format: uuid
+        to_decision:
+          type: string
+          format: uuid
+        effective_at:
+          type: string
+          format: date-time
+    GrandfatherRequest:
+      type: object
+      additionalProperties: false
+      required: [valid_from]
+      properties:
+        valid_from:
+          type: string
+          format: date-time
+        valid_until:
+          type: [string, 'null']
+          format: date-time
+          description: Absent or null for a period with no deadline, which is a baseline.
+    GrandfatherPeriod:
+      type: object
+      additionalProperties: false
+      required: [decision_id, valid_from, valid_until]
+      properties:
+        decision_id:
+          type: string
+          format: uuid
+        valid_from:
+          type: string
+          format: date-time
+        valid_until:
+          type: [string, 'null']
+          format: date-time
+    BaselineRequest:
+      type: object
+      additionalProperties: false
+      required: [repo, fingerprints]
+      properties:
+        repo:
+          type: string
+          maxLength: 255
+          description: A lowercase owner/name.
+        fingerprints:
+          type: array
+          minItems: 1
+          maxItems: 100000
+          items:
+            $ref: '#/components/schemas/Sha256'
+    Baseline:
+      type: object
+      additionalProperties: false
+      required: [id, decision_id, repo, fingerprint_count]
+      properties:
+        id:
+          type: string
+          format: uuid
+        decision_id:
+          type: string
+          format: uuid
+        repo:
+          type: string
+        fingerprint_count:
+          type: integer
+          minimum: 1
+    WaiverRequest:
+      type: object
+      additionalProperties: false
+      required: [decision_id, scope_id, reason, ticket_ref, valid_from, expires_at]
+      properties:
+        decision_id:
+          type: string
+          format: uuid
+        scope_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        ticket_ref:
+          type: string
+          minLength: 1
+          maxLength: 200
+        valid_from:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          description: At most 90 days after valid_from (ADR-0054).
+    ClearanceRequest:
+      type: object
+      additionalProperties: false
+      description: A clearance has no field. Send an empty object.
+    Clearance:
+      type: object
+      additionalProperties: false
+      required: [id, decision_id, premise_id]
+      properties:
+        id:
+          type: string
+          format: uuid
+        decision_id:
+          type: string
+          format: uuid
+        premise_id:
+          type: string
+    PremiseHostRequest:
+      type: object
+      additionalProperties: false
+      required: [host, allowed]
+      properties:
+        host:
+          type: string
+          minLength: 1
+          maxLength: 253
+        allowed:
+          type: boolean
+    PremiseHost:
+      type: object
+      additionalProperties: false
+      required: [id, host, allowed]
+      properties:
+        id:
+          type: string
+          format: uuid
+        host:
+          type: string
+        allowed:
+          type: boolean
+    DecisionDraft:
+      type: object
+      additionalProperties: false
+      required: [body, scope_refs, valid_from]
+      description: The first version of the decision an approval writes.
+      properties:
+        body:
+          type: object
+          description: A JSON object with a slug of lowercase words joined by hyphens, a title, and at most 20 premises that the premise sweep can probe (ADR-0053, ADR-0098). Its stored text form is at most 1 MiB.
+        scope_refs:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            format: uuid
+        valid_from:
+          type: string
+          format: date-time
+    ApprovalRequest:
+      type: object
+      additionalProperties: false
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [approved, rejected]
+        decision:
+          $ref: '#/components/schemas/DecisionDraft'
+          description: Required with an approval and refused with a rejection.
+    Approval:
+      type: object
+      additionalProperties: false
+      required: [id, proposal_id, outcome, decision_id]
+      properties:
+        id:
+          type: string
+          format: uuid
+        proposal_id:
+          type: string
+          format: uuid
+        outcome:
+          type: string
+          enum: [approved, rejected]
+        decision_id:
+          type: [string, 'null']
+          format: uuid
+          description: The decision the approval wrote, and null for a rejection.
     Proposal:
       type: object
       additionalProperties: false

@@ -14,7 +14,7 @@ The web app is the browser view of the control plane: the registry, the review q
 | `/audit` | The five questions of section 2.3: what applied, what changed, at a merge, supersessions, and waivers ending soon. The fields are in the address, so an answer can be shared. |
 | `/signin` | The sign-in. Any call the server refuses with 401 ends here. |
 
-The app is read-only. The API has no write route until IPSO-134, so approving a draft, recording a waiver and recording a supersession still happen in the pull request or with the CLI, and the inbox says so. Importing decisions and compiling them into checks (UC1 and UC2) have no API route either.
+The app is read-only. The API has its write routes (IPSO-134, [ADR-0109](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0109-control-plane-write-routes.md)), and IPSO-146 adds the approve, waiver and supersession actions to the app. Until then approving a draft, recording a waiver and recording a supersession happen in the pull request, with the CLI or with the API, and the inbox says so. Importing decisions and compiling them into checks (UC1 and UC2) have no API route either.
 
 A decision is shown in the brand's four states, always with a word and an icon: Verified, Verifying, Needs review and Rejected. A proposed decision is Verifying with a "Pending approval" label, and a superseded or deprecated decision is a plain label. The color of Verified is used for nothing else.
 
