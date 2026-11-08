@@ -431,18 +431,20 @@ func TestAnApprovalCarriesItsDecisionExactlyWhenItApproves(t *testing.T) {
 		t.Fatal(err)
 	}
 	decision := uuid.MustParse("00000000-0000-7000-8000-0000000000f1")
-	for name, c := range map[string]struct {
+	// The cases run in order: the second approval of one decision is refused only after the first stored it.
+	for _, c := range []struct {
+		name                     string
 		table, proposal, outcome string
 		decision                 any
 		ok                       bool
 	}{
-		"an approval with a decision":       {"proposals.approval", "p1", "approved", decision, true},
-		"an approval with no decision":      {"proposals.approval", "p2", "approved", nil, false},
-		"a rejection with a decision":       {"proposals.approval", "p3", "rejected", decision, false},
-		"a rejection with none":             {"proposals.approval", "p4", "rejected", nil, true},
-		"a second approval of one decision": {"proposals.approval", "p5", "approved", decision, false},
-		"an agent approval with a decision": {"proposals.agent_approval", "a1", "approved", decision, true},
-		"an agent approval with none":       {"proposals.agent_approval", "a2", "approved", nil, false},
+		{"an approval with a decision", "proposals.approval", "p1", "approved", decision, true},
+		{"an approval with no decision", "proposals.approval", "p2", "approved", nil, false},
+		{"a rejection with a decision", "proposals.approval", "p3", "rejected", decision, false},
+		{"a rejection with none", "proposals.approval", "p4", "rejected", nil, true},
+		{"a second approval of one decision", "proposals.approval", "p5", "approved", decision, false},
+		{"an agent approval with a decision", "proposals.agent_approval", "a1", "approved", decision, true},
+		{"an agent approval with none", "proposals.agent_approval", "a2", "approved", nil, false},
 	} {
 		var proposal uuid.UUID
 		switch {
@@ -455,7 +457,7 @@ func TestAnApprovalCarriesItsDecisionExactlyWhenItApproves(t *testing.T) {
 			`INSERT INTO `+c.table+` (tenant_id, proposal_id, approver_id, outcome, decision_id) VALUES ($1, $2, $3, $4, $5)`,
 			tenantA, proposal, person, c.outcome, c.decision)
 		if (err == nil) != c.ok {
-			t.Errorf("%s: %v, want success %v", name, err, c.ok)
+			t.Errorf("%s: %v, want success %v", c.name, err, c.ok)
 		}
 	}
 	// An agent cannot approve a proposal of the agent queue, and it is decided once.
