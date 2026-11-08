@@ -35,7 +35,7 @@ func newSessionAPI(t *testing.T, sessions *Sessions) http.Handler {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	handler, err := New(Config{DB: db, Verifier: fakeVerifier{}, Callers: callerOf(tenantA), Sessions: sessions})
+	handler, err := New(Config{DB: db, Verifier: fakeVerifier{}, Callers: callerOf(tenantA), Policy: testPolicy(t), Sessions: sessions})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestNewRefusesSessionsItCannotUse(t *testing.T) {
 		"an origin with a path": {Origin: publicOrigin + "/app", Lookup: good.Lookup},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := New(Config{DB: db, Verifier: fakeVerifier{}, Callers: callerOf(tenantA), Sessions: sessions}); err == nil {
+			if _, err := New(Config{DB: db, Verifier: fakeVerifier{}, Callers: callerOf(tenantA), Policy: testPolicy(t), Sessions: sessions}); err == nil {
 				t.Fatal("New accepted it")
 			}
 		})

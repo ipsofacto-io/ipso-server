@@ -43,7 +43,7 @@ func newUploadAPI(t *testing.T, uploads *Uploads, sessions *Sessions, limits Lim
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	handler, err := New(Config{DB: db, Verifier: fakeVerifier{}, Callers: callerOf(tenantA), Uploads: uploads, Sessions: sessions, Limits: limits})
+	handler, err := New(Config{DB: db, Verifier: fakeVerifier{}, Callers: callerOf(tenantA), Policy: testPolicy(t), Uploads: uploads, Sessions: sessions, Limits: limits})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestNewRefusesUploadsItCannotRun(t *testing.T) {
 		"no verifier": {Lookup: lookup},
 		"no lookup":   {Verifier: fakeRuns{}},
 	} {
-		if _, err := New(Config{DB: db, Verifier: fakeVerifier{}, Callers: callerOf(tenantA), Uploads: uploads}); err == nil {
+		if _, err := New(Config{DB: db, Verifier: fakeVerifier{}, Callers: callerOf(tenantA), Policy: testPolicy(t), Uploads: uploads}); err == nil {
 			t.Errorf("%s: New accepted it", name)
 		}
 	}

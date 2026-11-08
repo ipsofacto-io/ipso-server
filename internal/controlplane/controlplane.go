@@ -23,6 +23,7 @@ import (
 
 	"github.com/ipsofacto-io/ipso-server/internal/api"
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
+	"github.com/ipsofacto-io/ipso-server/internal/authz"
 	"github.com/ipsofacto-io/ipso-server/internal/httpserve"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/login"
@@ -94,6 +95,10 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		return nil, err
 	}
 
+	policy, err := authz.New(ctx)
+	if err != nil {
+		return nil, err
+	}
 	svc := newService(cfg.DB, cfg.Tenant, cfg.Log, cfg.Limits)
 	mcpOn := cfg.MCPIssuer != ""
 	limits := cfg.Limits.WithDefaults()
@@ -153,6 +158,7 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 			return api.Caller{Tenant: cfg.Tenant, Principal: principal}, ok
 		},
 		Sessions: sessions,
+		Policy:   policy,
 		Limits:   cfg.Limits,
 		Log:      cfg.Log,
 	})
@@ -206,6 +212,9 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 			},
 			func(caller mcpremote.Caller) mcptools.Backend {
 				return &mcpremote.Backend{DB: cfg.DB, Caller: caller, Now: time.Now}
+			},
+			func(ctx context.Context, caller mcpremote.Caller, action authz.Action) (bool, error) {
+				return authorize(ctx, cfg.DB, policy, caller.Tenant, caller.Principal, action)
 			})
 		if err != nil {
 			return nil, err
@@ -215,6 +224,19 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		}
 	}
 	return mux, nil
+}
+
+// authorize reads the principal and its role bindings and asks the policy. An unknown principal is
+// refused, not an error.
+func authorize(ctx context.Context, db *sql.DB, policy *authz.Policy, tenant, id uuid.UUID, action authz.Action) (bool, error) {
+	principal, err := identity.Get(ctx, db, tenant, id)
+	if errors.Is(err, identity.ErrUnknownPrincipal) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return policy.Allow(ctx, authz.Input{Kind: principal.Kind, Grants: principal.Grants, Action: action})
 }
 
 // Serve runs the start gates, then serves until ctx ends.

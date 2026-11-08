@@ -16,7 +16,7 @@ const (
 
 // SeedEveryTable writes a tenant with at least one row in every table the application role can write
 // and that the lifecycle commands treat: the tenant, its wrapped key and its installation binding, scopes and their history,
-// decisions and their history, supersession, waivers, premises, proposals, identity, sessions, the action
+// decisions and their history, supersession, waivers, premises, proposals, identity, role bindings, sessions, the action
 // log, usage, and an uploaded verdict. It runs as the application role under row-level security, so every trigger runs as it
 // does in production. The tombstone has no application insert and is not seeded here.
 func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
@@ -123,6 +123,9 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 	mustExec(`
 		INSERT INTO identity.login (tenant_id, principal_id, issuer, subject)
 		VALUES ($1::uuid, $2::uuid, 'https://idp.example.test', 'subject-1')`, tenant, person)
+	mustExec(`
+		INSERT INTO identity.role_binding (tenant_id, principal_id, role, scope_id)
+		VALUES ($1::uuid, $2::uuid, 'admin', NULL), ($1::uuid, $2::uuid, 'approver', $3::uuid)`, tenant, person, repo)
 	mustExec(`
 		INSERT INTO identity.session (tenant_id, login_id, token_sha256)
 		SELECT tenant_id, id, sha256(convert_to('seeded session', 'UTF8')) FROM identity.login`)

@@ -24,6 +24,7 @@ ipso-server tenant create --tenant 0190a0a0-0000-7000-8000-000000000001 --name a
 
 - The tenant id is chosen by the operator, and a process serves it with `IPSO_TENANT_ID`. An id that was offboarded is refused for good.
 - The person is optional, and the four `--person` flags are given together or not at all. A tenant that will receive a restore is created without one.
+- The person becomes the tenant's first `admin`, over the whole tenant, so someone can bind the others ([docs/roles.md](roles.md)). Running it again binds the admin only while the tenant has no admin, so it adds the role to a tenant created before roles existed and a deliberate revoke is kept while another admin remains.
 - Running it again with the same arguments changes nothing. Different arguments are refused. A tenant that already has a wrapped key must open it with the key encryption key in use, so a wrong key stops here.
 - The key encryption key is the base64 of 32 random bytes: `openssl rand -base64 32`. It never reaches the database, only `create` reads it, and the api and the worker never see it. Keep it in the secret store of the deployment, apart from the database and its backups. Until IPSO-64 holds it in a cloud KMS, one key wraps every tenant of the deployment.
 

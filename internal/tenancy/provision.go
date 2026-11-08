@@ -18,7 +18,8 @@ var (
 )
 
 // Person is the first person of a tenant and the login that binds an identity provider's subject to them
-// (ADR-0093). Later people are bound by IPSO-137.
+// (ADR-0093). The first person is the tenant's admin, so someone can grant the other roles (ADR-0108).
+// Later people are bound by IPSO-137.
 type Person struct {
 	ID      uuid.UUID
 	Name    string
@@ -140,7 +141,10 @@ func ensureKey(ctx context.Context, tx *sql.Tx, o ProvisionOptions) (bool, error
 	return true, nil
 }
 
-// bindPerson inserts the person and the login, and reports whether it wrote either.
+// bindPerson inserts the person, the login and the person's admin binding, and reports whether it wrote
+// any of them. The admin binding is written only while the tenant has no admin, so a repeat writes
+// nothing, a revoke of this person is kept while another admin exists, and a tenant left with no admin
+// gets one again from create, the one way back in until IPSO-147.
 func bindPerson(ctx context.Context, tx *sql.Tx, tenant uuid.UUID, p Person) (bool, error) {
 	if p.ID == uuid.Nil || p.Name == "" || p.Issuer == "" || p.Subject == "" {
 		return false, errors.New("provision: a person needs an id, a name, an issuer and a subject")
@@ -182,6 +186,18 @@ func bindPerson(ctx context.Context, tx *sql.Tx, tenant uuid.UUID, p Person) (bo
 		if bound != p.ID {
 			return false, fmt.Errorf("provision: the login: %w", ErrConflict)
 		}
+	}
+
+	res, err = tx.ExecContext(ctx,
+		`INSERT INTO identity.role_binding (tenant_id, principal_id, role)
+		 SELECT $1::uuid, $2::uuid, 'admin'
+		 WHERE NOT EXISTS (SELECT 1 FROM identity.role_binding WHERE tenant_id = $1::uuid AND role = 'admin')`,
+		tenant, p.ID)
+	if err != nil {
+		return false, reduce("provision: bind the admin role", err)
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		wrote = true
 	}
 	return wrote, nil
 }

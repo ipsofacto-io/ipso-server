@@ -572,7 +572,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The token speaks for no principal of a tenant here, or a request that could change state came from another origin with a session cookie. */
+        /** @description The token speaks for no principal of a tenant here, no role of the principal allows this operation, or a request that could change state came from another origin with a session cookie. The answer says nothing more about the resource. */
         Forbidden: {
             headers: {
                 [name: string]: unknown;

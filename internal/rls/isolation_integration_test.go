@@ -345,6 +345,9 @@ func smuggleInserts() []smuggle {
 		// The stamp trigger reads the login as the caller's tenant, so it refuses this row (23514) before the
 		// policy is asked (42501). Either way the insert fails, and the policy stays as a second line.
 		{"identity.session", `INSERT INTO identity.session (tenant_id, login_id, token_sha256) VALUES ($1::uuid, $1::uuid, sha256(convert_to('smuggled', 'UTF8')))`, []any{tenantA}, false},
+		// The binding check reads the principal as the caller's tenant, so it refuses this row (23514) before the
+		// policy is asked (42501), like the session stamp above.
+		{"identity.role_binding", `INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ($1::uuid, $1::uuid, 'viewer')`, []any{tenantA}, false},
 		{"registry.premise_host_allow", `INSERT INTO registry.premise_host_allow (tenant_id, host, allowed) VALUES ($1::uuid, 'smuggled.example', true)`, []any{tenantA}, true},
 		{"registry.grandfather_period", `INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period) VALUES ($1::uuid, $2::uuid, '[2021-01-01,)')`, []any{tenantA, decisionTo}, true},
 		{"proposals.proposal", `
@@ -468,6 +471,7 @@ func policyTables() []string {
 		"identity.action_log",
 		"identity.login",
 		"identity.principal",
+		"identity.role_binding",
 		"identity.session",
 		"llm.usage",
 		"proposals.agent_proposal",
@@ -505,6 +509,7 @@ func expectedPolicies() []string {
 		"identity.action_log":               "SELECT INSERT",
 		"identity.login":                    "SELECT INSERT",
 		"identity.principal":                "SELECT INSERT",
+		"identity.role_binding":             "SELECT INSERT DELETE",
 		"identity.session":                  "SELECT INSERT DELETE",
 		"llm.usage":                         "SELECT INSERT UPDATE",
 		"proposals.agent_proposal":          "SELECT INSERT",

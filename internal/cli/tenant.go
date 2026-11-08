@@ -32,7 +32,7 @@ const tenantHelp = `tenant manages the lifecycle of a tenant (ADR-0100). Each co
 rows.
 
 create adds the tenant, its wrapped data key, and optionally its first person with the login that binds the
-identity provider's subject to them. It runs as the application role from ` + databaseEnv + `, reads the key encryption
+identity provider's subject to them and the admin role over the tenant (ADR-0108). It runs as the application role from ` + databaseEnv + `, reads the key encryption
 key from ` + tenantKEKEnv + ` (base64 of 32 bytes), and is safe to run again with the same arguments.
 
 export writes every row of the tenant to an age file for the recipients, as the application role. The file is

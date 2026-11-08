@@ -22,6 +22,7 @@ const PACT_FILE = resolve(PACT_DIR, 'ipso-web-ipso-server.json');
 // The provider states. Every row they describe is synthetic (internal/api/main_integration_test.go).
 const REGISTRY = 'tenant A holds decisions, scopes, a waiver, and proposals';
 const VERDICTS = 'tenant A holds a stored verdict';
+const VIEWER = 'the session belongs to a viewer of tenant A';
 
 const COOKIE_NAME = '__Host-ipso-session';
 const COOKIE_EXAMPLE = `${COOKIE_NAME}=${'A'.repeat(43)}`;
@@ -104,6 +105,22 @@ describe('the web app and the control plane API', () => {
       },
       async (calls) => {
         await expect(calls.listDecisions({ limit: 50 })).rejects.toMatchObject({ status: 401, code: 'unauthorized' });
+      },
+    );
+  });
+
+  it('is refused by the role policy', async () => {
+    await interact(
+      {
+        description: 'a request for an audit answer from a viewer',
+        state: VIEWER,
+        path: '/v1/audit/decisions',
+        query: { repo: 'acme/api', valid: VALID, known: LATER },
+        status: 403,
+        body: { error: 'forbidden' },
+      },
+      async (calls) => {
+        await expect(calls.auditDecisions({ repo: 'acme/api', valid: VALID, known: LATER })).rejects.toMatchObject({ status: 403, code: 'forbidden' });
       },
     );
   });

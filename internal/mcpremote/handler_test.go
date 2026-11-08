@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,8 @@ import (
 
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/authn/authntest"
+	"github.com/ipsofacto-io/ipso-server/internal/authz"
+	"github.com/ipsofacto-io/ipso-server/internal/identity"
 )
 
 const (
@@ -57,6 +60,35 @@ func (r *recordingBackend) Propose(context.Context, mcptools.ProposeInput) (mcpt
 	return mcptools.ProposeOutput{ProposalID: "p1", Status: "proposed"}, nil
 }
 
+// testPolicy is the role policy the server runs, compiled once for the package's tests.
+var testPolicy = func() func(t testing.TB) *authz.Policy {
+	var once sync.Once
+	var policy *authz.Policy
+	var err error
+	return func(t testing.TB) *authz.Policy {
+		t.Helper()
+		once.Do(func() { policy, err = authz.New(context.Background()) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return policy
+	}
+}()
+
+// principalAs answers the role policy for a principal of this kind with these bindings, the way
+// internal/controlplane does from the database.
+func principalAs(t testing.TB, kind string, grants ...identity.Grant) AuthorizeFunc {
+	policy := testPolicy(t)
+	return func(ctx context.Context, _ Caller, action authz.Action) (bool, error) {
+		return policy.Allow(ctx, authz.Input{Kind: kind, Grants: grants, Action: action})
+	}
+}
+
+// anAgent is the principal the tests call as unless they say otherwise: an agent with its role.
+func anAgent(t testing.TB) AuthorizeFunc {
+	return principalAs(t, identity.KindAgent, identity.Grant{Role: identity.RoleAgent})
+}
+
 type rig struct {
 	auth    *authntest.Server
 	backend *recordingBackend
@@ -64,6 +96,11 @@ type rig struct {
 }
 
 func newRig(t *testing.T) *rig {
+	t.Helper()
+	return newRigAs(t, anAgent(t))
+}
+
+func newRigAs(t *testing.T, authorize AuthorizeFunc) *rig {
 	t.Helper()
 	auth := authntest.NewServer(t)
 	backend := &recordingBackend{}
@@ -78,7 +115,8 @@ func newRig(t *testing.T) *rig {
 		func(caller Caller) mcptools.Backend {
 			backend.caller = caller
 			return backend
-		})
+		},
+		authorize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,6 +504,7 @@ func TestNewHandlerRefusesABadConfig(t *testing.T) {
 	verifier := verifierFor(t, auth, testResource)
 	callers := func(context.Context, authn.Claims) (Caller, bool) { return Caller{}, false }
 	backends := func(Caller) mcptools.Backend { return nil }
+	authorize := anAgent(t)
 	for name, url := range map[string]string{
 		"plain http": "http://mcp.example.test/mcp",
 		"no path":    "https://mcp.example.test",
@@ -474,19 +513,22 @@ func TestNewHandlerRefusesABadConfig(t *testing.T) {
 		"not a url":  "::",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := NewHandler(Config{ResourceURL: url, AuthorizationServers: []string{"https://a.test"}}, verifier, callers, backends); err == nil {
+			if _, err := NewHandler(Config{ResourceURL: url, AuthorizationServers: []string{"https://a.test"}}, verifier, callers, backends, authorize); err == nil {
 				t.Fatal("accepted")
 			}
 		})
 	}
-	if _, err := NewHandler(Config{ResourceURL: "http://127.0.0.1:8080/mcp", AuthorizationServers: []string{"https://a.test"}}, verifier, callers, backends); err != nil {
+	if _, err := NewHandler(Config{ResourceURL: "http://127.0.0.1:8080/mcp", AuthorizationServers: []string{"https://a.test"}}, verifier, callers, backends, authorize); err != nil {
 		t.Fatalf("loopback http: %v", err)
 	}
-	if _, err := NewHandler(Config{ResourceURL: testResource}, verifier, callers, backends); err == nil {
+	if _, err := NewHandler(Config{ResourceURL: testResource}, verifier, callers, backends, authorize); err == nil {
 		t.Fatal("no authorization server")
 	}
-	if _, err := NewHandler(Config{ResourceURL: testResource, AuthorizationServers: []string{"https://a.test"}}, nil, callers, backends); err == nil {
+	if _, err := NewHandler(Config{ResourceURL: testResource, AuthorizationServers: []string{"https://a.test"}}, nil, callers, backends, authorize); err == nil {
 		t.Fatal("no verifier")
+	}
+	if _, err := NewHandler(Config{ResourceURL: testResource, AuthorizationServers: []string{"https://a.test"}}, verifier, callers, backends, nil); err == nil {
+		t.Fatal("no authorize function")
 	}
 }
 
@@ -512,7 +554,8 @@ func limitedRig(t *testing.T, cfg Config, backend mcptools.Backend) (*authntest.
 			}
 			return Caller{Tenant: testTenant, Principal: testPrincipal}, true
 		},
-		func(Caller) mcptools.Backend { return backend })
+		func(Caller) mcptools.Backend { return backend },
+		anAgent(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,5 +626,83 @@ func TestConfigPathsNameTheEndpointAndItsMetadata(t *testing.T) {
 	want := []string{"/mcp", "/.well-known/oauth-protected-resource/mcp"}
 	if !slices.Equal(got, want) {
 		t.Errorf("Paths = %v, want %v", got, want)
+	}
+}
+
+// Every role on every tool and method: the scope says what the token may ask for, and the role policy
+// what the principal may do, so a token with every scope still reaches a tool only through a role that
+// grants it. A refused call reaches no tool.
+func TestEveryRoleOnEveryToolAndMethod(t *testing.T) {
+	discover := `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{` + metaLatest + `}}`
+	list := `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{` + metaLatest + `}}`
+	type request struct {
+		name    string
+		body    string
+		headers map[string]string
+		action  authz.Action
+	}
+	requests := []request{
+		{"server/discover", discover, map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "server/discover"}, authz.Member},
+		{"tools/list", list, map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list"}, authz.RegistryRead},
+	}
+	for _, tool := range []string{mcptools.ToolApplicable, mcptools.ToolGet, mcptools.ToolEvaluate} {
+		body, headers := toolCall(tool)
+		requests = append(requests, request{tool, body, headers, authz.RegistryRead})
+	}
+	body, headers := toolCall(mcptools.ToolPropose)
+	requests = append(requests, request{mcptools.ToolPropose, body, headers, authz.ProposalCreate})
+
+	// The roles that grant each action, as ADR-0108 states them.
+	everyRole := identity.Roles
+	grants := map[authz.Action][]string{
+		authz.Member:         everyRole,
+		authz.RegistryRead:   everyRole,
+		authz.ProposalCreate: {identity.RoleContributor, identity.RoleDecisionOwner, identity.RoleApprover, identity.RoleAgent},
+	}
+	for _, role := range append([]string{""}, identity.Roles...) {
+		kind := identity.KindHuman
+		if role == identity.RoleAgent {
+			kind = identity.KindAgent
+		}
+		var bindings []identity.Grant
+		if role != "" {
+			bindings = []identity.Grant{{Role: role}}
+		}
+		for _, req := range requests {
+			name := role
+			if name == "" {
+				name = "no role"
+			}
+			t.Run(name+"/"+req.name, func(t *testing.T) {
+				r := newRigAs(t, principalAs(t, kind, bindings...))
+				token := r.auth.Token(testResource, []string{ScopeRead, ScopePropose})
+				rec := r.post(token, req.body, req.headers)
+				want := slices.Contains(grants[req.action], role)
+				if refused := rec.Code == http.StatusForbidden; refused == want {
+					t.Fatalf("status %d, want allowed %v: %s", rec.Code, want, rec.Body)
+				}
+				if !want && (len(r.backend.callers) != 0 || r.backend.proposed != 0) {
+					t.Fatal("a refused call reached a tool")
+				}
+				if !want && !strings.Contains(rec.Body.String(), "no role of this principal allows this") {
+					t.Errorf("body %s", rec.Body)
+				}
+			})
+		}
+	}
+}
+
+func TestAPolicyThatCannotDecideRefusesTheCall(t *testing.T) {
+	r := newRigAs(t, func(context.Context, Caller, authz.Action) (bool, error) {
+		return false, errors.New("the store is down")
+	})
+	token := r.auth.Token(testResource, []string{ScopeRead})
+	body, headers := toolCall(mcptools.ToolApplicable)
+	rec := r.post(token, body, headers)
+	if rec.Code != http.StatusInternalServerError || len(r.backend.callers) != 0 {
+		t.Fatalf("status %d, %d calls", rec.Code, len(r.backend.callers))
+	}
+	if strings.Contains(rec.Body.String(), "store") {
+		t.Errorf("the cause reached the client: %s", rec.Body)
 	}
 }

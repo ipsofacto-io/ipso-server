@@ -47,10 +47,11 @@ BEGIN;
 SELECT set_config('ipso.tenant', '<tenant id>', true);
 INSERT INTO identity.principal (tenant_id, kind, name) VALUES ('<tenant id>', 'human', 'Ada') RETURNING id;
 INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ('<tenant id>', '<principal id>', '<issuer>', '<subject>');
+INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ('<tenant id>', '<principal id>', 'viewer');
 COMMIT;
 ```
 
-A login of an agent cannot start a browser session. The route that binds a person without SQL is IPSO-137, and it waits for the role policy of IPSO-66.
+A person with no role is refused every page, so the last insert gives one. [docs/roles.md](roles.md) lists the roles and how to bind one to a scope. A login of an agent cannot start a browser session. The route that binds a person without SQL is IPSO-137.
 
 ## What a session is
 

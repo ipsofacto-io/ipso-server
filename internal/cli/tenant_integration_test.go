@@ -57,7 +57,7 @@ func TestTenantCommandsMoveATenantAndDeleteIt(t *testing.T) {
 		return n
 	}
 
-	// create: the first person is bound, and a second run says it changed nothing.
+	// create: the first person is bound and made admin, and a second run says it changed nothing.
 	app := db.Open(t, pgtest.App)
 	pgtest.SeedEveryTable(t, app, source)
 	create := []string{"tenant", "create", "--tenant", target, "--name", "restored"}
@@ -71,7 +71,7 @@ func TestTenantCommandsMoveATenantAndDeleteIt(t *testing.T) {
 	}
 	code, _, stderr = asApp(db.DSN(pgtest.App), "tenant", "create", "--tenant", "00000000-0000-4000-8000-0000000000a7", "--name", "bound",
 		"--person", person, "--person-name", "Ada", "--issuer", "https://idp.example.test", "--subject", "s1")
-	if code != 0 || count("identity.login", "00000000-0000-4000-8000-0000000000a7") != 1 {
+	if code != 0 || count("identity.login", "00000000-0000-4000-8000-0000000000a7") != 1 || count("identity.role_binding", "00000000-0000-4000-8000-0000000000a7") != 1 {
 		t.Fatalf("create with a person: code %d, stderr %q", code, stderr)
 	}
 

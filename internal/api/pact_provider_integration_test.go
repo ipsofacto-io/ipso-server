@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,23 +30,30 @@ const stateRegistry = "tenant A holds decisions, scopes, a waiver, and proposals
 // stateVerdicts is the provider state of the verdict list: tenant A holds one stored verdict.
 const stateVerdicts = "tenant A holds a stored verdict"
 
+// stateViewer is the provider state of a refusal by the role policy: the session is a viewer's, and a
+// viewer may not read the audit routes (ADR-0108).
+const stateViewer = "the session belongs to a viewer of tenant A"
+
 // TestPactProviderIpsoServer verifies the ipso-web pact against the real handler, its guard included, on
 // PostgreSQL 18. The web app authenticates with the session cookie of ADR-0099, so the fixture opens one
-// session for a person of tenant A, and the request filter swaps the pact's example cookie for it. A request
-// the pact sends with no cookie is left without one. The fixture seeds both states once.
+// session, and the request filter swaps the pact's example cookie for it. A request the pact sends with no
+// cookie is left without one. The fixture seeds every state once, and each state names whose session it
+// is: the admin of tenant A, or a viewer of tenant A.
 func TestPactProviderIpsoServer(t *testing.T) {
 	f := newFixture(t)
 	token, err := authn.NewSessionToken()
 	if err != nil {
 		t.Fatal(err)
 	}
+	var whose atomic.Value
+	whose.Store(f.callers[personA])
 	sessions := &Sessions{
 		Origin: "https://ipso.example.test",
 		Lookup: func(_ context.Context, got []byte) (Caller, SessionStatus) {
 			if !bytes.Equal(got, token) {
 				return Caller{}, SessionUnknown
 			}
-			return f.callers[personA], SessionFound
+			return whose.Load().(Caller), SessionFound
 		},
 	}
 	served := httptest.NewServer(f.handlerWith(t, Limits{}, sessions))
@@ -55,13 +63,20 @@ func TestPactProviderIpsoServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seeded := func(bool, models.ProviderState) (models.ProviderStateResponse, error) { return nil, nil }
+	as := func(subject string) models.StateHandler {
+		return func(setup bool, _ models.ProviderState) (models.ProviderStateResponse, error) {
+			if setup {
+				whose.Store(f.callers[subject])
+			}
+			return nil, nil
+		}
+	}
 	err = provider.NewVerifier().VerifyProvider(t, provider.VerifyRequest{
 		Provider:           "ipso-server",
 		ProviderBaseURL:    served.URL,
 		PactFiles:          []string{pact},
 		FailIfNoPactsFound: true,
-		StateHandlers:      models.StateHandlers{stateRegistry: seeded, stateVerdicts: seeded},
+		StateHandlers:      models.StateHandlers{stateRegistry: as(personA), stateVerdicts: as(personA), stateViewer: as(viewerA)},
 		RequestFilter: func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Cookie") != "" {
