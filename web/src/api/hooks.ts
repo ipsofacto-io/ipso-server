@@ -58,6 +58,8 @@ export interface Pages<T> {
   hasMore: boolean;
   loadingMore: boolean;
   loadMore(): void;
+  /** Reads the first page again and keeps the list on screen until it arrives, as after a write. */
+  reload(): void;
 }
 
 /**
@@ -134,5 +136,103 @@ export function usePages<T extends { id: string }>(
     void fetchPage(last.id, false);
   }, [fetchPage]);
 
-  return { items, status, error, hasMore, loadingMore, loadMore };
+  const reload = useCallback(() => {
+    generation.current += 1;
+    const mine = generation.current;
+    for (const controller of inFlight.current) controller.abort();
+    setLoadingMore(false);
+    // Reads again as many pages as the person had loaded, so a write does not send them back to the first.
+    const count = Math.max(1, Math.ceil(itemsRef.current.length / pageSize));
+    const controller = new AbortController();
+    inFlight.current.add(controller);
+    const end = begin();
+    void (async () => {
+      try {
+        const all: T[] = [];
+        let last: T[] = [];
+        let before: string | undefined;
+        for (let page = 0; page < count; page += 1) {
+          last = await loadRef.current(before, controller.signal);
+          all.push(...last);
+          const tail = last.at(-1);
+          if (last.length < pageSize || !tail) break;
+          before = tail.id;
+        }
+        if (mine !== generation.current) return;
+        setSignedIn(true);
+        setItems(all);
+        setHasMore(last.length >= pageSize);
+        setError(null);
+        setStatus('ready');
+      } catch (cause) {
+        if (mine !== generation.current) return;
+        const refusal = toApiError(cause);
+        if (refusal.status === 401) setSignedIn(false);
+        setError(refusal);
+      } finally {
+        inFlight.current.delete(controller);
+        end();
+      }
+    })();
+  }, [begin, setSignedIn, pageSize]);
+
+  return { items, status, error, hasMore, loadingMore, loadMore, reload };
+}
+
+export type WriteState<T> =
+  | { status: 'idle' }
+  | { status: 'sending' }
+  | { status: 'done'; result: T }
+  | { status: 'failed'; error: ApiError };
+
+/**
+ * Runs one unsafe call at a time and says how it went. The wordmark's cursor blinks while it is in flight, a 401
+ * signs the app out, and a second `run` while one is in flight does nothing, so a double click sends one request.
+ * A write is never cancelled: leaving the page does not undo it, and the person would not learn the outcome.
+ */
+export function useWrite<A extends unknown[], T>(call: (...args: A) => Promise<T>): WriteState<T> & {
+  run(...args: A): Promise<WriteState<T>>;
+  reset(): void;
+} {
+  const { begin, setSignedIn } = useApp();
+  const [state, setState] = useState<WriteState<T>>({ status: 'idle' });
+  const sending = useRef(false);
+  const mounted = useRef(true);
+  const callRef = useRef(call);
+  callRef.current = call;
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const run = useCallback(
+    async (...args: A): Promise<WriteState<T>> => {
+      if (sending.current) return { status: 'sending' };
+      sending.current = true;
+      const end = begin();
+      setState({ status: 'sending' });
+      let outcome: WriteState<T>;
+      try {
+        const result = await callRef.current(...args);
+        setSignedIn(true);
+        outcome = { status: 'done', result };
+      } catch (cause) {
+        const error = toApiError(cause);
+        if (error.status === 401) setSignedIn(false);
+        outcome = { status: 'failed', error };
+      } finally {
+        sending.current = false;
+        end();
+      }
+      if (mounted.current) setState(outcome);
+      return outcome;
+    },
+    [begin, setSignedIn],
+  );
+  const reset = useCallback(() => setState({ status: 'idle' }), []);
+
+  return { ...state, run, reset };
 }

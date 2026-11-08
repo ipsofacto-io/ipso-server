@@ -1,17 +1,25 @@
 import { api as defaultApi, type Api } from './client';
 import type {
   AgentProposal,
+  Approval,
+  ApprovalRequest,
   AuditBeliefs,
   AuditChain,
   AuditDecisions,
   AuditWaivers,
   CheckProposal,
   DecisionPage,
+  GrandfatherPeriod,
+  GrandfatherRequest,
   Proposal,
   ProviderInfo,
   ScopePage,
   StoredVerdict,
+  Supersession,
+  SupersessionRequest,
+  Waiver,
   WaiverPage,
+  WaiverRequest,
 } from './types';
 
 /** The paging of every list: pass the last id of a page as `before` to read the next one (ADR-0090). */
@@ -54,6 +62,15 @@ export function makeCalls(api: Api) {
     auditSupersessions: (decisionID: string, q: { known: string }, signal?: AbortSignal) =>
       api.getJSON<AuditChain>(`/v1/audit/supersessions/${encodeURIComponent(decisionID)}`, q, signal),
     auditWaivers: (q: { known: string; now: string }, signal?: AbortSignal) => api.getJSON<AuditWaivers>('/v1/audit/waivers', q, signal),
+    approveProposal: (id: string, request: ApprovalRequest, signal?: AbortSignal) =>
+      api.postJSON<Approval>(`/v1/proposals/${encodeURIComponent(id)}/approval`, request, signal),
+    approveAgentProposal: (id: string, request: ApprovalRequest, signal?: AbortSignal) =>
+      api.postJSON<Approval>(`/v1/agent-proposals/${encodeURIComponent(id)}/approval`, request, signal),
+    recordWaiver: (request: WaiverRequest, signal?: AbortSignal) => api.postJSON<Waiver>('/v1/waivers', request, signal),
+    recordSupersession: (request: SupersessionRequest, signal?: AbortSignal) =>
+      api.postJSON<Supersession>('/v1/supersessions', request, signal),
+    recordGrandfatherPeriod: (decisionID: string, request: GrandfatherRequest, signal?: AbortSignal) =>
+      api.postJSON<GrandfatherPeriod>(`/v1/decisions/${encodeURIComponent(decisionID)}/grandfather-period`, request, signal),
     providers: (signal?: AbortSignal) => api.getJSON<{ providers: ProviderInfo[] }>('/auth/providers', {}, signal),
     logout: (signal?: AbortSignal) => api.post('/auth/logout', signal),
   };

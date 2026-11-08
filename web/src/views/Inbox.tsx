@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 
 import { calls } from '../api/calls';
@@ -9,19 +9,17 @@ import { DecisionStatus } from '../components/DecisionStatus';
 import { ErrorNotice } from '../components/ErrorNotice';
 import { LoadMore } from '../components/LoadMore';
 import { Loading } from '../components/Loading';
+import { Notice } from '../components/Notice';
 import { Page } from '../components/Page';
 import { ExternalLink } from '../components/Safe';
 import { formatTime, shortId } from '../lib/format';
-import { asString, preview, type Json } from '../lib/json';
+import { preview } from '../lib/json';
 import { decisionPath } from '../state/decision';
+import { proposalTitle } from '../state/draft';
+import { ReviewActions, type Report } from './ReviewActions';
 
 const PAGE = 25;
 const RAW_LIMIT = 8_000;
-
-/** A proposal is a draft of a decision. Its payload was written by a model, so only text is read from it. */
-function proposalTitle(payload: Json): string {
-  return asString(payload.title) ?? asString(payload.slug) ?? asString(payload.statement) ?? 'Untitled proposal';
-}
 
 function Queue<T extends { id: string }>({
   title,
@@ -34,9 +32,24 @@ function Queue<T extends { id: string }>({
   intro: string;
   empty: string;
   load: (before: string | undefined, signal: AbortSignal) => Promise<T[]>;
-  children: (item: T) => ReactNode;
+  children: (item: T, report: (report: Report) => void) => ReactNode;
 }) {
   const pages = usePages(load, PAGE, []);
+  const { reload } = pages;
+  const [notice, setNotice] = useState<Report | null>(null);
+  const noticeRef = useRef<HTMLDivElement>(null);
+  // A write says what happened above the cards and reads the queue again: the card that was answered is gone
+  // from the new page, and its button with it, so the focus moves to the notice.
+  const report = useCallback(
+    (next: Report) => {
+      setNotice(next);
+      reload();
+    },
+    [reload],
+  );
+  useEffect(() => {
+    if (notice) noticeRef.current?.focus();
+  }, [notice]);
   const headingId = `queue-${title.toLowerCase().replace(/[^a-z]+/g, '-')}`;
   return (
     <section className="queue" aria-labelledby={headingId}>
@@ -44,6 +57,13 @@ function Queue<T extends { id: string }>({
         {title}
       </h2>
       <p className="muted">{intro}</p>
+      {notice ? (
+        <div ref={noticeRef} tabIndex={-1} className="queue-notice">
+          <Notice tone={notice.tone} title={notice.title}>
+            {notice.body}
+          </Notice>
+        </div>
+      ) : null}
       {pages.status === 'loading' ? <Loading what={title.toLowerCase()} /> : null}
       {pages.status === 'error' && pages.error ? <ErrorNotice error={pages.error} /> : null}
       {pages.status === 'ready' && pages.items.length === 0 ? <p className="queue-empty">{empty}</p> : null}
@@ -51,7 +71,7 @@ function Queue<T extends { id: string }>({
         <ul className="cards">
           {pages.items.map((item) => (
             <li key={item.id} className="card">
-              {children(item)}
+              {children(item, report)}
             </li>
           ))}
         </ul>
@@ -71,7 +91,7 @@ function Raw({ value, title }: { value: unknown; title: string }) {
   );
 }
 
-function PullRequest({ proposal }: { proposal: Proposal }) {
+function PullRequest({ proposal, report }: { proposal: Proposal; report: (report: Report) => void }) {
   return (
     <>
       <header className="card-head">
@@ -100,11 +120,12 @@ function PullRequest({ proposal }: { proposal: Proposal }) {
       </dl>
       <p className="muted">A model drafted this from the merged pull request. It is untrusted until a person approves it.</p>
       <Raw value={proposal.payload} title="Draft" />
+      <ReviewActions queue="proposals" id={proposal.id} payload={proposal.payload} sourceUrl={proposal.source_url} report={report} />
     </>
   );
 }
 
-function FromAgent({ proposal }: { proposal: AgentProposal }) {
+function FromAgent({ proposal, report }: { proposal: AgentProposal; report: (report: Report) => void }) {
   return (
     <>
       <header className="card-head">
@@ -122,6 +143,7 @@ function FromAgent({ proposal }: { proposal: AgentProposal }) {
         </div>
       </dl>
       <Raw value={proposal.payload} title="Draft" />
+      <ReviewActions queue="agent-proposals" id={proposal.id} payload={proposal.payload} report={report} />
     </>
   );
 }
@@ -175,7 +197,7 @@ export function InboxView() {
   return (
     <Page
       title="Inbox"
-      intro="Drafts that wait for a person. Approval is not available in the web app yet: approve a draft in its pull request."
+      intro="Drafts that wait for a person. Approve a draft to record it as a decision, or reject it. A drafted check cannot be approved here yet: approve it in its pull request."
     >
       <Queue
         title="Pull requests"
@@ -183,7 +205,7 @@ export function InboxView() {
         empty="No pull request waits for review."
         load={async (before, signal) => (await calls.listProposals({ limit: PAGE, before }, signal)).proposals}
       >
-        {(proposal) => <PullRequest proposal={proposal} />}
+        {(proposal, report) => <PullRequest proposal={proposal} report={report} />}
       </Queue>
       <Queue
         title="Coding agents"
@@ -191,7 +213,7 @@ export function InboxView() {
         empty="No agent has proposed a decision."
         load={async (before, signal) => (await calls.listAgentProposals({ limit: PAGE, before }, signal)).agent_proposals}
       >
-        {(proposal) => <FromAgent proposal={proposal} />}
+        {(proposal, report) => <FromAgent proposal={proposal} report={report} />}
       </Queue>
       <Queue
         title="Drafted checks"

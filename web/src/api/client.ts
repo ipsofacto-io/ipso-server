@@ -27,6 +27,11 @@ export interface Api {
   getJSON<T>(path: string, query?: Query, signal?: AbortSignal): Promise<T>;
   /** An unsafe call with no body, such as POST /auth/logout. */
   post(path: string, signal?: AbortSignal): Promise<void>;
+  /**
+   * An unsafe call with a JSON body, and the JSON the server answered with. The body holds only what the person
+   * wrote: the tenant and the principal come from the session cookie, never from the request (ADR-0099).
+   */
+  postJSON<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T>;
 }
 
 export interface ApiOptions {
@@ -37,7 +42,7 @@ export interface ApiOptions {
 }
 
 export function createApi({ base = '', headers = {} }: ApiOptions = {}): Api {
-  async function send(method: 'GET' | 'POST', path: string, query: Query, signal?: AbortSignal): Promise<Response> {
+  async function send(method: 'GET' | 'POST', path: string, query: Query, signal?: AbortSignal, body?: unknown): Promise<Response> {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(query)) {
       if (value !== undefined && value !== '') params.set(key, String(value));
@@ -47,10 +52,11 @@ export function createApi({ base = '', headers = {} }: ApiOptions = {}): Api {
     try {
       response = await fetch(`${base}${path}${text === '' ? '' : `?${text}`}`, {
         method,
-        headers: { Accept: 'application/json', ...headers },
+        headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers },
         cache: 'no-store',
         credentials: 'same-origin',
         redirect: 'error',
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         ...(signal ? { signal } : {}),
       });
     } catch (error) {
@@ -72,6 +78,14 @@ export function createApi({ base = '', headers = {} }: ApiOptions = {}): Api {
     },
     async post(path: string, signal?: AbortSignal): Promise<void> {
       await send('POST', path, {}, signal);
+    },
+    async postJSON<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+      const response = await send('POST', path, {}, signal, body);
+      try {
+        return (await response.json()) as T;
+      } catch {
+        throw new ApiError({ status: response.status, code: 'internal' });
+      }
     },
   };
 }

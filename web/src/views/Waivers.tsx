@@ -5,6 +5,7 @@ import { calls } from '../api/calls';
 import { usePages, useResource } from '../api/hooks';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorNotice } from '../components/ErrorNotice';
+import { LinkButton } from '../components/LinkButton';
 import { LoadMore } from '../components/LoadMore';
 import { Loading } from '../components/Loading';
 import { Page } from '../components/Page';
@@ -40,7 +41,15 @@ export function WaiversView() {
   );
 
   return (
-    <Page title="Waivers" intro="Time-boxed exceptions to a decision for a scope. Each one ends on its own.">
+    <Page
+      title="Waivers"
+      intro="Time-boxed exceptions to a decision for a scope. Each one ends on its own."
+      actions={
+        <LinkButton to="/waivers/new" variant="primary">
+          Record a waiver
+        </LinkButton>
+      }
+    >
       <TimeControls valid={valid} known={known} />
       {pages.status === 'loading' ? <Loading what="waivers" /> : null}
       {pages.status === 'error' && pages.error ? <ErrorNotice error={pages.error} /> : null}

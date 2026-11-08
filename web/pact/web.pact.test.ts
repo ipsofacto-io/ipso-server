@@ -13,8 +13,17 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { createApi } from '../src/api/client.ts';
 import { makeCalls } from '../src/api/calls.ts';
+import type { Scope } from '../src/api/types.ts';
+import { approvalRequest, rejection, type ApprovalForm } from '../src/state/edr.ts';
+import {
+  grandfatherRequest,
+  supersessionRequest,
+  waiverRequest,
+  type SupersessionForm,
+  type WaiverForm,
+} from '../src/state/writes.ts';
 
-const { arrayContaining, eachLike, integer, like, nullValue, regex, uuid } = MatchersV3;
+const { arrayContaining, eachLike, fromProviderState, integer, like, nullValue, regex, uuid } = MatchersV3;
 
 const PACT_DIR = resolve(import.meta.dirname, '../../api/pacts');
 const PACT_FILE = resolve(PACT_DIR, 'ipso-web-ipso-server.json');
@@ -23,6 +32,13 @@ const PACT_FILE = resolve(PACT_DIR, 'ipso-web-ipso-server.json');
 const REGISTRY = 'tenant A holds decisions, scopes, a waiver, and proposals';
 const VERDICTS = 'tenant A holds a stored verdict';
 const VIEWER = 'the session belongs to a viewer of tenant A';
+// The states of the writes (ADR-0110). A write changes what the provider holds, so each of these states seeds
+// its own rows when it is set up and hands their ids back, and the interaction names them with
+// fromProviderState. The session is one of a person who may take the action: an approver or a decision owner.
+const UNANSWERED = 'tenant A holds drafts that nobody answered, and the session belongs to an approver';
+const ANSWERED = 'tenant A holds a draft that was answered, and the session belongs to an approver';
+const TO_WAIVE = 'tenant A holds a decision in force and a repository scope, and the session belongs to an approver';
+const TO_SUPERSEDE = 'tenant A holds two decisions that nobody superseded, and the session belongs to a decision owner';
 
 const COOKIE_NAME = '__Host-ipso-session';
 const COOKIE_EXAMPLE = `${COOKIE_NAME}=${'A'.repeat(43)}`;
@@ -53,11 +69,18 @@ const pact = new PactV4({ consumer: 'ipso-web', provider: 'ipso-server', dir: PA
 
 type Calls = ReturnType<typeof makeCalls>;
 
+/** A path is a string, or one the provider state fills in: the id of a row the state seeded. */
+type Path = string | ReturnType<typeof fromProviderState<string>>;
+
 interface Interaction {
   description: string;
   state?: string;
-  path: string;
+  /** GET unless it says otherwise. */
+  method?: 'GET' | 'POST';
+  path: Path;
   query?: Record<string, string>;
+  /** The JSON a write sends. The request then names its content type, as the app's own calls do. */
+  requestBody?: unknown;
   /** Whether the request carries the session cookie. Only the 401 interaction does not. */
   session?: boolean;
   status: number;
@@ -72,9 +95,14 @@ async function interact(spec: Interaction, run: (calls: Calls) => Promise<void>)
   if (spec.state) builder = builder.given(spec.state);
   await builder
     .uponReceiving(spec.description)
-    .withRequest('GET', spec.path, (request) => {
+    .withRequest(spec.method ?? 'GET', spec.path, (request) => {
       if (spec.query) request.query(spec.query);
-      request.headers({ Accept: 'application/json', ...(session ? { Cookie: cookie } : {}) });
+      request.headers({
+        Accept: 'application/json',
+        ...(spec.requestBody === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(session ? { Cookie: cookie } : {}),
+      });
+      if (spec.requestBody !== undefined) request.jsonBody(spec.requestBody);
     })
     .willRespondWith(spec.status, (response) => {
       response.headers({ 'Content-Type': 'application/json', ...spec.headers });
@@ -443,6 +471,246 @@ describe('the web app and the control plane API', () => {
       },
       async (calls) => {
         expect((await calls.auditWaivers({ known: LATER, now: VALID })).waivers[0]?.ticket_ref).toBe('OPS-1');
+      },
+    );
+  });
+});
+
+// The writes of the web app (IPSO-146, ADR-0110). Each plays the app's own call with the request its own helpers
+// build, so the contract holds what a person's click sends and nothing the app would not. The ids a provider
+// state seeds are named with fromProviderState, and the values below are only the examples the mock server
+// matches. The request never names a tenant, a principal or an approver (ADR-0099).
+const SCOPE = '5c9f3b1e-2a7d-4e84-8b6a-1f0d9c2e7a41';
+const PROPOSAL = '3d2c6f2e-6b1a-4c6e-9d3b-0a5c1d7e8f90';
+const AGENT_PROPOSAL = '9b1d4a7c-0e3f-4a5b-8c2d-6e7f8a9b0c1d';
+const DECISION = '7a8b9c0d-1e2f-4a3b-9c4d-5e6f7a8b9c0d';
+const FROM = '2b3c4d5e-6f70-4812-93a4-b5c6d7e8f9a0';
+const TO = '8c9d0e1f-2a3b-4c4d-8e5f-6a7b8c9d0e1f';
+const ULID = '01JD8Q3M7K2W9X4Y5Z6A7B8C9D';
+const WRITE_FROM = '2026-06-01T00:00:00Z';
+
+const scopeRef = fromProviderState('${scopeId}', SCOPE);
+const date = (example: string) => regex('^\\d{4}-\\d{2}-\\d{2}$', example);
+
+const draft: ApprovalForm = {
+  title: 'Secrets come from the vault',
+  slug: 'secrets-from-the-vault',
+  owner: 'team:platform',
+  criticality: 'warning',
+  validFrom: '2026-11-08',
+  reviewBy: '2027-11-08',
+  sourceUrl: 'https://github.com/acme/api/pull/8',
+  sourceType: 'pr',
+};
+const scopeTree: Scope[] = [{ id: SCOPE, parent_id: null, kind: 'org', selector: 'acme' }];
+
+/** The decision an approval writes, as the app builds it: all sixteen keys of the EDR (ADR-0110). */
+const approved = (source: 'pr' | 'note') => ({
+  outcome: 'approved',
+  decision: {
+    body: {
+      edr: 1,
+      id: regex('^[0-7][0-9A-HJKMNP-TV-Z]{25}$', ULID),
+      slug: like('secrets-from-the-vault'),
+      title: like('Secrets come from the vault'),
+      status: 'accepted',
+      owner: regex('^team:[a-z][a-z0-9]*(-[a-z0-9]+)*$', 'team:platform'),
+      scope: [{ org: like('acme') }],
+      valid_from: date('2026-11-08'),
+      valid_to: nullValue(),
+      review_by: date('2027-11-08'),
+      supersedes: [],
+      criticality: regex('^(blocking|warning|advisory)$', 'warning'),
+      checks: [],
+      waivers: [],
+      sources: [{ type: source, url: regex('^https://\\S+$', 'https://github.com/acme/api/pull/8') }],
+      tags: [],
+    },
+    scope_refs: [scopeRef],
+    valid_from: timestamp('2026-11-08T00:00:00Z'),
+  },
+});
+
+const approval = (outcome: 'approved' | 'rejected') => ({
+  id: uuid(),
+  proposal_id: uuid(),
+  outcome,
+  decision_id: outcome === 'approved' ? uuid() : nullValue(),
+});
+
+const waiverForm: WaiverForm = {
+  decisionId: DECISION,
+  scopeId: SCOPE,
+  reason: 'The migration is under way',
+  ticket: 'SEC-482',
+  startsAt: '2026-06-01T00:00',
+  endsAt: '2026-07-01T00:00',
+};
+const supersessionForm: SupersessionForm = { fromId: FROM, toId: TO, effectiveAt: '2026-06-01T00:00', terms: 'baseline', deadline: '' };
+
+describe('the writes of the web app', () => {
+  it('approves a proposal from a pull request with the decision the person wrote', async () => {
+    await interact(
+      {
+        description: 'a request to approve a proposal from a pull request',
+        state: UNANSWERED,
+        method: 'POST',
+        path: fromProviderState('/v1/proposals/${proposalId}/approval', `/v1/proposals/${PROPOSAL}/approval`),
+        requestBody: approved('pr'),
+        status: 201,
+        body: approval('approved'),
+      },
+      async (calls) => {
+        const made = await calls.approveProposal(PROPOSAL, approvalRequest(draft, [SCOPE], scopeTree, ULID));
+        expect(made.outcome).toBe('approved');
+        expect(made.decision_id).not.toBeNull();
+      },
+    );
+  });
+
+  it('approves a proposal from a coding agent through the route of its own queue', async () => {
+    await interact(
+      {
+        description: 'a request to approve a proposal from a coding agent',
+        state: UNANSWERED,
+        method: 'POST',
+        path: fromProviderState('/v1/agent-proposals/${agentProposalId}/approval', `/v1/agent-proposals/${AGENT_PROPOSAL}/approval`),
+        requestBody: approved('note'),
+        status: 201,
+        body: approval('approved'),
+      },
+      async (calls) => {
+        const made = await calls.approveAgentProposal(AGENT_PROPOSAL, approvalRequest({ ...draft, sourceType: 'note' }, [SCOPE], scopeTree, ULID));
+        expect(made.outcome).toBe('approved');
+      },
+    );
+  });
+
+  it('rejects a proposal with the outcome and nothing else', async () => {
+    await interact(
+      {
+        description: 'a request to reject a proposal from a pull request',
+        state: UNANSWERED,
+        method: 'POST',
+        path: fromProviderState('/v1/proposals/${proposalId}/approval', `/v1/proposals/${PROPOSAL}/approval`),
+        requestBody: { outcome: 'rejected' },
+        status: 201,
+        body: approval('rejected'),
+      },
+      async (calls) => {
+        expect(await calls.approveProposal(PROPOSAL, rejection)).toMatchObject({ outcome: 'rejected', decision_id: null });
+      },
+    );
+  });
+
+  it('is refused a second answer to a proposal', async () => {
+    await interact(
+      {
+        description: 'a second answer to a proposal',
+        state: ANSWERED,
+        method: 'POST',
+        path: fromProviderState('/v1/proposals/${proposalId}/approval', `/v1/proposals/${PROPOSAL}/approval`),
+        requestBody: { outcome: 'rejected' },
+        status: 409,
+        body: { error: 'conflict' },
+      },
+      async (calls) => {
+        await expect(calls.approveProposal(PROPOSAL, rejection)).rejects.toMatchObject({ status: 409, code: 'conflict' });
+      },
+    );
+  });
+
+  it('records a waiver with an expiry', async () => {
+    await interact(
+      {
+        description: 'a request to record a waiver',
+        state: TO_WAIVE,
+        method: 'POST',
+        path: '/v1/waivers',
+        requestBody: {
+          decision_id: fromProviderState('${decisionId}', DECISION),
+          scope_id: scopeRef,
+          reason: like('The migration is under way'),
+          ticket_ref: like('SEC-482'),
+          valid_from: timestamp(WRITE_FROM),
+          expires_at: timestamp('2026-07-01T00:00:00Z'),
+        },
+        status: 201,
+        body: {
+          id: uuid(),
+          decision_id: uuid(),
+          scope_id: uuid(),
+          ticket_ref: like('SEC-482'),
+          valid_from: timestamp(WRITE_FROM),
+          expires_at: timestamp('2026-07-01T00:00:00Z'),
+        },
+      },
+      async (calls) => {
+        expect((await calls.recordWaiver(waiverRequest(waiverForm))).ticket_ref).toBe('SEC-482');
+      },
+    );
+  });
+
+  it('is refused a waiver by the role policy for a viewer', async () => {
+    await interact(
+      {
+        description: 'a request to record a waiver from a viewer',
+        state: VIEWER,
+        method: 'POST',
+        path: '/v1/waivers',
+        requestBody: {
+          decision_id: DECISION,
+          scope_id: SCOPE,
+          reason: like('The migration is under way'),
+          ticket_ref: like('SEC-482'),
+          valid_from: timestamp(WRITE_FROM),
+          expires_at: timestamp('2026-07-01T00:00:00Z'),
+        },
+        status: 403,
+        body: { error: 'forbidden' },
+      },
+      async (calls) => {
+        await expect(calls.recordWaiver(waiverRequest(waiverForm))).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+      },
+    );
+  });
+
+  it('records a supersession from a time', async () => {
+    await interact(
+      {
+        description: 'a request to record a supersession',
+        state: TO_SUPERSEDE,
+        method: 'POST',
+        path: '/v1/supersessions',
+        requestBody: {
+          from_decision: fromProviderState('${fromDecisionId}', FROM),
+          to_decision: fromProviderState('${toDecisionId}', TO),
+          effective_at: timestamp(WRITE_FROM),
+        },
+        status: 201,
+        body: { id: uuid(), from_decision: uuid(), to_decision: uuid(), effective_at: timestamp(WRITE_FROM) },
+      },
+      async (calls) => {
+        expect((await calls.recordSupersession(supersessionRequest(supersessionForm))).effective_at).toBe(WRITE_FROM);
+      },
+    );
+  });
+
+  it('records the grandfather terms of the new decision', async () => {
+    await interact(
+      {
+        description: 'a request to record the grandfather terms of a decision',
+        state: TO_SUPERSEDE,
+        method: 'POST',
+        path: fromProviderState('/v1/decisions/${toDecisionId}/grandfather-period', `/v1/decisions/${TO}/grandfather-period`),
+        requestBody: { valid_from: timestamp(WRITE_FROM) },
+        status: 201,
+        body: { decision_id: uuid(), valid_from: timestamp(WRITE_FROM), valid_until: nullValue() },
+      },
+      async (calls) => {
+        const request = grandfatherRequest(supersessionForm);
+        expect(request).not.toBeNull();
+        expect(await calls.recordGrandfatherPeriod(TO, request ?? { valid_from: WRITE_FROM })).toMatchObject({ valid_until: null });
       },
     );
   });

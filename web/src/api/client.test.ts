@@ -74,5 +74,35 @@ describe('createApi', () => {
     expect(url).toBe('/auth/logout');
     expect(init).toMatchObject({ method: 'POST' });
     expect(init.body).toBeUndefined();
+    expect(init.headers).not.toHaveProperty('Content-Type');
+  });
+
+  it('posts a JSON body with its content type, and reads the JSON the server wrote', async () => {
+    const fetch = answer(201, { id: 'a1' });
+    vi.stubGlobal('fetch', fetch);
+    const made = await createApi({ headers: { Cookie: 'a=b' } }).postJSON<{ id: string }>('/v1/waivers', { ticket_ref: 'SEC-1' });
+    expect(made).toEqual({ id: 'a1' });
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('/v1/waivers');
+    expect(init).toMatchObject({ method: 'POST', cache: 'no-store', credentials: 'same-origin', redirect: 'error' });
+    expect(init.headers).toMatchObject({ Accept: 'application/json', 'Content-Type': 'application/json', Cookie: 'a=b' });
+    expect(init.body).toBe('{"ticket_ref":"SEC-1"}');
+  });
+
+  it('names no tenant and no principal on a write: the cookie speaks for them', async () => {
+    const fetch = answer(201, {});
+    vi.stubGlobal('fetch', fetch);
+    await createApi().postJSON('/v1/supersessions', { from_decision: 'a', to_decision: 'b', effective_at: 'c' });
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(`${url} ${String(init.body)}`).not.toMatch(/tenant|principal|approver/);
+  });
+
+  it('turns a refused write into an ApiError, and a 201 that is not JSON into "internal"', async () => {
+    vi.stubGlobal('fetch', answer(409, { error: 'conflict' }));
+    await expect(createApi().postJSON('/v1/waivers', {})).rejects.toMatchObject({ name: 'ApiError', status: 409, code: 'conflict' });
+    vi.stubGlobal('fetch', answer(413, { error: 'too large' }));
+    await expect(createApi().postJSON('/v1/waivers', {})).rejects.toMatchObject({ status: 413, code: 'too large' });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>', { status: 201 })));
+    await expect(createApi().postJSON('/v1/waivers', {})).rejects.toMatchObject({ status: 201, code: 'internal' });
   });
 });

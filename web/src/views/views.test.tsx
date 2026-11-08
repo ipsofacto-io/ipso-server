@@ -164,7 +164,7 @@ describe('scopes', () => {
 });
 
 describe('the inbox', () => {
-  it('lists the three queues and sends nothing to approve', async () => {
+  it('lists the three queues and reads them with GET only until a person answers a draft', async () => {
     const stub = renderAndStub('/inbox');
     expect(await screen.findByRole('heading', { name: 'Pull requests' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Coding agents' })).toBeInTheDocument();
@@ -173,8 +173,7 @@ describe('the inbox', () => {
     expect(await screen.findByText('Public endpoints need rate limits')).toBeInTheDocument();
     expect(await screen.findByText('Check for decision 0194f2a0, version 2')).toBeInTheDocument();
     expect(screen.getAllByText('Pending approval')).toHaveLength(4);
-    expect(screen.getByText(/Approval is not available in the web app yet/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /approve|reject/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/A drafted check cannot be approved here yet/)).toBeInTheDocument();
     expect(stub.requests.every((request) => request.startsWith('GET '))).toBe(true);
   });
 

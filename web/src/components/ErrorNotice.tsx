@@ -3,8 +3,22 @@ import { Button } from '../brand';
 import { SignInPanel } from '../views/SignIn';
 import { Notice } from './Notice';
 
-/** Says what an API refusal means in words. A 401 is the sign-in itself, and a 429 never signs anyone out. */
-export function ErrorNotice({ error, onRetry }: { error: ApiError; onRetry?: () => void }) {
+/**
+ * Says what an API refusal means in words. A 401 is the sign-in itself, and a 429 never signs anyone out. A form
+ * says what a 409 means for its own write with `conflict`, and a 400 in its own words with `invalid`, because
+ * the server answers both with a code and no message (ADR-0109).
+ */
+export function ErrorNotice({
+  error,
+  onRetry,
+  conflict,
+  invalid,
+}: {
+  error: ApiError;
+  onRetry?: () => void;
+  conflict?: string;
+  invalid?: string;
+}) {
   if (error.status === 401) return <SignInPanel />;
 
   let title: string;
@@ -22,9 +36,21 @@ export function ErrorNotice({ error, onRetry }: { error: ApiError; onRetry?: () 
       title = 'Nothing is here.';
       text = 'The page or the record does not exist.';
       break;
+    case error.status === 409:
+      title = 'This conflicts with what is recorded.';
+      text = conflict ?? 'Someone may have changed it first. Read the page again and check.';
+      break;
+    case error.status === 413:
+      title = 'That is too large.';
+      text = 'Shorten it and send it again.';
+      break;
+    case error.status === 415:
+      title = 'The server did not accept the format.';
+      text = 'Reload the page and try again. If it keeps happening, tell the person who runs ipso.';
+      break;
     case error.status === 400:
-      title = 'The question is not valid.';
-      text = 'Check the fields and ask again.';
+      title = invalid ? 'The server refused a value.' : 'The question is not valid.';
+      text = invalid ?? 'Check the fields and ask again.';
       break;
     case error.code === 'response too large':
       title = 'The answer is too large to show.';

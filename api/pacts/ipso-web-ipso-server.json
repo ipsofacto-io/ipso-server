@@ -2419,6 +2419,1239 @@
       "type": "Synchronous/HTTP"
     },
     {
+      "description": "a request to approve a proposal from a coding agent",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds drafts that nobody answered, and the session belongs to an approver"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "decision": {
+              "body": {
+                "checks": [],
+                "criticality": "warning",
+                "edr": 1,
+                "id": "01JD8Q3M7K2W9X4Y5Z6A7B8C9D",
+                "owner": "team:platform",
+                "review_by": "2027-11-08",
+                "scope": [
+                  {
+                    "org": "acme"
+                  }
+                ],
+                "slug": "secrets-from-the-vault",
+                "sources": [
+                  {
+                    "type": "note",
+                    "url": "https://github.com/acme/api/pull/8"
+                  }
+                ],
+                "status": "accepted",
+                "supersedes": [],
+                "tags": [],
+                "title": "Secrets come from the vault",
+                "valid_from": "2026-11-08",
+                "valid_to": null,
+                "waivers": []
+              },
+              "scope_refs": [
+                "5c9f3b1e-2a7d-4e84-8b6a-1f0d9c2e7a41"
+              ],
+              "valid_from": "2026-11-08T00:00:00Z"
+            },
+            "outcome": "approved"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.decision.scope_refs[0]": {
+              "expression": "${scopeId}",
+              "type": "ProviderState"
+            }
+          },
+          "path": {
+            "expression": "/v1/agent-proposals/${agentProposalId}/approval",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decision.body.criticality": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^(blocking|warning|advisory)$"
+                }
+              ]
+            },
+            "$.decision.body.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                }
+              ]
+            },
+            "$.decision.body.owner": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^team:[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+                }
+              ]
+            },
+            "$.decision.body.review_by": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}$"
+                }
+              ]
+            },
+            "$.decision.body.scope[0].org": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decision.body.slug": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decision.body.sources[0].url": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^https://\\S+$"
+                }
+              ]
+            },
+            "$.decision.body.title": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decision.body.valid_from": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}$"
+                }
+              ]
+            },
+            "$.decision.body.valid_to": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "null"
+                }
+              ]
+            },
+            "$.decision.scope_refs[0]": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decision.valid_from": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          },
+          "path": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          }
+        },
+        "method": "POST",
+        "path": "/v1/agent-proposals/9b1d4a7c-0e3f-4a5b-8c2d-6e7f8a9b0c1d/approval"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "decision_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "outcome": "approved",
+            "proposal_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.decision_id": {
+              "type": "Uuid"
+            },
+            "$.id": {
+              "type": "Uuid"
+            },
+            "$.proposal_id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.proposal_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to approve a proposal from a pull request",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds drafts that nobody answered, and the session belongs to an approver"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "decision": {
+              "body": {
+                "checks": [],
+                "criticality": "warning",
+                "edr": 1,
+                "id": "01JD8Q3M7K2W9X4Y5Z6A7B8C9D",
+                "owner": "team:platform",
+                "review_by": "2027-11-08",
+                "scope": [
+                  {
+                    "org": "acme"
+                  }
+                ],
+                "slug": "secrets-from-the-vault",
+                "sources": [
+                  {
+                    "type": "pr",
+                    "url": "https://github.com/acme/api/pull/8"
+                  }
+                ],
+                "status": "accepted",
+                "supersedes": [],
+                "tags": [],
+                "title": "Secrets come from the vault",
+                "valid_from": "2026-11-08",
+                "valid_to": null,
+                "waivers": []
+              },
+              "scope_refs": [
+                "5c9f3b1e-2a7d-4e84-8b6a-1f0d9c2e7a41"
+              ],
+              "valid_from": "2026-11-08T00:00:00Z"
+            },
+            "outcome": "approved"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.decision.scope_refs[0]": {
+              "expression": "${scopeId}",
+              "type": "ProviderState"
+            }
+          },
+          "path": {
+            "expression": "/v1/proposals/${proposalId}/approval",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decision.body.criticality": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^(blocking|warning|advisory)$"
+                }
+              ]
+            },
+            "$.decision.body.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                }
+              ]
+            },
+            "$.decision.body.owner": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^team:[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+                }
+              ]
+            },
+            "$.decision.body.review_by": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}$"
+                }
+              ]
+            },
+            "$.decision.body.scope[0].org": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decision.body.slug": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decision.body.sources[0].url": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^https://\\S+$"
+                }
+              ]
+            },
+            "$.decision.body.title": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decision.body.valid_from": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}$"
+                }
+              ]
+            },
+            "$.decision.body.valid_to": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "null"
+                }
+              ]
+            },
+            "$.decision.scope_refs[0]": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decision.valid_from": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          },
+          "path": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          }
+        },
+        "method": "POST",
+        "path": "/v1/proposals/3d2c6f2e-6b1a-4c6e-9d3b-0a5c1d7e8f90/approval"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "decision_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "outcome": "approved",
+            "proposal_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.decision_id": {
+              "type": "Uuid"
+            },
+            "$.id": {
+              "type": "Uuid"
+            },
+            "$.proposal_id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.proposal_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to record a supersession",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds two decisions that nobody superseded, and the session belongs to a decision owner"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "effective_at": "2026-06-01T00:00:00Z",
+            "from_decision": "2b3c4d5e-6f70-4812-93a4-b5c6d7e8f9a0",
+            "to_decision": "8c9d0e1f-2a3b-4c4d-8e5f-6a7b8c9d0e1f"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.from_decision": {
+              "expression": "${fromDecisionId}",
+              "type": "ProviderState"
+            },
+            "$.to_decision": {
+              "expression": "${toDecisionId}",
+              "type": "ProviderState"
+            }
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.effective_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.from_decision": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.to_decision": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/v1/supersessions"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "effective_at": "2026-06-01T00:00:00Z",
+            "from_decision": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "to_decision": "e2490de5-5bd3-43d5-b7c4-526e33f71304"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.from_decision": {
+              "type": "Uuid"
+            },
+            "$.id": {
+              "type": "Uuid"
+            },
+            "$.to_decision": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.effective_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.from_decision": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.to_decision": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to record a waiver",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds a decision in force and a repository scope, and the session belongs to an approver"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "decision_id": "7a8b9c0d-1e2f-4a3b-9c4d-5e6f7a8b9c0d",
+            "expires_at": "2026-07-01T00:00:00Z",
+            "reason": "The migration is under way",
+            "scope_id": "5c9f3b1e-2a7d-4e84-8b6a-1f0d9c2e7a41",
+            "ticket_ref": "SEC-482",
+            "valid_from": "2026-06-01T00:00:00Z"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.decision_id": {
+              "expression": "${decisionId}",
+              "type": "ProviderState"
+            },
+            "$.scope_id": {
+              "expression": "${scopeId}",
+              "type": "ProviderState"
+            }
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.expires_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.reason": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.scope_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.ticket_ref": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.valid_from": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/v1/waivers"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "decision_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "expires_at": "2026-07-01T00:00:00Z",
+            "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "scope_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "ticket_ref": "SEC-482",
+            "valid_from": "2026-06-01T00:00:00Z"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.decision_id": {
+              "type": "Uuid"
+            },
+            "$.id": {
+              "type": "Uuid"
+            },
+            "$.scope_id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.expires_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.scope_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.ticket_ref": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.valid_from": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to record a waiver from a viewer",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "the session belongs to a viewer of tenant A"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "decision_id": "7a8b9c0d-1e2f-4a3b-9c4d-5e6f7a8b9c0d",
+            "expires_at": "2026-07-01T00:00:00Z",
+            "reason": "The migration is under way",
+            "scope_id": "5c9f3b1e-2a7d-4e84-8b6a-1f0d9c2e7a41",
+            "ticket_ref": "SEC-482",
+            "valid_from": "2026-06-01T00:00:00Z"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.expires_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.reason": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.ticket_ref": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.valid_from": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/v1/waivers"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "error": "forbidden"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": 403
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to record the grandfather terms of a decision",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds two decisions that nobody superseded, and the session belongs to a decision owner"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "valid_from": "2026-06-01T00:00:00Z"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "path": {
+            "expression": "/v1/decisions/${toDecisionId}/grandfather-period",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.valid_from": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          },
+          "path": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          }
+        },
+        "method": "POST",
+        "path": "/v1/decisions/8c9d0e1f-2a3b-4c4d-8e5f-6a7b8c9d0e1f/grandfather-period"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "decision_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "valid_from": "2026-06-01T00:00:00Z",
+            "valid_until": null
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.decision_id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.valid_from": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.valid_until": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "null"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to reject a proposal from a pull request",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds drafts that nobody answered, and the session belongs to an approver"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "outcome": "rejected"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "path": {
+            "expression": "/v1/proposals/${proposalId}/approval",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          },
+          "path": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          }
+        },
+        "method": "POST",
+        "path": "/v1/proposals/3d2c6f2e-6b1a-4c6e-9d3b-0a5c1d7e8f90/approval"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "decision_id": null,
+            "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "outcome": "rejected",
+            "proposal_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.id": {
+              "type": "Uuid"
+            },
+            "$.proposal_id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "null"
+                }
+              ]
+            },
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.proposal_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
       "description": "a request without a session",
       "pending": false,
       "request": {
@@ -2465,6 +3698,80 @@
           }
         },
         "status": 401
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a second answer to a proposal",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds a draft that was answered, and the session belongs to an approver"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "outcome": "rejected"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "path": {
+            "expression": "/v1/proposals/${proposalId}/approval",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          },
+          "path": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          }
+        },
+        "method": "POST",
+        "path": "/v1/proposals/3d2c6f2e-6b1a-4c6e-9d3b-0a5c1d7e8f90/approval"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "error": "conflict"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": 409
       },
       "type": "Synchronous/HTTP"
     }
