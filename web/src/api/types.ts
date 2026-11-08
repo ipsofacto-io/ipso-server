@@ -24,6 +24,16 @@ export type AuditBeliefs = {
 export type AuditChain = Schemas['AuditChain'];
 export type AuditWaivers = Schemas['AuditWaivers'];
 
+// The writes (ADR-0109). The decision an approval writes is an open object that the server checks, so it is `Json`.
+export type DecisionDraft = Omit<Schemas['DecisionDraft'], 'body'> & { body: Json };
+export type ApprovalRequest = Omit<Schemas['ApprovalRequest'], 'decision'> & { decision?: DecisionDraft };
+export type Approval = Schemas['Approval'];
+export type WaiverRequest = Schemas['WaiverRequest'];
+export type SupersessionRequest = Schemas['SupersessionRequest'];
+export type Supersession = Schemas['Supersession'];
+export type GrandfatherRequest = Schemas['GrandfatherRequest'];
+export type GrandfatherPeriod = Schemas['GrandfatherPeriod'];
+
 /** A sign-in provider the page may link to (GET /auth/providers). */
 export interface ProviderInfo {
   id: string;

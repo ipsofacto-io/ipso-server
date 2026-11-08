@@ -6,6 +6,7 @@ import type { Decision } from '../api/types';
 import { DecisionStatus } from '../components/DecisionStatus';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorNotice } from '../components/ErrorNotice';
+import { LinkButton } from '../components/LinkButton';
 import { Loading } from '../components/Loading';
 import { Page } from '../components/Page';
 import { ExternalLink } from '../components/Safe';
@@ -175,6 +176,14 @@ function DecisionCard({ decision }: { decision: Decision }) {
           Supersession chain of this decision
         </Link>
       </p>
+      <div className="actions">
+        <LinkButton to={`/waivers/new?decision=${encodeURIComponent(d.id)}`} size="sm">
+          Record a waiver
+        </LinkButton>
+        <LinkButton to={`/supersessions/new?from=${encodeURIComponent(d.id)}`} size="sm">
+          Supersede this decision
+        </LinkButton>
+      </div>
     </article>
   );
 }

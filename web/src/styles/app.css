@@ -95,3 +95,17 @@ details[open] > summary { margin-bottom: var(--space-3); }
   .nav { order: 3; flex-basis: 100%; }
   .card { padding: var(--space-4); }
 }
+
+/* The forms of the writes (ADR-0110). */
+.form { display: flex; flex-direction: column; gap: var(--space-5); max-width: 720px; }
+.form .ip-field { max-width: none; }
+.fieldset { border: 1px solid var(--line); border-radius: var(--radius-md); margin: 0; padding: var(--space-4); min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.fieldset > legend { padding: 0 var(--space-2); }
+.fieldset:disabled { opacity: 0.7; }
+.choice { display: flex; align-items: flex-start; gap: var(--space-2); cursor: pointer; }
+.choice input { flex: none; margin: 3px 0 0; width: 18px; height: 18px; accent-color: var(--fucsia); }
+.choice input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.ip-select { appearance: auto; }
+.review { display: flex; flex-direction: column; gap: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--line); }
+.statement { white-space: pre-wrap; overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
