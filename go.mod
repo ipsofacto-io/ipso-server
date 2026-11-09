@@ -6,9 +6,9 @@ require (
 	filippo.io/age v1.3.2
 	github.com/google/uuid v1.6.0
 	github.com/ipsofacto-io/ipso v0.4.1-0.20261105183009-d21c3756d314
-	github.com/jackc/pgx/v5 v5.11.0
-	github.com/lestrrat-go/jwx/v3 v3.3.0
-	github.com/open-policy-agent/opa v1.21.4
+	github.com/jackc/pgx/v5 v5.12.0
+	github.com/lestrrat-go/jwx/v3 v3.4.0
+	github.com/open-policy-agent/opa v1.22.2
 	github.com/pact-foundation/pact-go/v2 v2.8.0 // pact tests only
 	github.com/pb33f/libopenapi v0.41.3 // tests only
 	github.com/pb33f/libopenapi-validator v0.16.1 // tests only
@@ -18,7 +18,7 @@ require (
 	github.com/riverqueue/river/rivertype v0.51.0
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/oauth2 v0.37.0
 	golang.org/x/time v0.16.0
 	pgregory.net/rapid v1.2.0 // integration tests only
 )
@@ -50,7 +50,7 @@ require (
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v1.0.2 // indirect
 	github.com/gobwas/glob v1.0.0 // indirect
-	github.com/goccy/go-json v0.10.6 // indirect
+	github.com/goccy/go-json v0.11.2 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/hashicorp/logutils v1.0.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -103,7 +103,7 @@ require (
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect
-	github.com/vektah/gqlparser/v2 v2.5.37 // indirect
+	github.com/vektah/gqlparser/v2 v2.5.58 // indirect
 	github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb // indirect
 	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
 	github.com/yashtewari/glob-intersection v0.2.0 // indirect
