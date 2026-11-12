@@ -160,7 +160,7 @@ func TestAnAdminAsksForAnExportAndDownloadsTheArchiveOfTheTenant(t *testing.T) {
 		t.Fatal(err)
 	}
 	header, err := bufio.NewReader(zr).ReadString('\n')
-	if err != nil || !strings.Contains(header, `"format":"ipso-tenant-export/1"`) || !strings.Contains(header, tenantA.String()) || strings.Contains(header, tenantB.String()) {
+	if err != nil || !strings.Contains(header, `"format":"ipso-tenant-export/2"`) || !strings.Contains(header, tenantA.String()) || strings.Contains(header, tenantB.String()) {
 		t.Fatalf("the header is %q (%v)", header, err)
 	}
 

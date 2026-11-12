@@ -20,14 +20,16 @@ type ExportOptions struct {
 	Out        io.Writer
 }
 
-// ExportReport counts the rows written for each table. It holds no row content.
+// ExportReport counts the rows written for each table and the EDR files. It holds no row content.
 type ExportReport struct {
 	Tenant uuid.UUID        `json:"tenant"`
 	Rows   map[string]int64 `json:"rows"`
 	Total  int64            `json:"total"`
+	Files  int64            `json:"files"`
 }
 
-// Export writes every row of a tenant to an encrypted archive that Restore reads (ADR-0100). It runs as the
+// Export writes every row of a tenant to an encrypted archive that Restore reads (ADR-0100), and after the rows
+// one EDR Markdown file for each version of each decision (ADR-0112). It runs as the
 // application role in one read-only transaction at REPEATABLE READ, so the archive is one consistent
 // snapshot and row-level security limits it to the tenant. The export is complete only when it returns nil,
 // and a caller that gets an error discards what was written.
@@ -100,6 +102,9 @@ func Export(ctx context.Context, db *sql.DB, o ExportOptions) (ExportReport, err
 		if err != nil {
 			return report, err
 		}
+	}
+	if report.Files, err = writeEDRFiles(ctx, tx, w, o.Tenant); err != nil {
+		return report, err
 	}
 	if err := w.finish(); err != nil {
 		return report, err

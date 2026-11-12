@@ -238,7 +238,7 @@ func TestTheStackServesTheAPIToItsTestUserOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 		first, err := bufio.NewReader(zr).ReadString('\n')
-		if err != nil || !strings.Contains(first, `"format":"ipso-tenant-export/1"`) || !strings.Contains(first, setting(t, "IPSO_TENANT_ID", "")) {
+		if err != nil || !strings.Contains(first, `"format":"ipso-tenant-export/2"`) || !strings.Contains(first, setting(t, "IPSO_TENANT_ID", "")) {
 			t.Fatalf("the header is %q (%v)", first, err)
 		}
 	})
