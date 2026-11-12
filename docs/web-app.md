@@ -1,6 +1,6 @@
 # Web app
 
-The web app is the browser view of the control plane: the registry, the review queues, the waivers and the audit questions, and the actions a person takes on them: approve or reject a draft, record a waiver, record a supersession. It is a React, Vite and TypeScript single-page app in [web/](../web), built into the `ipso-server` binary and served by the `api` role ([ADR-0106](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0106-web-app-stack-and-serving.md)). It looks like the rest of ipso because it uses the brand kit as its visual system ([ADR-0107](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0107-brand-kit-visual-system.md)).
+The web app is the browser view of the control plane: the registry, the review queues, the waivers and the audit questions, and the actions a person takes on them: approve or reject a draft, record a waiver, record a supersession. An admin also starts and downloads the export of the tenant. It is a React, Vite and TypeScript single-page app in [web/](../web), built into the `ipso-server` binary and served by the `api` role ([ADR-0106](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0106-web-app-stack-and-serving.md)). It looks like the rest of ipso because it uses the brand kit as its visual system ([ADR-0107](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0107-brand-kit-visual-system.md)).
 
 ## What it shows
 
@@ -13,6 +13,7 @@ The web app is the browser view of the control plane: the registry, the review q
 | `/waivers` | The waivers in force, in words: "Expires in 3 days". |
 | `/waivers/new` | The form to record a waiver. `?decision=` names the decision. |
 | `/supersessions/new` | The form to record a supersession and the grandfather terms of the new decision. `?from=` names the decision that ends. |
+| `/export` | The export of the tenant, for an admin: a field for one age public key, the state of the export (pending, running, ready, failed) and its expiry, and the download of the archive once it is ready. A person without the role reads the refusal and no form. |
 | `/audit` | The five questions of section 2.3: what applied, what changed, at a merge, supersessions, and waivers ending soon. The fields are in the address, so an answer can be shared. |
 | `/signin` | The sign-in. Any call the server refuses with 401 ends here. |
 
@@ -34,6 +35,12 @@ A coding agent cannot take any of these: the role policy refuses it before the s
 An approval writes the decision as an EDR with all sixteen keys of draft 0.2, so a verdict, the detail view and the MCP tools read it the way they read any other. The person gives the owner (`team:name`), the slug, the dates, the criticality, a source link and the scopes. The draft's statement and rationale have no key in the EDR and stay with the proposal. A waiver lasts at most 90 days ([ADR-0054](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0054-waivers-with-expiry.md)), and the form says so before it sends. A supersession closes the old decision at the instant given, and no route removes it, so the form says that above the button. The grandfather terms say how long a recorded baseline counts: none, no end, or a deadline. When the supersession is recorded and the terms are refused, the page says so and sends only the terms again.
 
 Every action sends only the body. The tenant, the principal and the approver come from the session cookie, and a key for any of them is a 400 (ADR-0099, ADR-0109).
+
+### The export
+
+The export screen follows [ADR-0115](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0115-web-app-export-screen.md) and the routes of [ADR-0111](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0111-tenant-export-through-the-api.md). Only an admin who is a person takes them, and the menu follows the server's answer: the app reads `GET /v1/exports/current` once when a session starts and shows the entry "Export" after any answer but a 401 or a 403. The page opens with the same read, so it survives a reload and a second admin finds the export that is under way. It reads again every five seconds while the export is pending or running.
+
+The key field takes one age public key. A private key (it starts with `AGE-SECRET-KEY-`) is never sent: the field is cleared and the page says so. Every other check is the server's, and a key it cannot read shows its 400 in words and is never quoted. The download is a link to `/v1/exports/{id}/archive` that opens in a new tab, where the attachment header makes the browser save the file, so the page never holds the archive. The page holds a public key and an export id and nothing else of the export.
 
 A decision is shown in the brand's four states, always with a word and an icon: Verified, Verifying, Needs review and Rejected. A proposed decision is Verifying with a "Pending approval" label, and a superseded or deprecated decision is a plain label. The color of Verified is used for nothing else.
 
@@ -73,7 +80,7 @@ npm test
 npm run build        # writes internal/webapp/dist/app, which go build embeds
 ```
 
-`npm run fixtures` serves records from [web/fixtures](../web/fixtures) with the rules of the real API that a client can break (a 401 without a session, a 400 for a query key a route does not list or a body key it does not list, a 90-day limit on a waiver, a draft answered once). A write changes what it serves until it stops, so an approved draft leaves its queue. It does not play the role policy: every person may write there. Opening `/auth/login/dex` signs in there, and `POST /auth/logout` signs out. `npm run dev` needs a session on the stack: sign in at `http://localhost:8080/auth/login/dex` once ([local-stack.md](local-stack.md)), and `http://localhost:5173` shares the cookie, because a cookie does not name a port.
+`npm run fixtures` serves records from [web/fixtures](../web/fixtures) with the rules of the real API that a client can break (a 401 without a session, a 400 for a query key a route does not list or a body key it does not list, a 90-day limit on a waiver, a draft answered once). A write changes what it serves until it stops, so an approved draft leaves its queue. It does not play the role policy: every person may write there. It plays the export routes too: an export asked for there is pending for a few seconds, then running, then ready, and the download is a small stand-in file, so the whole flow can be seen at `/export`. Opening `/auth/login/dex` signs in there, and `POST /auth/logout` signs out. `npm run dev` needs a session on the stack: sign in at `http://localhost:8080/auth/login/dex` once ([local-stack.md](local-stack.md)), and `http://localhost:5173` shares the cookie, because a cookie does not name a port.
 
 `npm ci` runs no install script (`web/.npmrc`). The types of the API are generated from [api/openapi.yaml](../api/openapi.yaml) into `web/src/api/schema.d.ts` with `npm run api:types`, and `npm run api:check` fails when the committed file is behind the document.
 

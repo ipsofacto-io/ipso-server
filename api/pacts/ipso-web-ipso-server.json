@@ -185,6 +185,239 @@
       "type": "Synchronous/HTTP"
     },
     {
+      "description": "a request for the current export from a viewer",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "the session belongs to a viewer of tenant A"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/exports/current"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "error": "forbidden"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": 403
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the current export when it is ready",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds a ready export, and the session belongs to an admin"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/exports/current"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "bytes": 1024,
+            "created_at": "2026-11-01T00:00:00Z",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "finished_at": "2026-11-01T00:00:00Z",
+            "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "requested_by": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "sha256": "abababababababababababababababababababababababababababababababab",
+            "state": "ready"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.id": {
+              "type": "Uuid"
+            },
+            "$.requested_by": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.bytes": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.created_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.expires_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.finished_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.requested_by": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.sha256": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^[0-9a-f]{64}$"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the current export when there is none",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds no export, and the session belongs to an admin"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/exports/current"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "error": "not found"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": 404
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
       "description": "a request for the decision a registry id names",
       "pending": false,
       "providerStates": [
@@ -2949,6 +3182,82 @@
       "type": "Synchronous/HTTP"
     },
     {
+      "description": "a request to download the archive of a ready export",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds a ready export, and the session belongs to an admin"
+        }
+      ],
+      "request": {
+        "generators": {
+          "path": {
+            "expression": "/v1/exports/${exportId}/archive",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          },
+          "path": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          }
+        },
+        "method": "GET",
+        "path": "/v1/exports/0194f2a0-0000-7000-8000-000000000a01/archive"
+      },
+      "response": {
+        "headers": {
+          "Cache-Control": [
+            "no-store"
+          ],
+          "Content-Disposition": [
+            "attachment; filename=\"ipso-export-0194f2a0-0000-7000-8000-000000000a01.age\""
+          ],
+          "Content-Type": [
+            "application/octet-stream"
+          ],
+          "X-Content-Type-Options": [
+            "nosniff"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Content-Disposition": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^attachment; filename=\"ipso-export-[0-9a-f-]{36}\\.age\"$"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
       "description": "a request to record a supersession",
       "pending": false,
       "providerStates": [
@@ -3648,6 +3957,267 @@
           }
         },
         "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to start an export",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds no export, and the session belongs to an admin"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "recipient": "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/v1/exports"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "bytes": null,
+            "created_at": "2026-11-01T00:00:00Z",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "finished_at": null,
+            "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "requested_by": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "sha256": null,
+            "state": "pending"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.id": {
+              "type": "Uuid"
+            },
+            "$.requested_by": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.bytes": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "null"
+                }
+              ]
+            },
+            "$.created_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.expires_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.finished_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "null"
+                }
+              ]
+            },
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.requested_by": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.sha256": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "null"
+                }
+              ]
+            }
+          }
+        },
+        "status": 202
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to start an export for a key the server cannot read",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds no export, and the session belongs to an admin"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "recipient": "not an age public key"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/v1/exports"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "error": "invalid query"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": 400
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to start an export while one is pending",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds a pending export, and the session belongs to an admin"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "recipient": "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/v1/exports"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "error": "conflict"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": 409
       },
       "type": "Synchronous/HTTP"
     },

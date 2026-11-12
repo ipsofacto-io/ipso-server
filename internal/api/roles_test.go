@@ -56,6 +56,7 @@ var mayCall = func() map[string][]string {
 
 		// The export of the whole tenant (ADR-0111): only an admin who is a person holds tenant.export.
 		"start_export":    {identity.RoleAdmin},
+		"current_export":  {identity.RoleAdmin},
 		"get_export":      {identity.RoleAdmin},
 		"download_export": {identity.RoleAdmin},
 	}
@@ -68,9 +69,9 @@ var writeOps = []string{
 	"approve_agent_proposal", "start_export",
 }
 
-// exportOps are the two reads of ADR-0111, which only an admin takes. The third operation of the export is the
-// write start_export, which is in writeOps.
-var exportOps = []string{"get_export", "download_export"}
+// exportOps are the reads of the export (ADR-0111, and current_export of ADR-0115), which only an admin takes.
+// The other operation of the export is the write start_export, which is in writeOps.
+var exportOps = []string{"current_export", "get_export", "download_export"}
 
 // the five audit routes of ADR-0055.
 var auditOps = []string{"audit_decisions", "audit_beliefs", "audit_merges", "audit_supersessions", "audit_waivers"}

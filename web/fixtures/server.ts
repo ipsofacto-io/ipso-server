@@ -27,16 +27,28 @@ export interface FixtureState {
   /** The decisions that have grandfather terms: a decision has one set. */
   terms: Set<string>;
   sequence: number;
+  /** The one export the tenant holds, as the stand-in makes it. */
+  held: FixtureExport | null;
+}
+
+/** An export asked for through POST /v1/exports. Its state follows the time since it was asked. */
+export interface FixtureExport {
+  id: string;
+  recipient: string;
+  /** Milliseconds since the epoch. */
+  createdAt: number;
 }
 
 export function newFixtureState(): FixtureState {
-  return { answered: new Set(), decisions: [], waivers: [], superseded: new Set([ids.legacyFtp]), terms: new Set(), sequence: 1000 };
+  return { answered: new Set(), decisions: [], waivers: [], superseded: new Set([ids.legacyFtp]), terms: new Set(), sequence: 1000, held: null };
 }
 
 export interface FixtureReply {
   status: number;
   headers: Record<string, string>;
   body?: unknown;
+  /** A body that is not JSON, such as the archive of an export. It is sent as it is. */
+  raw?: string;
 }
 
 export const SESSION_COOKIE = 'fixtures-session';
@@ -62,6 +74,42 @@ const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const MAX_BODY = 1 << 20;
 const WAIVER_MAX = 90 * 24 * 60 * 60 * 1000;
+
+// The export of the stand-in (ADR-0111, ADR-0115): pending for a few seconds, running for a few more, then
+// ready. It is kept for 24 hours, and a new request is refused for ten minutes after the last one finished.
+export const EXPORT_PENDING_MS = 3000;
+export const EXPORT_READY_MS = 8000;
+const EXPORT_KEPT_MS = 24 * 60 * 60 * 1000;
+const EXPORT_COOLDOWN_MS = 10 * 60 * 1000;
+const RECIPIENT = /^age1[0-9a-z]+$/;
+/** What a download of the stand-in sends. It is not encrypted and it is not a tenant export. */
+export const EXPORT_ARCHIVE = 'age-encryption.org/v1\nThis is the archive of the fixtures server. It is not encrypted and it is not a tenant export.\n';
+export const EXPORT_BYTES = new TextEncoder().encode(EXPORT_ARCHIVE).length;
+export const EXPORT_SHA256 = '999a9446a18cbcb3bd915ffdd19297e0fa5c0528950f6518e00b27b4fa76c115';
+
+function exportState(held: FixtureExport, now: Date): 'pending' | 'running' | 'ready' {
+  const age = now.getTime() - held.createdAt;
+  return age < EXPORT_PENDING_MS ? 'pending' : age < EXPORT_READY_MS ? 'running' : 'ready';
+}
+
+/** The export in the shape of the Export schema, or null when it has expired. */
+function exportBody(held: FixtureExport | null, now: Date) {
+  if (!held) return null;
+  const state = exportState(held, now);
+  const finished = held.createdAt + EXPORT_READY_MS;
+  const expires = (state === 'ready' ? finished : held.createdAt) + EXPORT_KEPT_MS;
+  if (expires <= now.getTime()) return null;
+  return {
+    id: held.id,
+    state,
+    requested_by: '0194f2a0-0000-7000-8000-0000000000a1',
+    created_at: new Date(held.createdAt).toISOString(),
+    finished_at: state === 'ready' ? new Date(finished).toISOString() : null,
+    expires_at: new Date(expires).toISOString(),
+    bytes: state === 'ready' ? EXPORT_BYTES : null,
+    sha256: state === 'ready' ? EXPORT_SHA256 : null,
+  };
+}
 
 type Fields = Record<string, unknown>;
 type Parsed = { ok: true; fields: Fields } | { ok: false; reply: FixtureReply };
@@ -126,6 +174,21 @@ function write(request: FixtureRequest, path: string, now: Date, state: FixtureS
       state.decisions.push({ id: decisionId, version: 1, body: draft });
     }
     return json(201, { id: fresh(state), proposal_id: id, outcome, decision_id: decisionId });
+  }
+
+  if (path === '/v1/exports') {
+    const parsed = parse(request, ['recipient']);
+    if (!parsed.ok) return parsed.reply;
+    const { recipient } = parsed.fields;
+    if (typeof recipient !== 'string' || recipient.length > 4096 || !RECIPIENT.test(recipient)) return bad;
+    const current = exportBody(state.held, now);
+    if (current && current.state !== 'ready') return error(409, 'conflict');
+    if (current?.finished_at) {
+      const wait = Date.parse(current.finished_at) + EXPORT_COOLDOWN_MS - now.getTime();
+      if (wait > 0) return error(429, 'rate limited', { 'Retry-After': String(Math.ceil(wait / 1000)) });
+    }
+    state.held = { id: fresh(state), recipient, createdAt: now.getTime() };
+    return json(202, exportBody(state.held, now));
   }
 
   if (path === '/v1/waivers') {
@@ -205,6 +268,33 @@ export function respond(request: FixtureRequest, now: Date = new Date(), state: 
   if (path.startsWith('/v1/decisions/')) {
     const ref = decodeURIComponent(path.slice('/v1/decisions/'.length));
     return allow(...TIMES) ?? json(200, { ...echo, decisions: everyDecision.filter((d) => d.id === ref || d.body.slug === ref) });
+  }
+  if (path === '/v1/exports/current') {
+    const refused = allow();
+    if (refused) return refused;
+    const current = exportBody(state.held, now);
+    return current ? json(200, current) : error(404, 'not found');
+  }
+  const archive = /^\/v1\/exports\/([^/]+)\/archive$/.exec(path);
+  if (archive) {
+    const current = exportBody(state.held, now);
+    if (!current || current.id !== decodeURIComponent(archive[1] ?? '')) return error(404, 'not found');
+    if (current.state !== 'ready') return error(409, 'conflict');
+    return {
+      status: 200,
+      raw: EXPORT_ARCHIVE,
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="ipso-export-${current.id}.age"`,
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      },
+    };
+  }
+  const one = /^\/v1\/exports\/([^/]+)$/.exec(path);
+  if (one) {
+    const current = exportBody(state.held, now);
+    return current && current.id === decodeURIComponent(one[1] ?? '') ? json(200, current) : error(404, 'not found');
   }
   if (path === '/v1/scopes') return allow('known', ...PAGED) ?? json(200, { known: echo.known, scopes: page(scopes, query) });
   if (path === '/v1/waivers') return allow(...TIMES, ...PAGED) ?? json(200, { ...echo, waivers: page([...waivers(now), ...state.waivers], query) });

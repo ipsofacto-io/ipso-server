@@ -1114,6 +1114,35 @@ paths:
           $ref: '#/components/responses/Internal'
         '503':
           $ref: '#/components/responses/Timeout'
+  /v1/exports/current:
+    get:
+      operationId: current_export
+      tags: [export]
+      summary: Read the export the tenant holds.
+      description: >-
+        Only an admin who is a person takes it (ADR-0108, ADR-0111, ADR-0115). It answers the newest export of
+        the tenant that is not replaced and has not expired, in any state, so the web app finds the export
+        again after a reload or from another browser, and a 409 from `start_export` can be followed by a read.
+        It is 404 when the tenant holds none. A viewer, any other role and every agent receive the plain 403.
+      responses:
+        '200':
+          description: The export.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Export'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
   /v1/exports/{id}:
     get:
       operationId: get_export

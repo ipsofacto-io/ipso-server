@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 
 import { ids, scopes } from './data.ts';
-import { newFixtureState, respond, SESSION_COOKIE, type FixtureRequest } from './server.ts';
+import { EXPORT_BYTES, EXPORT_SHA256, newFixtureState, respond, SESSION_COOKIE, type FixtureRequest } from './server.ts';
 
 const NOW = new Date('2026-11-07T12:00:00Z');
 const cookie = `${SESSION_COOKIE}=1`;
@@ -75,5 +77,67 @@ describe('the write routes of the fixtures server', () => {
     const terms = post(path, { valid_from: body.effective_at }, first.state);
     expect(terms.reply).toMatchObject({ status: 201, body: { valid_until: null } });
     expect(post(path, { valid_from: body.effective_at }, terms.state).reply.status).toBe(409);
+  });
+});
+
+describe('the export routes of the fixtures server', () => {
+  const RECIPIENT = 'age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p';
+  const at = (seconds: number) => new Date(NOW.getTime() + seconds * 1000);
+  const get = (path: string, state: ReturnType<typeof newFixtureState>, when = NOW, signedIn = true) =>
+    respond({ method: 'GET', url: path, cookie: signedIn ? cookie : '' }, when, state);
+
+  it('needs a session and holds none until one is asked for', () => {
+    const state = newFixtureState();
+    expect(get('/v1/exports/current', state, NOW, false).status).toBe(401);
+    expect(get('/v1/exports/current', state).status).toBe(404);
+    expect(get('/v1/exports/0194f2a0-0000-7000-8000-000000000999', state).status).toBe(404);
+    expect(get('/v1/exports/current?limit=1', state).status).toBe(400);
+  });
+
+  it('refuses a body that is not one public key, and a private key most of all', () => {
+    expect(post('/v1/exports', {}).reply.status).toBe(400);
+    expect(post('/v1/exports', { recipient: 'AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQ' }).reply.status).toBe(400);
+    expect(post('/v1/exports', { recipient: RECIPIENT, extra: 1 }).reply.status).toBe(400);
+    expect(post('/v1/exports', { recipient: `${RECIPIENT}\n${RECIPIENT}` }).reply.status).toBe(400);
+  });
+
+  it('makes the export pending, then running, then ready, and sends the archive only then', () => {
+    const { reply, state } = post('/v1/exports', { recipient: RECIPIENT });
+    expect(reply.status).toBe(202);
+    const asked = reply.body as { id: string; state: string; bytes: number | null; sha256: string | null; finished_at: string | null };
+    expect(asked).toMatchObject({ state: 'pending', bytes: null, sha256: null, finished_at: null });
+    const archive = `/v1/exports/${asked.id}/archive`;
+    expect((get('/v1/exports/current', state).body as { state: string }).state).toBe('pending');
+    expect((get(`/v1/exports/${asked.id}`, state, at(4)).body as { state: string }).state).toBe('running');
+    expect(get(archive, state, at(4)).status).toBe(409);
+
+    const ready = get('/v1/exports/current', state, at(9)).body as { state: string; bytes: number; sha256: string; expires_at: string; finished_at: string };
+    expect(ready).toMatchObject({ state: 'ready', bytes: EXPORT_BYTES, sha256: EXPORT_SHA256 });
+    expect(Date.parse(ready.expires_at) - Date.parse(ready.finished_at)).toBe(24 * 60 * 60 * 1000);
+    const sent = get(archive, state, at(9));
+    expect(sent.status).toBe(200);
+    expect(sent.headers).toMatchObject({ 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store' });
+    expect(sent.headers['Content-Disposition']).toBe(`attachment; filename="ipso-export-${asked.id}.age"`);
+    expect(new TextEncoder().encode(sent.raw).length).toBe(EXPORT_BYTES);
+    expect(createHash('sha256').update(sent.raw ?? '').digest('hex')).toBe(EXPORT_SHA256);
+    expect(get('/v1/exports/0194f2a0-0000-7000-8000-000000000999/archive', state, at(9)).status).toBe(404);
+  });
+
+  it('refuses a second request while one is under way, and for ten minutes after one finished', () => {
+    const { state } = post('/v1/exports', { recipient: RECIPIENT });
+    const ask = (when: Date) => respond({ method: 'POST', url: '/v1/exports', cookie, contentType: 'application/json', body: JSON.stringify({ recipient: RECIPIENT }) }, when, state);
+    expect(ask(at(4)).status).toBe(409);
+    const soon = ask(at(60));
+    expect(soon.status).toBe(429);
+    expect(Number(soon.headers['Retry-After'])).toBe(10 * 60 - 52);
+    const replaced = ask(at(8 + 10 * 60));
+    expect(replaced.status).toBe(202);
+    expect((replaced.body as { state: string }).state).toBe('pending');
+  });
+
+  it('forgets an export 24 hours after it finished', () => {
+    const { state } = post('/v1/exports', { recipient: RECIPIENT });
+    expect(get('/v1/exports/current', state, at(8 + 24 * 60 * 60 - 1)).status).toBe(200);
+    expect(get('/v1/exports/current', state, at(8 + 24 * 60 * 60)).status).toBe(404);
   });
 });

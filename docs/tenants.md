@@ -80,6 +80,8 @@ curl -sS "$IPSO/v1/exports/$ID" -H "Authorization: Bearer $TOKEN"
 curl -sS -o acme.age "$IPSO/v1/exports/$ID/archive" -H "Authorization: Bearer $TOKEN"
 ```
 
+`GET /v1/exports/current` gives the export the tenant holds, in any state, or 404 when there is none ([ADR-0115](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0115-web-app-export-screen.md)), so an admin finds the export again after the 409 of a second request. The web app has the same flow at `/export` ([web-app.md](web-app.md)), so the export needs no `curl`.
+
 The file is the one `tenant export` writes, so the `age --decrypt` command above opens it and `tenant restore` reads it. The API refuses a recipient that is not exactly one native or hybrid public key, with 400, and never quotes it.
 
 A tenant holds one current export. While one is pending or running a new request is 409. Ten minutes after the last export finished or failed a new request is accepted, and sooner it is 429 with a `Retry-After`. A new request replaces a finished one: the old id is a 404 at once, and its parts are kept for half an hour so that a download in flight can end. An export can be downloaded for 24 hours and is then deleted, with the same half hour of grace. A process sends two archives at once and answers a third with 429 and a `Retry-After`. A tenant whose archive would pass 1 GiB gets an export in the state `failed`: use the operator command for it. The worker's log says why any export failed, and the admin can ask again.

@@ -9,6 +9,8 @@ import type {
   AuditWaivers,
   CheckProposal,
   DecisionPage,
+  Export,
+  ExportRequest,
   GrandfatherPeriod,
   GrandfatherRequest,
   Proposal,
@@ -71,9 +73,20 @@ export function makeCalls(api: Api) {
       api.postJSON<Supersession>('/v1/supersessions', request, signal),
     recordGrandfatherPeriod: (decisionID: string, request: GrandfatherRequest, signal?: AbortSignal) =>
       api.postJSON<GrandfatherPeriod>(`/v1/decisions/${encodeURIComponent(decisionID)}/grandfather-period`, request, signal),
+    /** The export the tenant holds, 404 when there is none. Only an admin who is a person may ask (ADR-0115). */
+    currentExport: (signal?: AbortSignal) => api.getJSON<Export>('/v1/exports/current', {}, signal),
+    startExport: (request: ExportRequest, signal?: AbortSignal) => api.postJSON<Export>('/v1/exports', request, signal),
     providers: (signal?: AbortSignal) => api.getJSON<{ providers: ProviderInfo[] }>('/auth/providers', {}, signal),
     logout: (signal?: AbortSignal) => api.post('/auth/logout', signal),
   };
 }
 
 export const calls = makeCalls(defaultApi);
+
+/**
+ * Where the archive of a ready export comes from. The page links to it and the browser saves the body to a file,
+ * so the app never holds the archive (ADR-0115). It is a link and not a call, and the pact plays it by name.
+ */
+export function exportArchivePath(id: string): string {
+  return `/v1/exports/${encodeURIComponent(id)}/archive`;
+}

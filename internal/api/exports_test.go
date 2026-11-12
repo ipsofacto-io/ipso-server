@@ -57,7 +57,7 @@ func TestOnlyTheArchiveRouteSkipsTheBoundedChain(t *testing.T) {
 
 func TestEveryExportRouteAsksForTheExportActionAndReadsNothingFromTheQuery(t *testing.T) {
 	routes := exportRoutes(nil, nil)
-	want := map[string]string{"POST /v1/exports": "start_export", "GET /v1/exports/{id}": "get_export", archivePattern: "download_export"}
+	want := map[string]string{"POST /v1/exports": "start_export", "GET /v1/exports/current": "current_export", "GET /v1/exports/{id}": "get_export", archivePattern: "download_export"}
 	if len(routes) != len(want) {
 		t.Fatalf("%d export routes, want %d", len(routes), len(want))
 	}
@@ -219,8 +219,8 @@ func TestTheExportErrorsAreTheStatusesTheDocumentLists(t *testing.T) {
 	}
 }
 
-// The three operations are the write start_export and the two reads of exportOps, and the matrix says that only
-// an admin takes each one.
+// The four operations are the write start_export and the three reads of exportOps, and the matrix says that
+// only an admin takes each one.
 func TestTheMatrixHoldsEveryExportOperationForTheAdminAlone(t *testing.T) {
 	var mounted []string
 	for _, rt := range exportRoutes(nil, nil) {

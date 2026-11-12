@@ -201,6 +201,8 @@ func TestOnlyAnAdminWhoIsAPersonTakesTheExportRoutes(t *testing.T) {
 			}
 			method, target, body := http.MethodPost, "/v1/exports", `{"recipient":"`+recipient+`"}`
 			switch op {
+			case "current_export":
+				method, target, body = http.MethodGet, "/v1/exports/current", ""
 			case "get_export":
 				method, target, body = http.MethodGet, "/v1/exports/"+id.String(), ""
 			case "download_export":
@@ -223,6 +225,53 @@ func TestOnlyAnAdminWhoIsAPersonTakesTheExportRoutes(t *testing.T) {
 	other := idOf(t, s.expect(http.StatusAccepted, personB, http.MethodPost, "/v1/exports", map[string]any{"recipient": recipient}), "id")
 	s.expect(http.StatusNotFound, personA, http.MethodGet, "/v1/exports/"+other.String(), nil)
 	s.expect(http.StatusOK, personA, http.MethodGet, "/v1/exports/"+id.String(), nil)
+}
+
+// The current export is the one the tenant holds, in whatever state, until it expires or is replaced, so an
+// admin finds it again after a reload or from another browser (ADR-0115). Another tenant's admin sees its own.
+func TestTheCurrentExportIsTheOneTheTenantHoldsInAnyStateUntilItIsGone(t *testing.T) {
+	s := newScribe(t)
+	_, recipient := newRecipient(t)
+	current := func(subject string, want int) map[string]any {
+		return s.expect(want, subject, http.MethodGet, "/v1/exports/current", nil)
+	}
+
+	// None yet. The literal path is the read, and not an id that fails to parse (that would be 400).
+	current(personA, http.StatusNotFound)
+
+	id := idOf(t, s.expect(http.StatusAccepted, personA, http.MethodPost, "/v1/exports", map[string]any{"recipient": recipient}), "id")
+	if got := current(personA, http.StatusOK); idOf(t, got, "id") != id || got["state"] != "pending" {
+		t.Fatalf("the current export is %v, want %s pending", got, id)
+	}
+	current(personB, http.StatusNotFound)
+
+	// A failed export is still the one the tenant holds, so the page can say that it failed.
+	if err := tenancy.FailExport(t.Context(), s.f.db, tenantA, id); err != nil {
+		t.Fatal(err)
+	}
+	if got := current(personA, http.StatusOK); idOf(t, got, "id") != id || got["state"] != "failed" {
+		t.Fatalf("the current export is %v, want %s failed", got, id)
+	}
+
+	// After the cooldown a new request is the current one.
+	s.age()
+	next := idOf(t, s.expect(http.StatusAccepted, personA, http.MethodPost, "/v1/exports", map[string]any{"recipient": recipient}), "id")
+	if next == id {
+		t.Fatal("a request after a failed export reused its id")
+	}
+	if _, err := tenancy.RunStoredExport(t.Context(), s.f.db, tenantA, next); err != nil {
+		t.Fatal(err)
+	}
+	got := current(personA, http.StatusOK)
+	if size, _ := got["bytes"].(float64); idOf(t, got, "id") != next || got["state"] != "ready" || size <= 0 {
+		t.Fatalf("the current export is %v, want %s ready with a size", got, next)
+	}
+
+	// An export that expired is gone, whether or not the sweep has reached it.
+	if _, err := s.f.admin.ExecContext(t.Context(), `UPDATE tenancy.export SET created_at = now() - interval '3 days', finished_at = now() - interval '2 days', expires_at = now() - interval '1 minute'`); err != nil {
+		t.Fatal(err)
+	}
+	current(personA, http.StatusNotFound)
 }
 
 // A key the route cannot read is 400, the answer never quotes it, and nothing is stored or logged.

@@ -209,11 +209,20 @@ func GetExport(ctx context.Context, db *sql.DB, tenant, id uuid.UUID) (StoredExp
 	return e, err
 }
 
+// The two reads of one export. They are whole constant queries, so no text of a request reaches the SQL.
+const (
+	exportByID    = `SELECT ` + exportColumns + ` FROM tenancy.export WHERE tenant_id = $1 AND id = $2 AND expires_at > now()`
+	exportCurrent = `SELECT ` + exportColumns + ` FROM tenancy.export WHERE tenant_id = $1 AND state <> 'replaced' AND expires_at > now() ORDER BY created_at DESC, id DESC LIMIT 1`
+)
+
 // GetExportTx is GetExport in a transaction the caller opened for the tenant.
 func GetExportTx(ctx context.Context, tx *sql.Tx, tenant, id uuid.UUID) (StoredExport, error) {
-	e, err := scanExport(tx.QueryRowContext(ctx, `
-		SELECT `+exportColumns+` FROM tenancy.export
-		WHERE tenant_id = $1 AND id = $2 AND expires_at > now()`, tenant, id))
+	return queryExport(ctx, tx, exportByID, tenant, id)
+}
+
+// queryExport reads the one export a query names, and is ErrNoExport when there is none.
+func queryExport(ctx context.Context, tx *sql.Tx, query string, args ...any) (StoredExport, error) {
+	e, err := scanExport(tx.QueryRowContext(ctx, query, args...))
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return StoredExport{}, ErrNoExport
@@ -221,6 +230,18 @@ func GetExportTx(ctx context.Context, tx *sql.Tx, tenant, id uuid.UUID) (StoredE
 		return StoredExport{}, reduce("export: read the export", err)
 	}
 	return e, nil
+}
+
+// CurrentExport returns the export the tenant holds: the newest one that is not replaced and has not expired,
+// in any state. It is ErrNoExport when there is none. A request while one is pending or running is a 409 with
+// no id, so this is how an admin finds the export again after a reload or from another browser (ADR-0115).
+func CurrentExport(ctx context.Context, db *sql.DB, tenant uuid.UUID) (StoredExport, error) {
+	var e StoredExport
+	err := inTenantTx(ctx, db, tenant, true, func(tx *sql.Tx) (err error) {
+		e, err = queryExport(ctx, tx, exportCurrent, tenant)
+		return err
+	})
+	return e, err
 }
 
 // ExportPart returns one stored part of a finished export.

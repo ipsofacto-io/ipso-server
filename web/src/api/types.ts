@@ -34,6 +34,10 @@ export type Supersession = Schemas['Supersession'];
 export type GrandfatherRequest = Schemas['GrandfatherRequest'];
 export type GrandfatherPeriod = Schemas['GrandfatherPeriod'];
 
+// The export of the tenant (ADR-0111, ADR-0115).
+export type Export = Schemas['Export'];
+export type ExportRequest = Schemas['ExportRequest'];
+
 /** A sign-in provider the page may link to (GET /auth/providers). */
 export interface ProviderInfo {
   id: string;

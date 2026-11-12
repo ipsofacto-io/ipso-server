@@ -50,7 +50,7 @@ type exportHandlers struct {
 	slots chan struct{}
 }
 
-// exportRoutes are the operations of ADR-0111. Every one asks for the tenant.export action, which only an
+// exportRoutes are the operations of ADR-0111 and the read of ADR-0115. Every one asks for the tenant.export action, which only an
 // admin who is a person holds (ADR-0108), so no route here reads a query key or a scope.
 func exportRoutes(db *sql.DB, log *slog.Logger) []route {
 	if log == nil {
@@ -59,6 +59,7 @@ func exportRoutes(db *sql.DB, log *slog.Logger) []route {
 	h := &exportHandlers{db: db, log: log, writes: &writeHandlers{db: db, log: log}, slots: make(chan struct{}, maxDownloads)}
 	return []route{
 		{"POST /v1/exports", "start_export", authz.TenantExport, nil, nil, http.HandlerFunc(h.start)},
+		{"GET /v1/exports/current", "current_export", authz.TenantExport, nil, nil, http.HandlerFunc(h.current)},
 		{"GET /v1/exports/{id}", "get_export", authz.TenantExport, nil, nil, http.HandlerFunc(h.get)},
 		{archivePattern, "download_export", authz.TenantExport, nil, nil, http.HandlerFunc(h.download)},
 	}
@@ -110,6 +111,22 @@ func (h *exportHandlers) start(w http.ResponseWriter, r *http.Request) {
 		}
 		return "export " + e.ID.String(), exportBody(e), nil
 	})
+}
+
+// current reads the export the tenant holds, so the web app finds it again after a reload or from another
+// browser (ADR-0115). It is 404 when there is none. The literal path wins over {id} in the mux.
+func (h *exportHandlers) current(w http.ResponseWriter, r *http.Request) {
+	caller, ok := personOf(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return
+	}
+	e, err := tenancy.CurrentExport(r.Context(), h.db, caller.Tenant)
+	if err != nil {
+		writeStoreError(w, h.log, "current_export", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, exportBody(e))
 }
 
 // get reads an export of the tenant that has not expired. An id the tenant does not have, one that expired,
