@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -184,7 +185,24 @@ func New(cfg Config) (http.Handler, error) {
 		ci = ciRoutes(cfg.DB, g.log)
 	}
 	mux, table := mount(routes(cfg.DB, cfg.Now, g.log), ci)
-	return bounded(g.serve(mux, table), limits, g.log), nil
+	guarded := g.serve(mux, table)
+	capped := bounded(guarded, limits, g.log)
+	stream := streamed(guarded, limits)
+	return split(mux, capped, stream), nil
+}
+
+// split sends a request that would run the archive route to stream and every other request to capped. The
+// archive of an export is the one answer that is not held to the response cap and the request deadline
+// (ADR-0111). The mux says which route a request would run, as the guard asks it, and both chains hold the
+// same guard.
+func split(mux *http.ServeMux, capped, stream http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, pattern := mux.Handler(r); pattern == archivePattern {
+			stream.ServeHTTP(w, r)
+			return
+		}
+		capped.ServeHTTP(w, r)
+	})
 }
 
 // newGuard checks the configuration and builds the guard every request passes.
@@ -259,7 +277,7 @@ func routes(db *sql.DB, now func() time.Time, log *slog.Logger) []route {
 		{"GET /v1/audit/waivers", "audit_waivers", authz.AuditRead, []string{"known", "now"}, nil, audits},
 		{"GET /v1/verdicts", "list_verdicts", authz.VerdictsRead, []string{"repo", "decision", "limit", "before"}, nil, http.HandlerFunc(verdicts.list)},
 	}
-	return append(reads, writeRoutes(db, log)...)
+	return slices.Concat(reads, writeRoutes(db, log), exportRoutes(db, log))
 }
 
 // ciRoutes are the operations a CI job calls with its own OIDC token instead of a person's. They are

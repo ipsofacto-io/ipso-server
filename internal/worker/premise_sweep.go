@@ -104,9 +104,18 @@ func (w *premiseSweep) Work(ctx context.Context, job *river.Job[PremiseSweepArgs
 	return nil
 }
 
-// insertProbes queues the jobs through the client that runs this one, a batch at a time. A job already
-// waiting or running for the same premise is skipped by its unique options and is not counted.
+// insertProbes queues the probe jobs. A job already waiting or running for the same premise is skipped by its
+// unique options and is not counted.
 func insertProbes(ctx context.Context, jobs []PremiseProbeArgs) (int, error) {
+	return insertJobs(ctx, jobs)
+}
+
+// insertJobs queues the jobs through the client that runs the job that calls it, a batch at a time, and counts
+// the ones that were not skipped as duplicates.
+func insertJobs[T river.JobArgs](ctx context.Context, jobs []T) (int, error) {
+	if len(jobs) == 0 {
+		return 0, nil
+	}
 	client, err := river.ClientFromContextSafely[pgx.Tx](ctx)
 	if err != nil {
 		return 0, fmt.Errorf("find the job client: %w", err)
@@ -120,7 +129,7 @@ func insertProbes(ctx context.Context, jobs []PremiseProbeArgs) (int, error) {
 		}
 		results, err := client.InsertMany(ctx, params)
 		if err != nil {
-			return queued, fmt.Errorf("insert probe jobs: %w", err)
+			return queued, fmt.Errorf("insert jobs: %w", err)
 		}
 		for _, result := range results {
 			if !result.UniqueSkippedAsDuplicate {

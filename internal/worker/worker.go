@@ -1,6 +1,7 @@
 // Package worker runs the job runtime of ADR-0096 for one tenant: River on the registry's PostgreSQL,
-// started only after the gates of the api role (ADR-0097). The one job built so far is the hourly waiver
-// notice sweep and the premise sweep with its probes.
+// started only after the gates of the api role (ADR-0097). The jobs built so far are the hourly waiver
+// notice sweep, the premise sweep with its probes, and the sweep of the exports a tenant admin asks for
+// with the job that builds each one (ADR-0111).
 package worker
 
 import (
@@ -109,6 +110,12 @@ func newClient(cfg Config, db *sql.DB, notify notifyFunc, probe prober) (*river.
 		db: db, tenant: cfg.Tenant, log: cfg.Log,
 		due: registry.DuePremise, allowed: registry.HostAllowed, probe: probe, record: registry.RecordEvaluation,
 	})
+	river.AddWorker(workers, &tenantExportSweep{
+		db: db, tenant: cfg.Tenant, log: cfg.Log, sweep: tenancy.SweepExports, insert: insertExports,
+	})
+	river.AddWorker(workers, &tenantExport{
+		db: db, tenant: cfg.Tenant, log: cfg.Log, run: tenancy.RunStoredExport, fail: tenancy.FailExport,
+	})
 	return river.NewClient(riverpgxv5.New(cfg.Pool), &river.Config{
 		Logger:  cfg.Log,
 		Schema:  riverSchema,
@@ -117,10 +124,14 @@ func newClient(cfg Config, db *sql.DB, notify notifyFunc, probe prober) (*river.
 			waiverNoticesQueue: {MaxWorkers: 1},
 			premiseSweepQueue:  {MaxWorkers: 1},
 			premiseProbeQueue:  {MaxWorkers: premiseProbeWorkers},
+			// One export at a time: a tenant holds one, and each reads the whole tenant (ADR-0111).
+			tenantExportSweepQueue: {MaxWorkers: 1},
+			tenantExportQueue:      {MaxWorkers: 1},
 		},
 		PeriodicJobs: []*river.PeriodicJob{
 			waiverNoticesPeriodic(cfg.Tenant),
 			premiseSweepPeriodic(cfg.Tenant),
+			tenantExportSweepPeriodic(cfg.Tenant),
 		},
 		ReindexerSchedule: river.NeverSchedule(),
 		SoftStopTimeout:   softStop,

@@ -329,6 +329,11 @@ func smuggleInserts() []smuggle {
 		{"tenancy.tenant", `INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1::uuid, 'smuggled')`, []any{tenantA}, true},
 		{"tenancy.tenant_key", `INSERT INTO tenancy.tenant_key (tenant_id, wrapped_dek) VALUES ($1::uuid, decode(repeat('ab', 60), 'hex'))`, []any{tenantA}, true},
 		{"tenancy.installation", `INSERT INTO tenancy.installation (installation_id, tenant_id) VALUES (987654321, $1::uuid)`, []any{tenantA}, true},
+		// The policy refuses the row before the foreign keys are asked, so any principal and export id do.
+		{"tenancy.export", `
+			INSERT INTO tenancy.export (tenant_id, requested_by, recipient, expires_at)
+			VALUES ($1::uuid, $2::uuid, 'age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p', now() + interval '1 day')`, []any{tenantA, decisionKeep}, true},
+		{"tenancy.export_part", `INSERT INTO tenancy.export_part (tenant_id, export_id, seq, data) VALUES ($1::uuid, $2::uuid, 0, 'x'::bytea)`, []any{tenantA, decisionKeep}, true},
 		{"verification.upload", `
 			INSERT INTO verification.upload
 				(tenant_id, installation_id, repository_id, repo, run_id, run_attempt, sha, ref, event_name, workflow_ref,
@@ -494,6 +499,8 @@ func policyTables() []string {
 		"registry.supersession",
 		"registry.waiver",
 		"registry.waiver_notice",
+		"tenancy.export",
+		"tenancy.export_part",
 		"tenancy.installation",
 		"tenancy.offboarding",
 		"tenancy.tenant",
@@ -533,6 +540,8 @@ func expectedPolicies() []string {
 		"registry.supersession":             "SELECT INSERT",
 		"registry.waiver":                   "SELECT INSERT",
 		"registry.waiver_notice":            "SELECT INSERT",
+		"tenancy.export":                    "SELECT INSERT UPDATE DELETE",
+		"tenancy.export_part":               "SELECT INSERT DELETE",
 		"tenancy.installation":              "SELECT INSERT",
 		"tenancy.offboarding":               "SELECT",
 		"tenancy.tenant":                    "SELECT INSERT",
@@ -551,6 +560,9 @@ func expectedPolicies() []string {
 	migrate["identity.session"] = "SELECT DELETE"
 	// A binding is unique across tenants, so an export leaves it out and a restore does not write it.
 	migrate["tenancy.installation"] = "SELECT DELETE"
+	// An export made through the API is never in an archive, so a restore writes neither table (ADR-0111).
+	migrate["tenancy.export"] = "SELECT DELETE"
+	migrate["tenancy.export_part"] = "SELECT DELETE"
 	migrate["tenancy.tenant"] = "SELECT DELETE"
 	migrate["tenancy.tenant_key"] = "SELECT DELETE"
 	migrate["tenancy.offboarding"] = "SELECT INSERT"

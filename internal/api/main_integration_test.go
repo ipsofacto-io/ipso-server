@@ -61,9 +61,11 @@ const (
 // fixture is a migrated database with the same rows in two tenants, so a read that crossed tenants
 // would show. Every row is synthetic.
 type fixture struct {
-	db      *sql.DB
-	auth    *authntest.Server
-	callers map[string]Caller
+	database *pgtest.Database
+	admin    *sql.DB
+	db       *sql.DB
+	auth     *authntest.Server
+	callers  map[string]Caller
 
 	before, known, valid time.Time
 
@@ -83,15 +85,17 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("migrate: %v", err)
 	}
 	f := &fixture{
-		db:    database.Open(t, pgtest.App),
-		auth:  authntest.NewServer(t),
-		valid: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
-		tls:   uuid.MustParse("00000000-0000-7000-8000-000000000001"),
-		api:   uuid.MustParse("00000000-0000-7000-8000-000000000002"),
-		old:   uuid.MustParse("00000000-0000-7000-8000-000000000003"),
-		other: uuid.MustParse("00000000-0000-7000-8000-0000000000b1"),
+		database: database,
+		db:       database.Open(t, pgtest.App),
+		auth:     authntest.NewServer(t),
+		valid:    time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		tls:      uuid.MustParse("00000000-0000-7000-8000-000000000001"),
+		api:      uuid.MustParse("00000000-0000-7000-8000-000000000002"),
+		old:      uuid.MustParse("00000000-0000-7000-8000-000000000003"),
+		other:    uuid.MustParse("00000000-0000-7000-8000-0000000000b1"),
 	}
 	admin := database.Open(t, pgtest.Admin)
+	f.admin = admin
 	f.before = clock(t, admin)
 
 	people := map[uuid.UUID]uuid.UUID{}

@@ -15,6 +15,8 @@ func sampleTables() []Table {
 		{Schema: "identity", Name: "principal", Columns: []Column{{"tenant_id", "uuid", false}, {"id", "uuid", false}, {"name", "text", false}}},
 		{Schema: "identity", Name: "session", Columns: []Column{{"tenant_id", "uuid", false}}},
 		{Schema: "registry", Name: "scope", Columns: []Column{{"tenant_id", "uuid", false}, {"match_repo", "text", false}, {"repo_key", "text", true}}},
+		{Schema: "tenancy", Name: "export", Columns: []Column{{"tenant_id", "uuid", false}, {"id", "uuid", false}}},
+		{Schema: "tenancy", Name: "export_part", Columns: []Column{{"tenant_id", "uuid", false}, {"export_id", "uuid", false}}},
 		{Schema: "tenancy", Name: "installation", Columns: []Column{{"tenant_id", "uuid", false}, {"installation_id", "int8", false}}},
 		{Schema: "tenancy", Name: "offboarding", Columns: []Column{{"tenant_id", "uuid", false}}},
 		{Schema: "tenancy", Name: "tenant", Columns: []Column{{"tenant_id", "uuid", false}, {"name", "text", false}}},
@@ -25,7 +27,7 @@ func sampleTables() []Table {
 func TestTheTableSetsKeepWhatMustNotMove(t *testing.T) {
 	all := sampleTables()
 	if got, want := strings.Join(names(exported(all)), " "), "identity.principal registry.scope tenancy.tenant"; got != want {
-		t.Errorf("exported = %q, want %q: the key, the sessions, the installations and the tombstone never leave", got, want)
+		t.Errorf("exported = %q, want %q: the key, the sessions, the installations, the exports made through the API and the tombstone never leave", got, want)
 	}
 	if got, want := strings.Join(names(restorable(all)), " "), "identity.principal registry.scope"; got != want {
 		t.Errorf("restorable = %q, want %q: the target keeps its own tenant row", got, want)
@@ -34,7 +36,7 @@ func TestTheTableSetsKeepWhatMustNotMove(t *testing.T) {
 	if strings.Contains(purged, tombstoneTable) {
 		t.Errorf("purgeable = %q includes the tombstone", purged)
 	}
-	for _, must := range []string{tenantKeyTable, sessionTable, tenantTable, installationTable} {
+	for _, must := range []string{tenantKeyTable, sessionTable, tenantTable, installationTable, exportTable, exportPartTable} {
 		if !strings.Contains(purged, must) {
 			t.Errorf("purgeable = %q misses %s", purged, must)
 		}

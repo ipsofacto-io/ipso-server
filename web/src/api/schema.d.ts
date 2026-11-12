@@ -446,6 +446,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for an export of the tenant, encrypted to an age public key.
+         * @description Only an admin who is a person takes it (ADR-0108, ADR-0111), so an agent receives 403. The export is the archive `ipso-server tenant export` writes, and `ipso-server tenant restore` reads it (ADR-0100). The worker makes it, so the answer is 202 and the export is `pending` until it is `ready`: read it with `get_export`. It is encrypted to the one native or hybrid age public key in `recipient`, which the route refuses with 400 when it cannot read it, and the server never keeps the archive in the clear. A tenant holds one current export. While one is pending or running this is 409. A tenant may ask again ten minutes after its last export finished or failed, and sooner is 429 with `Retry-After`. A new request replaces a finished export: the old one is no longer served, and its parts are kept for half an hour so that a download in flight can end. An export is kept for 24 hours and then deleted. The request is logged with the person's id in the same transaction.
+         */
+        post: operations["start_export"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/exports/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the state of an export.
+         * @description Only an admin who is a person takes it (ADR-0108, ADR-0111). `bytes` and `sha256` describe the ciphertext and are set once the export is `ready`. An id the tenant does not have, one that has expired, and one that belongs to another tenant are the same 404.
+         */
+        get: operations["get_export"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/exports/{id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download the archive of a ready export.
+         * @description Only an admin who is a person takes it (ADR-0108, ADR-0111). The body is the age file, which the holder of the private key of `recipient` opens with stock `age`, `gunzip` and `jq`, and it is as long as `bytes` says. This is the one route that is not held to the response cap or the request deadline: it streams, a client that stalls for two minutes is dropped, one download lasts at most 30 minutes, and a process sends at most two at once, so another one is 429 with `Retry-After`. If the server cannot finish the stream it closes the connection short of the declared length, and age authenticates the file, so a cut archive is never taken for a whole one. A download that begins is logged with the person's id before the first byte. An export that is not ready is 409, and one that is unknown or expired is 404.
+         */
+        get: operations["download_export"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -731,6 +791,43 @@ export interface components {
             id: string;
             host: string;
             allowed: boolean;
+        };
+        ExportRequest: {
+            /** @description One native (age1...) or hybrid (age1pq1...) age public key. A private key, a list, a comment and a plugin recipient are 400, and the answer never quotes what was sent. */
+            recipient: string;
+        };
+        Export: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description Pending until the worker takes it, running while it is made, ready when it can be downloaded, and failed when the worker could not make it. Ask again after a failure.
+             * @enum {string}
+             */
+            state: "pending" | "running" | "ready" | "failed";
+            /**
+             * Format: uuid
+             * @description The person who asked.
+             */
+            requested_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Null until the export is ready or failed.
+             */
+            finished_at: string | null;
+            /**
+             * Format: date-time
+             * @description After this the export is 404 and is deleted. It is 24 hours after the request while the export is made, and 24 hours after it finished.
+             */
+            expires_at: string;
+            /**
+             * Format: int64
+             * @description The size of the archive, set when the export is ready.
+             */
+            bytes: number | null;
+            /** @description The SHA-256 of the archive in lowercase hexadecimal, set when the export is ready. */
+            sha256: string | null;
         };
         /** @description The first version of the decision an approval writes. */
         DecisionDraft: {
@@ -1896,6 +1993,111 @@ export interface operations {
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Unavailable"];
+        };
+    };
+    start_export: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportRequest"];
+            };
+        };
+        responses: {
+            /** @description The request was recorded. The export is pending. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Export"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    get_export: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The export. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Export"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    download_export: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The archive. */
+            200: {
+                headers: {
+                    /** @description An attachment named ipso-export-{id}.age. */
+                    "Content-Disposition"?: string;
+                    "Content-Length"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The method is not GET. */
+            405: {
+                headers: {
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
         };
     };
 }

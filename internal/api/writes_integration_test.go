@@ -192,6 +192,11 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 	if agentApproved["decision_id"] == nil {
 		t.Fatalf("the agent proposal wrote no decision: %v", agentApproved)
 	}
+	_, recipient := newRecipient(t)
+	requested := s.expect(http.StatusAccepted, personA, http.MethodPost, "/v1/exports", map[string]any{"recipient": recipient})
+	if requested["state"] != "pending" || idOf(t, requested, "requested_by") != f.callers[personA].Principal {
+		t.Fatalf("the export request answered %v", requested)
+	}
 
 	// The waiver names the person who recorded it, taken from the session and not from the body.
 	var approverID uuid.UUID
@@ -235,8 +240,8 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 		byAction["api.allow_premise_host"].Principal != f.callers[personA].Principal {
 		t.Errorf("the log names the wrong people: %+v", byAction)
 	}
-	if len(s.logged()) != before+3 {
-		t.Errorf("%d entries after the clearance, host and agent approval, from %d", len(s.logged()), before)
+	if len(s.logged()) != before+4 {
+		t.Errorf("%d entries after the clearance, host, agent approval and export request, from %d", len(s.logged()), before)
 	}
 }
 
@@ -266,6 +271,8 @@ func TestAWriteTheRoleDoesNotAllowStoresAndLogsNothing(t *testing.T) {
 			return http.MethodPost, "/v1/decisions/" + f.tls.String() + "/premises/tls-version/clearance", map[string]any{}
 		case "allow_premise_host":
 			return http.MethodPost, "/v1/premise-hosts", map[string]any{"host": "denied.example.com", "allowed": true}
+		case "start_export":
+			return http.MethodPost, "/v1/exports", map[string]any{"recipient": aRecipient}
 		case "approve_proposal":
 			return http.MethodPost, "/v1/proposals/" + f.proposal.String() + "/approval", approval("denied", []uuid.UUID{f.org})
 		default:
@@ -276,7 +283,8 @@ func TestAWriteTheRoleDoesNotAllowStoresAndLogsNothing(t *testing.T) {
 		+ (SELECT count(*) FROM registry.grandfather_period WHERE tenant_id = $1) + (SELECT count(*) FROM registry.baseline WHERE tenant_id = $1)
 		+ (SELECT count(*) FROM registry.waiver WHERE tenant_id = $1) + (SELECT count(*) FROM registry.premise_host_allow WHERE tenant_id = $1)
 		+ (SELECT count(*) FROM registry.decision_version WHERE tenant_id = $1) + (SELECT count(*) FROM proposals.approval WHERE tenant_id = $1)
-		+ (SELECT count(*) FROM proposals.agent_approval WHERE tenant_id = $1) + (SELECT count(*) FROM identity.action_log WHERE tenant_id = $1)`
+		+ (SELECT count(*) FROM proposals.agent_approval WHERE tenant_id = $1) + (SELECT count(*) FROM identity.action_log WHERE tenant_id = $1)
+		+ (SELECT count(*) FROM tenancy.export WHERE tenant_id = $1)`
 	rows := s.count(tenantA, `SELECT `+tables)
 	roleOf := map[string]string{agentA: identity.RoleAgent, viewerA: identity.RoleViewer, auditorA: identity.RoleAuditor, contributorA: identity.RoleContributor, nobodyA: ""}
 	for subject, role := range roleOf {

@@ -39,7 +39,10 @@ var notRestored = map[string]bool{
 	"identity.session":   true,
 	// A binding is unique across tenants, so a restore into a fresh tenant would find it taken (ADR-0101).
 	"tenancy.installation": true,
-	tombstone:              true,
+	// The exports made through the API stay where they are made and are never in another archive (ADR-0111).
+	"tenancy.export":      true,
+	"tenancy.export_part": true,
+	tombstone:             true,
 }
 
 type lifecycle struct {

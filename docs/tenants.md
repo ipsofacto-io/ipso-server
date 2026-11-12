@@ -1,6 +1,6 @@
 # Onboard, export, restore and offboard a tenant
 
-`ipso-server tenant` runs the life of a tenant from onboarding to deletion ([ADR-0100](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0100-tenant-lifecycle-and-crypto-shredding.md)). These are operator commands. Each prints a JSON report of counts and table names and never a row.
+`ipso-server tenant` runs the life of a tenant from onboarding to deletion ([ADR-0100](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0100-tenant-lifecycle-and-crypto-shredding.md)). These are operator commands. Each prints a JSON report of counts and table names and never a row. An admin of a tenant can also export it through the API, without an operator: see [Export through the API](#export-through-the-api).
 
 | Command | Credential | What it does |
 | --- | --- | --- |
@@ -55,6 +55,27 @@ age --decrypt -i key.txt acme.age | gunzip | jq -c 'select(.table == "registry.s
 It is one consistent snapshot. The first line is the header with the tenant, the format `ipso-tenant-export/1` and a fingerprint of the schema. Then every row is a line `{"table": ..., "row": {...}}`, and the last line lists the row count and SHA-256 of each table. It holds all of the tenant's rows including the history tables and their transaction time. It leaves out the wrapped data key, the sessions, which hold credential hashes and end on their own, the tombstone, and the installation bindings, which are unique across tenants. After a restore, bind the installation to the new tenant if it should receive the App's deliveries. EDR Markdown files and evidence objects are not part of it yet.
 
 An archive is as sensitive as the database. Anyone who holds a recipient's private key reads it, and anyone with a recipient's public key can write one, so restore only an archive you made or have reason to trust.
+
+## Export through the API
+
+An admin of the tenant who is a person can ask for the same export ([ADR-0111](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0111-tenant-export-through-the-api.md)). The worker makes the archive, so `--role=worker` has to be running for the tenant. The admin gives one age public key, and the archive is encrypted to it and to nobody else.
+
+```sh
+curl -sS -X POST "$IPSO/v1/exports" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"recipient":"age1..."}'
+```
+
+The answer is 202 with the export in the state `pending`. The worker finds the request within a minute, so read it until it is `ready`, and then download it:
+
+```sh
+curl -sS "$IPSO/v1/exports/$ID" -H "Authorization: Bearer $TOKEN"
+curl -sS -o acme.age "$IPSO/v1/exports/$ID/archive" -H "Authorization: Bearer $TOKEN"
+```
+
+The file is the one `tenant export` writes, so the `age --decrypt` command above opens it and `tenant restore` reads it. The API refuses a recipient that is not exactly one native or hybrid public key, with 400, and never quotes it.
+
+A tenant holds one current export. While one is pending or running a new request is 409. Ten minutes after the last export finished or failed a new request is accepted, and sooner it is 429 with a `Retry-After`. A new request replaces a finished one: the old id is a 404 at once, and its parts are kept for half an hour so that a download in flight can end. An export can be downloaded for 24 hours and is then deleted, with the same half hour of grace. A process sends two archives at once and answers a third with 429 and a `Retry-After`. A tenant whose archive would pass 1 GiB gets an export in the state `failed`: use the operator command for it. The worker's log says why any export failed, and the admin can ask again.
+
+The archive waits in PostgreSQL, encrypted to the key the admin gave, so a copy of the database holds no export in the clear. Each request and each download is logged with the person's id in `identity.action_log`, which the audit log of IPSO-68 builds on. A reverse proxy in front of the API must let a download run for as long as the client takes and must not spool it to disk: the Compose front sets `proxy_max_temp_file_size 0`.
 
 ## Restore
 

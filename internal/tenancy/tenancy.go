@@ -20,20 +20,14 @@ func Require(ctx context.Context, db *sql.DB, tenant uuid.UUID) error {
 	if db == nil || tenant == uuid.Nil {
 		return fmt.Errorf("%w: a database and a tenant are required", ErrUnknownTenant)
 	}
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return fmt.Errorf("read the tenant: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `SELECT set_config('ipso.tenant', $1, true)`, tenant.String()); err != nil {
-		return fmt.Errorf("read the tenant: %w", err)
-	}
-	var found bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM tenancy.tenant WHERE tenant_id = $1)`, tenant).Scan(&found); err != nil {
-		return fmt.Errorf("read the tenant: %w", err)
-	}
-	if !found {
-		return fmt.Errorf("%w: %s has no row in tenancy.tenant", ErrUnknownTenant, tenant)
-	}
-	return nil
+	return inTenantTx(ctx, db, tenant, true, func(tx *sql.Tx) error {
+		var found bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM tenancy.tenant WHERE tenant_id = $1)`, tenant).Scan(&found); err != nil {
+			return fmt.Errorf("read the tenant: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("%w: %s has no row in tenancy.tenant", ErrUnknownTenant, tenant)
+		}
+		return nil
+	})
 }
