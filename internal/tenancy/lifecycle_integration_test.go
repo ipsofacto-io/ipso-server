@@ -18,6 +18,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/google/uuid"
+	"github.com/ipsofacto-io/ipso/pkg/edrcheck"
 
 	"github.com/ipsofacto-io/ipso-server/internal/migrate"
 	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
@@ -324,6 +325,7 @@ func TestExportThenRestoreReproducesTheTenantInAFreshOne(t *testing.T) {
 	if bytes.Contains(archive, []byte("synthetic tenant")) {
 		t.Fatal("the archive holds plaintext")
 	}
+	l.checkEDRFiles(t, archive, id, exported)
 
 	report, err := l.restore(archive, tenantC, id, t)
 	if err != nil {
@@ -381,10 +383,52 @@ func TestExportThenRestoreReproducesTheTenantInAFreshOne(t *testing.T) {
 	}
 }
 
+// checkEDRFiles shows one EDR file for each version of each decision, current and history, each of which
+// passes the check that ipso runs on a repository's decisions (ADR-0112).
+func (l *lifecycle) checkEDRFiles(t *testing.T, archive []byte, id *age.X25519Identity, report tenancy.ExportReport) {
+	t.Helper()
+	versions := l.count(t, "registry.decision_version", tenantA) + l.count(t, "registry.decision_version_history", tenantA)
+	p := open(t, archive, id)
+	if versions < 2 || len(p.files) != versions || report.Files != int64(versions) {
+		t.Fatalf("%d files and %d reported for %d decision versions", len(p.files), report.Files, versions)
+	}
+	var current, history int
+	seen := map[string]bool{}
+	for _, raw := range p.files {
+		var f partFile
+		if err := json.Unmarshal([]byte(raw), &f); err != nil {
+			t.Fatal(err)
+		}
+		if seen[f.File] || !strings.HasPrefix(f.File, "edr/") || !strings.HasSuffix(f.File, ".md") || strings.Contains(f.File, "..") {
+			t.Errorf("bad or repeated path %q", f.File)
+		}
+		seen[f.File] = true
+		switch {
+		case strings.HasPrefix(f.File, "edr/current/"):
+			current++
+		case strings.HasPrefix(f.File, "edr/history/"):
+			history++
+		}
+		if problems := edrcheck.Validate(f.Text); len(problems) > 0 {
+			t.Errorf("%s fails edrcheck: %v\n%s", f.File, problems, f.Text)
+		}
+	}
+	if current == 0 || history == 0 {
+		t.Errorf("%d current and %d history files", current, history)
+	}
+}
+
 // parts is an archive taken apart, so a test can break the rules the writer keeps.
 type parts struct {
 	header map[string]any
 	rows   []partRow
+	// files are the raw EDR file lines, which follow the rows.
+	files []string
+}
+
+type partFile struct {
+	File string `json:"file"`
+	Text string `json:"text"`
 }
 
 type partRow struct {
@@ -412,6 +456,10 @@ func open(t *testing.T, archive []byte, id *age.X25519Identity) parts {
 		t.Fatal(err)
 	}
 	for _, line := range lines[1 : len(lines)-1] {
+		if strings.HasPrefix(line, `{"file":`) {
+			p.files = append(p.files, line)
+			continue
+		}
 		var r partRow
 		if err := json.Unmarshal([]byte(line), &r); err != nil {
 			t.Fatal(err)
@@ -472,11 +520,16 @@ func seal(t *testing.T, p parts, id *age.X25519Identity) []byte {
 			_, _ = h.Write([]byte{'\n'})
 		}
 	}
+	files := sha256.New()
+	for _, f := range p.files {
+		_, _ = zw.Write([]byte(f + "\n"))
+		_, _ = files.Write([]byte(f + "\n"))
+	}
 	trailer := map[string]sum{}
 	for _, name := range tables {
 		trailer[name.(string)] = sum{Rows: counts[name.(string)], SHA256: hex.EncodeToString(hashes[name.(string)].Sum(nil))}
 	}
-	_, _ = zw.Write(line(t, map[string]any{"end": true, "tables": trailer}))
+	_, _ = zw.Write(line(t, map[string]any{"end": true, "tables": trailer, "files": sum{Rows: int64(len(p.files)), SHA256: hex.EncodeToString(files.Sum(nil))}}))
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}

@@ -157,7 +157,8 @@ func TestArchiveRefusesWhatTheTrailerDoesNotSay(t *testing.T) {
 	one := newSums()
 	one.add([]byte(`{"id":1}`))
 	goodTrailer := func(a tableSum, b tableSum) string {
-		line, _ := json.Marshal(wire{End: true, Tables: map[string]tableSum{"a.one": a, "b.two": b}})
+		files := emptySum
+		line, _ := json.Marshal(wire{End: true, Tables: map[string]tableSum{"a.one": a, "b.two": b}, Files: &files})
 		return string(line)
 	}
 	row := func(table, body string) string { return `{"table":"` + table + `","row":` + body + `}` }
@@ -198,7 +199,7 @@ func TestArchiveRefusesABadHeader(t *testing.T) {
 	good := testHeader("a.one")
 	bad := map[string]header{}
 	h := good
-	h.Format = "ipso-tenant-export/2"
+	h.Format = "ipso-tenant-export/3"
 	bad["other format"] = h
 	h = good
 	h.Tenant = uuid.Nil
@@ -281,5 +282,103 @@ func TestArchiveWriterKeepsItsRules(t *testing.T) {
 	}
 	if err := w.finish(); err == nil {
 		t.Fatal("finish succeeded with a table missing")
+	}
+}
+
+func TestArchiveCarriesFilesAfterTheRowsAndTheReaderSkipsThem(t *testing.T) {
+	id := testIdentity(t)
+	h := testHeader("a.one")
+	var out bytes.Buffer
+	w, err := newArchiveWriter(&out, []age.Recipient{id.Recipient()}, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.file("edr/current/x.md", "text"); err == nil {
+		t.Fatal("a file before the last table was written")
+	}
+	if err := w.table("a.one", func(emit func([]byte) error) error { return emit([]byte(`{"id":1}`)) }); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range [][2]string{{"edr/current/a.md", "# A\n<b> & \"q\""}, {"edr/history/b.md", "# B"}} {
+		if err := w.file(f[0], f[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.file("", "x"); err == nil {
+		t.Fatal("an empty path was written")
+	}
+	if err := w.finish(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readAll(t, out.Bytes(), id)
+	if err != nil || len(got) != 1 || got[0].table != "a.one" {
+		t.Fatalf("rows = %v, %v", got, err)
+	}
+}
+
+func TestArchiveChecksFilesAgainstTheTrailer(t *testing.T) {
+	id := testIdentity(t)
+	hl := headerLine(t, testHeader("a.one"))
+	row := `{"table":"a.one","row":{"id":1}}`
+	fileA, fileB := `{"file":"edr/current/a.md","text":"A"}`, `{"file":"edr/current/b.md","text":"B"}`
+	one := newSums()
+	one.add([]byte(`{"id":1}`))
+	both := newSums()
+	both.add([]byte(fileA))
+	both.add([]byte(fileB))
+	trailer := func(files *tableSum) string {
+		line, _ := json.Marshal(wire{End: true, Tables: map[string]tableSum{"a.one": one.sum()}, Files: files})
+		return string(line)
+	}
+	sum := both.sum()
+	empty := newSums().sum()
+	good := []string{hl, row, fileA, fileB, trailer(&sum)}
+	if _, err := readAll(t, sealLines(t, id, good...), id); err != nil {
+		t.Fatalf("good: %v", err)
+	}
+	cases := map[string][]string{
+		"a file changed":          {hl, row, fileA, `{"file":"edr/current/b.md","text":"C"}`, trailer(&sum)},
+		"a file missing":          {hl, row, fileA, trailer(&sum)},
+		"a file added":            {hl, row, fileA, fileB, `{"file":"edr/current/c.md","text":"C"}`, trailer(&sum)},
+		"no files sum":            {hl, row, fileA, fileB, trailer(nil)},
+		"files sum of none":       {hl, row, fileA, fileB, trailer(&empty)},
+		"a row after a file":      {hl, row, fileA, row, trailer(&sum)},
+		"a file with no text":     {hl, row, `{"file":"edr/current/a.md"}`, trailer(&sum)},
+		"a file with a row":       {hl, row, `{"file":"edr/current/a.md","text":"A","table":"a.one","row":{}}`, trailer(&sum)},
+		"a file with a files sum": {hl, row, `{"file":"edr/current/a.md","text":"A","files":{"rows":0,"sha256":"x"}}`, trailer(&sum)},
+		"a trailer with a file":   {hl, row, fileA, fileB, `{"end":true,"file":"x","tables":{"a.one":{"rows":1,"sha256":"` + one.sum().SHA256 + `"}},"files":{"rows":2,"sha256":"` + sum.SHA256 + `"}}`},
+	}
+	for name, lines := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := readAll(t, sealLines(t, id, lines...), id); !errors.Is(err, ErrArchive) {
+				t.Fatalf("got %v, want ErrArchive", err)
+			}
+		})
+	}
+}
+
+func TestArchiveStillReadsFormatOne(t *testing.T) {
+	id := testIdentity(t)
+	h := testHeader("a.one")
+	h.Format = formatV1
+	one := newSums()
+	one.add([]byte(`{"id":1}`))
+	trailer := func(files *tableSum) string {
+		line, _ := json.Marshal(wire{End: true, Tables: map[string]tableSum{"a.one": one.sum()}, Files: files})
+		return string(line)
+	}
+	row := `{"table":"a.one","row":{"id":1}}`
+	got, err := readAll(t, sealLines(t, id, headerLine(t, h), row, trailer(nil)), id)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("format 1: %v, %v", got, err)
+	}
+	empty := newSums().sum()
+	for name, lines := range map[string][]string{
+		"a file in format 1":      {headerLine(t, h), row, `{"file":"edr/current/a.md","text":"A"}`, trailer(nil)},
+		"a files sum in format 1": {headerLine(t, h), row, trailer(&empty)},
+	} {
+		if _, err := readAll(t, sealLines(t, id, lines...), id); !errors.Is(err, ErrArchive) {
+			t.Errorf("%s: got %v, want ErrArchive", name, err)
+		}
 	}
 }

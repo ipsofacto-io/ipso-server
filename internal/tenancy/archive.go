@@ -19,7 +19,10 @@ import (
 )
 
 // Format names the layout of an export. A change that an older restore cannot read gets a new number.
-const Format = "ipso-tenant-export/1"
+// Format 2 adds the EDR files (ADR-0112). A restore still reads format 1, which has none.
+const Format = "ipso-tenant-export/2"
+
+const formatV1 = "ipso-tenant-export/1"
 
 // maxLine bounds one line of an archive when it is read. A decision body or a rule is far smaller, and a
 // larger line is refused instead of buffered.
@@ -31,8 +34,10 @@ var ErrArchive = errors.New("archive")
 
 // An export is age over gzip over JSON lines. The first line is the header. Then come the rows of each
 // table, in the order of the header, one line each: {"table":"identity.principal","row":{...}} with the
-// row as to_jsonb printed it. The last line is the trailer, with the row count and SHA-256 of every
-// table. The customer opens it with stock age, gunzip and jq.
+// row as to_jsonb printed it. After the last table come the EDR files, one line each:
+// {"file":"edr/current/<id>/v1_....md","text":"..."}. The last line is the trailer, with the row count and
+// SHA-256 of every table and the count and SHA-256 of the file lines. The customer opens it with stock
+// age, gunzip and jq.
 
 type header struct {
 	Format     string    `json:"format"`
@@ -54,6 +59,10 @@ type wire struct {
 	Row    json.RawMessage     `json:"row,omitempty"`
 	End    bool                `json:"end,omitempty"`
 	Tables map[string]tableSum `json:"tables,omitempty"`
+	// File and Text are one EDR file. Files is the sum of the file lines in the trailer, from format 2.
+	File  string    `json:"file,omitempty"`
+	Text  string    `json:"text,omitempty"`
+	Files *tableSum `json:"files,omitempty"`
 }
 
 // sums tracks the row count and the hash of the table being written or read.
@@ -83,6 +92,7 @@ type archiveWriter struct {
 	tables []string
 	next   int
 	done   map[string]tableSum
+	files  *sums
 }
 
 func newArchiveWriter(out io.Writer, recipients []age.Recipient, h header) (*archiveWriter, error) {
@@ -94,7 +104,7 @@ func newArchiveWriter(out io.Writer, recipients []age.Recipient, h header) (*arc
 		return nil, fmt.Errorf("start the encrypted export: %w", err)
 	}
 	zw := gzip.NewWriter(enc)
-	w := &archiveWriter{enc: enc, zw: zw, bw: bufio.NewWriterSize(zw, 1<<20), tables: h.Tables, done: make(map[string]tableSum)}
+	w := &archiveWriter{enc: enc, zw: zw, bw: bufio.NewWriterSize(zw, 1<<20), tables: h.Tables, done: make(map[string]tableSum), files: newSums()}
 	line, err := json.Marshal(h)
 	if err != nil {
 		return nil, fmt.Errorf("write the header: %w", err)
@@ -144,12 +154,33 @@ func (w *archiveWriter) table(name string, fill func(emit func(row []byte) error
 	return nil
 }
 
+// file writes one EDR file. Files come after the last table, and the path is the caller's to build from
+// ids, never from row content.
+func (w *archiveWriter) file(path, text string) error {
+	if w.next != len(w.tables) {
+		return errors.New("write the export: files before the last table")
+	}
+	if path == "" || text == "" {
+		return errors.New("write the export: a file needs a path and a text")
+	}
+	line, err := json.Marshal(wire{File: path, Text: text})
+	if err != nil {
+		return fmt.Errorf("write the export: %w", err)
+	}
+	if len(line) > maxLine {
+		return fmt.Errorf("write the export: a file is longer than %d bytes, which a restore would refuse", maxLine)
+	}
+	w.files.add(line)
+	return w.writeLine(line)
+}
+
 // finish writes the trailer and closes every layer. The export is complete only after it returns nil.
 func (w *archiveWriter) finish() error {
 	if w.next != len(w.tables) {
 		return errors.New("write the export: tables are missing")
 	}
-	line, err := json.Marshal(wire{End: true, Tables: w.done})
+	files := w.files.sum()
+	line, err := json.Marshal(wire{End: true, Tables: w.done, Files: &files})
 	if err != nil {
 		return fmt.Errorf("write the trailer: %w", err)
 	}
@@ -175,7 +206,10 @@ type archiveReader struct {
 	pos   int
 	cur   *sums
 	done  map[string]tableSum
-	ended bool
+	files *sums
+	// inFiles is set at the first file line. A row after it is out of order.
+	inFiles bool
+	ended   bool
 }
 
 // openArchive decrypts the stream, reads the header, and returns a reader positioned at the first row. It
@@ -194,7 +228,7 @@ func openArchive(in io.Reader, identities []age.Identity) (*archiveReader, error
 	}
 	sc := bufio.NewScanner(zr)
 	sc.Buffer(make([]byte, 0, 64<<10), maxLine)
-	r := &archiveReader{sc: sc, pos: -1, done: make(map[string]tableSum)}
+	r := &archiveReader{sc: sc, pos: -1, done: make(map[string]tableSum), files: newSums()}
 	line, err := r.line()
 	if err != nil {
 		return nil, err
@@ -203,7 +237,7 @@ func openArchive(in io.Reader, identities []age.Identity) (*archiveReader, error
 		return nil, fmt.Errorf("%w: the header is unreadable", ErrArchive)
 	}
 	switch {
-	case r.hdr.Format != Format:
+	case r.hdr.Format != Format && r.hdr.Format != formatV1:
 		return nil, fmt.Errorf("%w: the format is not %s", ErrArchive, Format)
 	case r.hdr.Tenant == uuid.Nil, r.hdr.Schema == "", len(r.hdr.Tables) == 0:
 		return nil, fmt.Errorf("%w: the header is incomplete", ErrArchive)
@@ -251,25 +285,52 @@ func (r *archiveReader) closeTable() {
 	}
 }
 
-// next returns the next row and its table. At the end it checks the trailer against what was read and
-// returns io.EOF only when they agree. The row is valid until the next call.
+// next returns the next row and its table. EDR files are checked and counted and not returned: a restore
+// takes its rows from the tables only. At the end it checks the trailer against what was read and returns
+// io.EOF only when they agree. The row is valid until the next call.
 func (r *archiveReader) next() (string, []byte, error) {
-	if r.ended {
-		return "", nil, io.EOF
+	for {
+		if r.ended {
+			return "", nil, io.EOF
+		}
+		raw, err := r.line()
+		if err != nil {
+			return "", nil, err
+		}
+		var w wire
+		if err := decodeStrict(raw, &w); err != nil {
+			return "", nil, fmt.Errorf("%w: a line is unreadable", ErrArchive)
+		}
+		if w.End {
+			return "", nil, r.finish(w)
+		}
+		if w.File != "" {
+			if err := r.file(raw, w); err != nil {
+				return "", nil, err
+			}
+			continue
+		}
+		return r.row(w)
 	}
-	raw, err := r.line()
-	if err != nil {
-		return "", nil, err
+}
+
+// file checks one EDR file line and adds it to the sum.
+func (r *archiveReader) file(raw []byte, w wire) error {
+	if r.hdr.Format == formatV1 || w.Text == "" || w.Table != "" || len(w.Row) != 0 || w.Tables != nil || w.Files != nil {
+		return fmt.Errorf("%w: a line is not a file", ErrArchive)
 	}
-	var w wire
-	if err := decodeStrict(raw, &w); err != nil {
-		return "", nil, fmt.Errorf("%w: a line is unreadable", ErrArchive)
-	}
-	if w.End {
-		return "", nil, r.finish(w)
-	}
-	if w.Table == "" || len(w.Row) == 0 || w.Tables != nil {
+	r.closeTable()
+	r.inFiles = true
+	r.files.add(raw)
+	return nil
+}
+
+func (r *archiveReader) row(w wire) (string, []byte, error) {
+	if w.Table == "" || len(w.Row) == 0 || w.Tables != nil || w.Files != nil || w.Text != "" {
 		return "", nil, fmt.Errorf("%w: a line is not a row", ErrArchive)
+	}
+	if r.inFiles {
+		return "", nil, fmt.Errorf("%w: a row follows the files", ErrArchive)
 	}
 	idx := slices.Index(r.hdr.Tables, w.Table)
 	switch {
@@ -289,8 +350,14 @@ func (r *archiveReader) next() (string, []byte, error) {
 // finish checks the trailer: every table of the header, with the count and hash that were read, and
 // nothing after it.
 func (r *archiveReader) finish(w wire) error {
-	if w.Table != "" || len(w.Row) != 0 {
+	if w.Table != "" || len(w.Row) != 0 || w.Text != "" || w.File != "" {
 		return fmt.Errorf("%w: the trailer is malformed", ErrArchive)
+	}
+	if (r.hdr.Format == formatV1) != (w.Files == nil) {
+		return fmt.Errorf("%w: the trailer does not match the format", ErrArchive)
+	}
+	if w.Files != nil && *w.Files != r.files.sum() {
+		return fmt.Errorf("%w: the files do not match the trailer", ErrArchive)
 	}
 	r.closeTable()
 	empty := newSums().sum()

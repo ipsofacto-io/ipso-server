@@ -5,7 +5,7 @@ go 1.27.1
 require (
 	filippo.io/age v1.3.2
 	github.com/google/uuid v1.6.0
-	github.com/ipsofacto-io/ipso v0.4.1-0.20261105183009-d21c3756d314
+	github.com/ipsofacto-io/ipso v0.4.1-0.20261112150915-16812ad6c0a1
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/lestrrat-go/jwx/v3 v3.3.0
 	github.com/open-policy-agent/opa v1.21.4

@@ -52,7 +52,16 @@ The file is encrypted to the age public keys given with `--recipient` (`age-keyg
 age --decrypt -i key.txt acme.age | gunzip | jq -c 'select(.table == "registry.scope")'
 ```
 
-It is one consistent snapshot. The first line is the header with the tenant, the format `ipso-tenant-export/1` and a fingerprint of the schema. Then every row is a line `{"table": ..., "row": {...}}`, and the last line lists the row count and SHA-256 of each table. It holds all of the tenant's rows including the history tables and their transaction time. It leaves out the wrapped data key, the sessions, which hold credential hashes and end on their own, the tombstone, and the installation bindings, which are unique across tenants. After a restore, bind the installation to the new tenant if it should receive the App's deliveries. EDR Markdown files and evidence objects are not part of it yet.
+It is one consistent snapshot. The first line is the header with the tenant, the format `ipso-tenant-export/2` and a fingerprint of the schema. Then every row is a line `{"table": ..., "row": {...}}`. After the rows come the decisions as EDR Markdown files, one line `{"file": ..., "text": ...}` for each version of each decision, and the last line lists the row count and SHA-256 of each table and the count and SHA-256 of the file lines. It holds all of the tenant's rows including the history tables and their transaction time. It leaves out the wrapped data key, the sessions, which hold credential hashes and end on their own, the tombstone, and the installation bindings, which are unique across tenants. After a restore, bind the installation to the new tenant if it should receive the App's deliveries. Evidence objects are not part of it yet.
+
+The decisions can be read without ipso. A file is named `edr/current/<decision id>/v<version>_valid-<time>_known-<time>.md` for a version in force and `edr/history/...` for a version that was replaced, and each one passes `ipso check`. A field that a stored decision lacks is filled with a default and the file says `inferred: true`. This writes them to the current directory:
+
+```sh
+age --decrypt -i key.txt acme.age | gunzip | jq -r 'select(.file | strings | startswith("edr/") and (contains("..") | not)) | [.file, (.text | @base64)] | @tsv' |
+  while IFS=$(printf '\t') read -r name text; do mkdir -p "$(dirname "$name")"; printf "%s" "$text" | base64 -d > "$name"; done
+```
+
+A restore ignores the files and restores from the rows. Format 1 archives, made before the files were added, still restore.
 
 An archive is as sensitive as the database. Anyone who holds a recipient's private key reads it, and anyone with a recipient's public key can write one, so restore only an archive you made or have reason to trust.
 
