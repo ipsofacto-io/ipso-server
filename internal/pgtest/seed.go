@@ -126,6 +126,9 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 		VALUES ($1::uuid, $2::uuid, 1, '{}'::jsonb, 'package p', sha256(convert_to('package p', 'UTF8')),
 		        '[{},{}]'::jsonb, 2, 2, false, 'm', 'v1')`, tenant, DecisionKeep)
 	mustExec(`
+		INSERT INTO proposals.check_approval (tenant_id, proposal_id, approver_id, outcome)
+		SELECT tenant_id, id, $2::uuid, 'rejected' FROM proposals.check_proposal WHERE tenant_id = $1::uuid`, tenant, person)
+	mustExec(`
 		INSERT INTO identity.login (tenant_id, principal_id, issuer, subject)
 		VALUES ($1::uuid, $2::uuid, 'https://idp.example.test', 'subject-1')`, tenant, person)
 	mustExec(`

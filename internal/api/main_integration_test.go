@@ -74,6 +74,8 @@ type fixture struct {
 	waiver                uuid.UUID
 	// proposal and agentProposal are the pending proposals of tenant A.
 	proposal, agentProposal uuid.UUID
+	// checkProposal is the check drafted for the decision f.tls in tenant A.
+	checkProposal uuid.UUID
 	// uploads is the one verdict upload seeded for each tenant.
 	uploads map[uuid.UUID]uuid.UUID
 }
@@ -173,11 +175,15 @@ func newFixture(t *testing.T) *fixture {
 		if tenant == tenantA {
 			f.proposal = proposal
 		}
-		f.exec(t, `
+		check := f.insert(t, `
 			INSERT INTO proposals.check_proposal
 				(tenant_id, decision_id, decision_version, spec, rego, rego_sha256, fixtures, fixtures_total, fixtures_passed, repaired, model_id, prompt_version)
-			VALUES ($1, $2, 1, '{"rules":[]}', 'package p', sha256(convert_to('package p', 'UTF8')), '[{}, {}]', 2, 2, false, 'm', 'p')`,
+			VALUES ($1, $2, 1, '{"rules":[]}', 'package p', sha256(convert_to('package p', 'UTF8')), '[{}, {}]', 2, 2, false, 'm', 'p')
+			RETURNING id`,
 			tenant, f.tls)
+		if tenant == tenantA {
+			f.checkProposal = check
+		}
 	}
 	f.agentProposal = f.insert(t, `INSERT INTO proposals.agent_proposal (tenant_id, principal_id, payload) VALUES ($1, $2, '{"title":"Pin API versions"}') RETURNING id`, tenantA, agent)
 	f.uploads = map[uuid.UUID]uuid.UUID{}

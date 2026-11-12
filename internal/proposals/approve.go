@@ -88,3 +88,44 @@ func Approve(ctx context.Context, tx *sql.Tx, tenant, approver uuid.UUID, queue 
 	}
 	return out, nil
 }
+
+// CheckApproval is the outcome a person recorded for one drafted check.
+type CheckApproval struct {
+	ID         uuid.UUID
+	ProposalID uuid.UUID
+	Outcome    string
+}
+
+// ApproveCheck records the outcome of a person for one check an LLM drafted for a decision (ADR-0086,
+// ADR-0116). The row of the drafted check stays pending, as its constraint says it must, and the approval is
+// the outcome. It writes no decision: accepting a check changes what a bundle holds and not the registry.
+// The approver is the authenticated person, and the database refuses an approver that is not one. A drafted
+// check is decided once.
+//
+// The check must belong to the decision the caller named, because the guard covered the scopes of that
+// decision and the write must be the one it covered. The transaction is the caller's, READ COMMITTED with
+// ipso.tenant set, and the tenant must be the authenticated one. A check that is not in the tenant's queue
+// for that decision gives registry.ErrNotFound.
+func ApproveCheck(ctx context.Context, tx *sql.Tx, tenant, approver, decision, proposal uuid.UUID, outcome string) (CheckApproval, error) {
+	if tenant == uuid.Nil || approver == uuid.Nil || decision == uuid.Nil || proposal == uuid.Nil {
+		return CheckApproval{}, fmt.Errorf("%w: a tenant, an approver, a decision and a drafted check are required", registry.ErrInvalidQuery)
+	}
+	if outcome != OutcomeApproved && outcome != OutcomeRejected {
+		return CheckApproval{}, fmt.Errorf("%w: an outcome is approved or rejected", registry.ErrInvalidQuery)
+	}
+	// One statement reads the drafted check and writes its answer, so a check that is not the tenant's for that
+	// decision inserts nothing and reads as not found.
+	out := CheckApproval{ProposalID: proposal, Outcome: outcome}
+	err := tx.QueryRowContext(ctx, `
+		INSERT INTO proposals.check_approval (tenant_id, proposal_id, approver_id, outcome)
+		SELECT tenant_id, id, $4::uuid, $5::text
+		FROM proposals.check_proposal
+		WHERE tenant_id = $1 AND id = $2 AND decision_id = $3
+		RETURNING id`, tenant, proposal, decision, approver, outcome).Scan(&out.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CheckApproval{}, registry.ErrNotFound
+	} else if err != nil {
+		return CheckApproval{}, fmt.Errorf("record the check approval: %w", err)
+	}
+	return out, nil
+}

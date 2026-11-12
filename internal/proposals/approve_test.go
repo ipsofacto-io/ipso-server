@@ -34,3 +34,23 @@ func TestApproveRefusesAnOutcomeThatDoesNotMatchItsDecision(t *testing.T) {
 		}
 	}
 }
+
+// ApproveCheck checks what it is given before it touches the store, so a nil transaction proves each refusal.
+func TestApproveCheckRefusesWhatItIsNotGiven(t *testing.T) {
+	id := uuid.MustParse("00000000-0000-4000-8000-00000000000a")
+	for name, c := range map[string]struct {
+		tenant, approver, decision, proposal uuid.UUID
+		outcome                              string
+	}{
+		"no tenant":           {uuid.Nil, id, id, id, OutcomeApproved},
+		"no approver":         {id, uuid.Nil, id, id, OutcomeApproved},
+		"no decision":         {id, id, uuid.Nil, id, OutcomeApproved},
+		"no drafted check":    {id, id, id, uuid.Nil, OutcomeRejected},
+		"an outcome of none":  {id, id, id, id, ""},
+		"an outcome of other": {id, id, id, id, "maybe"},
+	} {
+		if _, err := ApproveCheck(t.Context(), nil, c.tenant, c.approver, c.decision, c.proposal, c.outcome); !errors.Is(err, registry.ErrInvalidQuery) {
+			t.Errorf("%s: %v, want ErrInvalidQuery", name, err)
+		}
+	}
+}

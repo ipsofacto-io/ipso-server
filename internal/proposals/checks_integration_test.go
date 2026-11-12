@@ -12,8 +12,10 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
+	"github.com/ipsofacto-io/ipso-server/internal/registry"
 )
 
 type checkInboxAnswer struct {
@@ -123,6 +125,89 @@ func TestDatabaseCannotHoldAFailingOrApprovedCheck(t *testing.T) {
 	for _, statement := range []string{`UPDATE proposals.check_proposal SET status = 'approved'`, `UPDATE proposals.check_proposal SET fixtures_passed = 1`, `DELETE FROM proposals.check_proposal`} {
 		if _, err := db.ExecContext(ctx, statement); err == nil || !strings.Contains(err.Error(), "permission denied") {
 			t.Errorf("%s: %v", statement, err)
+		}
+	}
+}
+
+// A person answers a drafted check once, and a check with an answer leaves the review queue while its row stays
+// pending, which its constraint demands (ADR-0086, ADR-0116). The answer must name the decision the check is for,
+// and a check of another tenant is not found.
+func TestADraftedCheckIsAnsweredOnceAndLeavesTheQueue(t *testing.T) {
+	db := newDB(t)
+	ctx := t.Context()
+	llm := &scriptedLLM{answers: []string{answer(envRule)}}
+	check, _, err := DraftCheck(ctx, llm.complete, checkRequest(envFixtures))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created, err := ProposeCheck(ctx, db, tenantA, check); err != nil || !created {
+		t.Fatalf("created %v err %v", created, err)
+	}
+	queue := readChecks(t, db, tenantA, "")
+	if len(queue.CheckProposals) != 1 {
+		t.Fatalf("queue %+v", queue)
+	}
+	proposal := queue.CheckProposals[0].ID
+	var approver uuid.UUID
+	if err := pgtest.Scan(ctx, db, tenantA.String(), `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'Ada') RETURNING id`,
+		[]any{tenantA}, &approver); err != nil {
+		t.Fatal(err)
+	}
+	// decide runs ApproveCheck in a READ COMMITTED transaction of the tenant, as the API does.
+	decide := func(tenant, decision, id uuid.UUID, outcome string) error {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err := tx.ExecContext(ctx, `SELECT set_config('ipso.tenant', $1, true)`, tenant.String()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ApproveCheck(ctx, tx, tenant, approver, decision, id, outcome); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+
+	if err := decide(tenantA, uuid.New(), proposal, OutcomeApproved); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("a check of another decision: %v, want ErrNotFound", err)
+	}
+	if err := decide(tenantA, testDecision, uuid.New(), OutcomeApproved); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("no such check: %v, want ErrNotFound", err)
+	}
+	if err := decide(tenantB, testDecision, proposal, OutcomeApproved); !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("a check of another tenant: %v, want ErrNotFound", err)
+	}
+	if err := decide(tenantA, testDecision, proposal, "maybe"); !errors.Is(err, registry.ErrInvalidQuery) {
+		t.Errorf("an outcome of neither: %v, want ErrInvalidQuery", err)
+	}
+	if got := readChecks(t, db, tenantA, ""); len(got.CheckProposals) != 1 {
+		t.Fatalf("a refused answer changed the queue: %+v", got)
+	}
+
+	if err := decide(tenantA, testDecision, proposal, OutcomeRejected); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	if got := readChecks(t, db, tenantA, ""); len(got.CheckProposals) != 0 {
+		t.Fatalf("a decided check is still in the queue: %+v", got)
+	}
+	var status, outcome string
+	var by uuid.UUID
+	if err := pgtest.Scan(ctx, db, tenantA.String(), `
+		SELECT p.status, a.outcome, a.approver_id
+		FROM proposals.check_proposal p JOIN proposals.check_approval a ON a.tenant_id = p.tenant_id AND a.proposal_id = p.id
+		WHERE p.tenant_id = $1 AND p.id = $2`, []any{tenantA, proposal}, &status, &outcome, &by); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" || outcome != OutcomeRejected || by != approver {
+		t.Fatalf("the row is %q, the answer %q by %s", status, outcome, by)
+	}
+
+	// A check is decided once, whatever the second answer says, and the refusal is the unique constraint.
+	for _, again := range []string{OutcomeApproved, OutcomeRejected} {
+		var pg *pgconn.PgError
+		if err := decide(tenantA, testDecision, proposal, again); !errors.As(err, &pg) || pg.Code != "23505" {
+			t.Errorf("a second answer %q: %v, want a unique violation", again, err)
 		}
 	}
 }

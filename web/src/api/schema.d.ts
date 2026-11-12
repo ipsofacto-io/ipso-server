@@ -320,6 +320,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/decisions/{decisionID}/check-proposals/{id}/approval": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve or reject a drafted agent-edit check.
+         * @description Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0116). The role must cover every scope of the decision the check enforces, for an approval and for a rejection alike. The check must be a pending check proposal of that decision, or the answer is 404. A drafted check is decided once, and a second answer is 409. A decided check leaves the review queue. The answer writes no decision and builds no bundle (ADR-0086, ADR-0116).
+         */
+        post: operations["approve_check_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/check-proposals": {
         parameters: {
             query?: never;
@@ -875,6 +895,18 @@ export interface components {
              * @description The decision the approval wrote, and null for a rejection.
              */
             decision_id: string | null;
+        };
+        CheckApprovalRequest: {
+            /** @enum {string} */
+            outcome: "approved" | "rejected";
+        };
+        CheckApproval: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            proposal_id: string;
+            /** @enum {string} */
+            outcome: "approved" | "rejected";
         };
         Proposal: {
             /** Format: uuid */
@@ -1708,6 +1740,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Approval"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    approve_check_proposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decisionID: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description The outcome that was recorded. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckApproval"];
                 };
             };
             400: components["responses"]["InvalidQuery"];

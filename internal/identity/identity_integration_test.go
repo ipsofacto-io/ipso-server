@@ -234,6 +234,8 @@ func TestApplicationRoleCannotRewriteIdentity(t *testing.T) {
 		`DELETE FROM proposals.approval`,
 		`UPDATE proposals.agent_approval SET outcome = 'approved'`,
 		`DELETE FROM proposals.agent_approval`,
+		`UPDATE proposals.check_approval SET outcome = 'approved'`,
+		`DELETE FROM proposals.check_approval`,
 	} {
 		if _, err := db.ExecContext(t.Context(), statement); err == nil {
 			t.Errorf("the application role ran %s", statement)
@@ -474,6 +476,36 @@ func TestAnApprovalCarriesItsDecisionExactlyWhenItApproves(t *testing.T) {
 	if _, err := pgtest.Exec(ctx, db, tenantA.String(),
 		`INSERT INTO proposals.agent_approval (tenant_id, proposal_id, approver_id, outcome) VALUES ($1, $2, $3, 'rejected')`, tenantA, agentProposal, outsider); err == nil {
 		t.Error("a principal of another tenant approved")
+	}
+
+	// A check drafted for a decision is answered once, by a person of its tenant (ADR-0116).
+	var check uuid.UUID
+	if err := pgtest.Scan(ctx, db, tenantA.String(), `
+		INSERT INTO proposals.check_proposal
+			(tenant_id, decision_id, decision_version, spec, rego, rego_sha256, fixtures, fixtures_total, fixtures_passed, repaired, model_id, prompt_version)
+		VALUES ($1, $2, 1, '{}'::jsonb, 'package p', sha256(convert_to('package p', 'UTF8')), '[{},{}]'::jsonb, 2, 2, false, 'm', 'p')
+		RETURNING id`, []any{tenantA, decision}, &check); err != nil {
+		t.Fatal(err)
+	}
+	answerCheck := func(approver uuid.UUID, outcome string) error {
+		_, err := pgtest.Exec(ctx, db, tenantA.String(),
+			`INSERT INTO proposals.check_approval (tenant_id, proposal_id, approver_id, outcome) VALUES ($1, $2, $3, $4)`, tenantA, check, approver, outcome)
+		return err
+	}
+	if err := answerCheck(agent, "approved"); err == nil || !strings.Contains(err.Error(), "agent cannot approve") {
+		t.Errorf("an agent approved a drafted check: %v", err)
+	}
+	if err := answerCheck(outsider, "approved"); err == nil {
+		t.Error("a principal of another tenant answered a drafted check")
+	}
+	if err := answerCheck(person, "maybe"); err == nil {
+		t.Error("an outcome of neither was stored")
+	}
+	if err := answerCheck(person, "rejected"); err != nil {
+		t.Errorf("a person could not answer a drafted check: %v", err)
+	}
+	if err := answerCheck(person, "approved"); err == nil {
+		t.Error("a drafted check was decided twice")
 	}
 }
 
