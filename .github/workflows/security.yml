@@ -20,4 +20,4 @@ jobs:
       contents: read
       packages: read
       security-events: write
-    uses: ipsofacto-io/.github/.github/workflows/security.yml@263b6c567edc84afbd790890a458c386df279beb
+    uses: ipsofacto-io/.github/.github/workflows/security.yml@97dee3da02874afba6524584a441411dae702871
