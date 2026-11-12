@@ -5,6 +5,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -49,6 +50,57 @@ const (
 	stateToWaive     = "tenant A holds a decision in force and a repository scope, and the session belongs to an approver"
 	stateToSupersede = "tenant A holds two decisions that nobody superseded, and the session belongs to a decision owner"
 )
+
+// The states of the export (IPSO-152, ADR-0115). Each one clears the exports of tenant A first, because the
+// cooldown and the one-at-a-time rule of the API read them, and then seeds what it names. The session is the
+// admin's: only an admin who is a person takes the export routes (ADR-0108, ADR-0111).
+const (
+	stateNoExport      = "tenant A holds no export, and the session belongs to an admin"
+	statePendingExport = "tenant A holds a pending export, and the session belongs to an admin"
+	stateReadyExport   = "tenant A holds a ready export, and the session belongs to an admin"
+)
+
+// pactRecipient is the age public key of the age documentation, the one the pact asks for an export with.
+const pactRecipient = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
+
+// resetExports deletes every export of tenant A and its parts, through the admin connection.
+func (f *fixture) resetExports(ctx context.Context) error {
+	for _, query := range []string{`DELETE FROM tenancy.export_part WHERE tenant_id = $1`, `DELETE FROM tenancy.export WHERE tenant_id = $1`} {
+		if _, err := f.admin.ExecContext(ctx, query, tenantA); err != nil {
+			return fmt.Errorf("clear the exports of tenant A: %w", err)
+		}
+	}
+	return nil
+}
+
+// seedExport clears the exports of tenant A and adds one, pending or ready with one stored part, and returns its id.
+func (f *fixture) seedExport(ctx context.Context, ready bool) (uuid.UUID, error) {
+	if err := f.resetExports(ctx); err != nil {
+		return uuid.Nil, err
+	}
+	var id uuid.UUID
+	if !ready {
+		if err := f.admin.QueryRowContext(ctx, `
+			INSERT INTO tenancy.export (tenant_id, requested_by, recipient, expires_at)
+			VALUES ($1, $2, $3, now() + interval '1 day') RETURNING id`,
+			tenantA, f.callers[personA].Principal, pactRecipient).Scan(&id); err != nil {
+			return uuid.Nil, fmt.Errorf("seed a pending export: %w", err)
+		}
+		return id, nil
+	}
+	part := []byte("a synthetic archive, which no key opens")
+	sum := sha256.Sum256(part)
+	if err := f.admin.QueryRowContext(ctx, `
+		INSERT INTO tenancy.export (tenant_id, requested_by, recipient, state, finished_at, expires_at, bytes, parts, sha256)
+		VALUES ($1, $2, $3, 'ready', now(), now() + interval '1 day', $4, 1, $5) RETURNING id`,
+		tenantA, f.callers[personA].Principal, pactRecipient, len(part), sum[:]).Scan(&id); err != nil {
+		return uuid.Nil, fmt.Errorf("seed a ready export: %w", err)
+	}
+	if _, err := f.admin.ExecContext(ctx, `INSERT INTO tenancy.export_part (tenant_id, export_id, seq, data) VALUES ($1, $2, 0, $3)`, tenantA, id, part); err != nil {
+		return uuid.Nil, fmt.Errorf("seed the part of an export: %w", err)
+	}
+	return id, nil
+}
 
 // seedProposal adds a pending pull request proposal and returns its id. n makes the pull request, and so the
 // proposal, unique (the proposal_once constraint of migration 00008).
@@ -173,6 +225,19 @@ func TestPactProviderIpsoServer(t *testing.T) {
 		return models.ProviderStateResponse{"fromDecisionId": from.String(), "toDecisionId": to.String()}, nil
 	}
 
+	noExport := func(ctx context.Context, _ int64) (models.ProviderStateResponse, error) {
+		return nil, f.resetExports(ctx)
+	}
+	exportOf := func(ready bool) func(context.Context, int64) (models.ProviderStateResponse, error) {
+		return func(ctx context.Context, _ int64) (models.ProviderStateResponse, error) {
+			id, err := f.seedExport(ctx, ready)
+			if err != nil {
+				return nil, err
+			}
+			return models.ProviderStateResponse{"exportId": id.String()}, nil
+		}
+	}
+
 	err = provider.NewVerifier().VerifyProvider(t, provider.VerifyRequest{
 		Provider:           "ipso-server",
 		ProviderBaseURL:    served.URL,
@@ -186,6 +251,10 @@ func TestPactProviderIpsoServer(t *testing.T) {
 			stateAnswered:    seeds(approverA, answered),
 			stateToWaive:     seeds(approverA, toWaive),
 			stateToSupersede: seeds(ownerA, toSupersede),
+
+			stateNoExport:      seeds(personA, noExport),
+			statePendingExport: seeds(personA, exportOf(false)),
+			stateReadyExport:   seeds(personA, exportOf(true)),
 		},
 		RequestFilter: func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

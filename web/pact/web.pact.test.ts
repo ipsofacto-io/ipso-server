@@ -12,7 +12,7 @@ import { MatchersV3, PactV4 } from '@pact-foundation/pact';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { createApi } from '../src/api/client.ts';
-import { makeCalls } from '../src/api/calls.ts';
+import { exportArchivePath, makeCalls } from '../src/api/calls.ts';
 import type { Scope } from '../src/api/types.ts';
 import { approvalRequest, rejection, type ApprovalForm } from '../src/state/edr.ts';
 import {
@@ -39,6 +39,15 @@ const UNANSWERED = 'tenant A holds drafts that nobody answered, and the session 
 const ANSWERED = 'tenant A holds a draft that was answered, and the session belongs to an approver';
 const TO_WAIVE = 'tenant A holds a decision in force and a repository scope, and the session belongs to an approver';
 const TO_SUPERSEDE = 'tenant A holds two decisions that nobody superseded, and the session belongs to a decision owner';
+
+// The states of the export (ADR-0115). Each one resets the exports of tenant A and seeds what it names, and the
+// session is the admin's: only an admin who is a person takes the export routes (ADR-0108, ADR-0111).
+const NO_EXPORT = 'tenant A holds no export, and the session belongs to an admin';
+const PENDING_EXPORT = 'tenant A holds a pending export, and the session belongs to an admin';
+const READY_EXPORT = 'tenant A holds a ready export, and the session belongs to an admin';
+// The age public key of the age documentation. The provider reads it with the same code as ipso-server tenant export.
+const AGE_RECIPIENT = 'age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p';
+const EXPORT = '0194f2a0-0000-7000-8000-000000000a01';
 
 const COOKIE_NAME = '__Host-ipso-session';
 const COOKIE_EXAMPLE = `${COOKIE_NAME}=${'A'.repeat(43)}`;
@@ -714,4 +723,148 @@ describe('the writes of the web app', () => {
       },
     );
   });
+  it('reads the export the tenant holds when it is ready', async () => {
+    await interact(
+      {
+        description: 'a request for the current export when it is ready',
+        state: READY_EXPORT,
+        path: '/v1/exports/current',
+        status: 200,
+        body: {
+          id: uuid(),
+          state: 'ready',
+          requested_by: uuid(),
+          created_at: timestamp(KNOWN),
+          finished_at: timestamp(KNOWN),
+          expires_at: timestamp(LATER),
+          bytes: integer(1024),
+          sha256: sha256('ab'.repeat(32)),
+        },
+      },
+      async (calls) => {
+        expect(await calls.currentExport()).toMatchObject({ state: 'ready' });
+      },
+    );
+  });
+
+  it('reads that the tenant holds no export as a 404', async () => {
+    await interact(
+      {
+        description: 'a request for the current export when there is none',
+        state: NO_EXPORT,
+        path: '/v1/exports/current',
+        status: 404,
+        body: { error: 'not found' },
+      },
+      async (calls) => {
+        await expect(calls.currentExport()).rejects.toMatchObject({ status: 404, code: 'not found' });
+      },
+    );
+  });
+
+  it('is refused the current export by the role policy for a viewer', async () => {
+    await interact(
+      {
+        description: 'a request for the current export from a viewer',
+        state: VIEWER,
+        path: '/v1/exports/current',
+        status: 403,
+        body: { error: 'forbidden' },
+      },
+      async (calls) => {
+        await expect(calls.currentExport()).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+      },
+    );
+  });
+
+  it('asks for an export encrypted to one public key', async () => {
+    await interact(
+      {
+        description: 'a request to start an export',
+        state: NO_EXPORT,
+        method: 'POST',
+        path: '/v1/exports',
+        requestBody: { recipient: AGE_RECIPIENT },
+        status: 202,
+        body: {
+          id: uuid(),
+          state: 'pending',
+          requested_by: uuid(),
+          created_at: timestamp(KNOWN),
+          finished_at: nullValue(),
+          expires_at: timestamp(LATER),
+          bytes: nullValue(),
+          sha256: nullValue(),
+        },
+      },
+      async (calls) => {
+        expect(await calls.startExport({ recipient: AGE_RECIPIENT })).toMatchObject({ state: 'pending', bytes: null });
+      },
+    );
+  });
+
+  it('is refused an export for a key the server cannot read', async () => {
+    await interact(
+      {
+        description: 'a request to start an export for a key the server cannot read',
+        state: NO_EXPORT,
+        method: 'POST',
+        path: '/v1/exports',
+        requestBody: { recipient: 'not an age public key' },
+        status: 400,
+        body: { error: 'invalid query' },
+      },
+      async (calls) => {
+        await expect(calls.startExport({ recipient: 'not an age public key' })).rejects.toMatchObject({ status: 400, code: 'invalid query' });
+      },
+    );
+  });
+
+  it('is refused a second export while one is pending', async () => {
+    await interact(
+      {
+        description: 'a request to start an export while one is pending',
+        state: PENDING_EXPORT,
+        method: 'POST',
+        path: '/v1/exports',
+        requestBody: { recipient: AGE_RECIPIENT },
+        status: 409,
+        body: { error: 'conflict' },
+      },
+      async (calls) => {
+        await expect(calls.startExport({ recipient: AGE_RECIPIENT })).rejects.toMatchObject({ status: 409, code: 'conflict' });
+      },
+    );
+  });
+
+  // The page links to the archive and the browser saves it, so the app makes no call for it. The pact holds the
+  // request a click sends and the headers that make it a file. The body is the archive and is not described.
+  it('downloads the archive of a ready export as an attachment', async () => {
+    await pact
+      .addInteraction()
+      .given(READY_EXPORT)
+      .uponReceiving('a request to download the archive of a ready export')
+      .withRequest('GET', fromProviderState('/v1/exports/${exportId}/archive', exportArchivePath(EXPORT)), (request) => {
+        request.headers({ Cookie: cookie });
+      })
+      .willRespondWith(200, (response) => {
+        response.headers({
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition': regex('^attachment; filename="ipso-export-[0-9a-f-]{36}\\.age"$', `attachment; filename="ipso-export-${EXPORT}.age"`),
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+        });
+      })
+      .executeTest(async (server) => {
+        const response = await fetch(`${server.url}${exportArchivePath(EXPORT)}`, {
+          headers: { Cookie: COOKIE_EXAMPLE },
+          credentials: 'same-origin',
+          redirect: 'error',
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers.get('Content-Disposition')).toContain('attachment');
+        await response.arrayBuffer();
+      });
+  });
+
 });

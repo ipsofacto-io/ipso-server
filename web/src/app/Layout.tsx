@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 
 import { calls } from '../api/calls';
+import { toApiError } from '../api/client';
 import { Button, Wordmark } from '../brand';
+import { exportNotRefused } from '../state/export';
 import { useApp } from './AppContext';
 
 const NAV = [
@@ -12,6 +14,35 @@ const NAV = [
   { to: '/waivers', label: 'Waivers' },
   { to: '/audit', label: 'Audit' },
 ] as const;
+
+/**
+ * Decides whether the menu has the export entry. No route says what role a person holds (ADR-0110), so the entry
+ * follows the answer of the read the export screen makes (ADR-0115). The layout makes it once when a session
+ * starts, unless the export page is open: the page makes the same read and reports what it found.
+ */
+function useExportEntry(signedIn: boolean | null, onExportPage: boolean): boolean {
+  const { canExport, setCanExport } = useApp();
+  const onPage = useRef(onExportPage);
+  onPage.current = onExportPage;
+  useEffect(() => {
+    if (signedIn !== true) {
+      setCanExport(null);
+      return;
+    }
+    if (onPage.current) return;
+    const controller = new AbortController();
+    calls.currentExport(controller.signal).then(
+      () => {
+        if (!controller.signal.aborted) setCanExport(true);
+      },
+      (cause: unknown) => {
+        if (!controller.signal.aborted) setCanExport(exportNotRefused(toApiError(cause).status));
+      },
+    );
+    return () => controller.abort();
+  }, [signedIn, setCanExport]);
+  return canExport === true;
+}
 
 function SignOut() {
   const { setSignedIn } = useApp();
@@ -46,6 +77,8 @@ function SignOut() {
 export function Layout() {
   const { signedIn, busy } = useApp();
   const location = useLocation();
+  const canExport = useExportEntry(signedIn, location.pathname === '/export');
+  const nav = canExport ? [...NAV, { to: '/export', label: 'Export' }] : NAV;
   const main = useRef<HTMLElement>(null);
   const first = useRef(true);
 
@@ -69,7 +102,7 @@ export function Layout() {
             <Wordmark height={30} blink={busy} label="ipso" />
           </Link>
           <nav aria-label="Main" className="nav">
-            {NAV.map((item) => (
+            {nav.map((item) => (
               <NavLink key={item.to} to={item.to} className={({ isActive }) => (isActive ? 'nav-link nav-link-active' : 'nav-link')}>
                 {item.label}
               </NavLink>

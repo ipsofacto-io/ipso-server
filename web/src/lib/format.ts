@@ -10,6 +10,19 @@ export function formatDate(value: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : formatTime(value);
 }
 
+/** A size in bytes in the unit a person reads: "812 B", "3.4 MiB". */
+export function formatBytes(bytes: number): string {
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  if (unit === 0) return `${bytes} B`;
+  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[unit]}`;
+}
+
 export function shortId(id: string): string {
   return id.length > 8 ? id.slice(0, 8) : id;
 }

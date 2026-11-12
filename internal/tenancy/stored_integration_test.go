@@ -447,6 +447,38 @@ func TestTheSweepDeletesWhatExpiredBeyondTheGraceAndNamesWhatStillWaits(t *testi
 	}
 }
 
+func TestTheCurrentExportIsTheNewestOneThatIsNotReplacedOrExpiredAndOfThisTenant(t *testing.T) {
+	l := newStored(t)
+	key := identity(t).Recipient().String()
+	tenant := uuid.MustParse(tenantA)
+	if _, err := tenancy.CurrentExport(t.Context(), l.app, tenant); !errors.Is(err, tenancy.ErrNoExport) {
+		t.Fatalf("a tenant with no export has %v, want ErrNoExport", err)
+	}
+
+	done := l.ready(t, tenantA, key)
+	if got, err := tenancy.CurrentExport(t.Context(), l.app, tenant); err != nil || got.ID != done.ID || got.State != tenancy.ExportReady {
+		t.Fatalf("the current export is %+v (%v), want the ready one", got, err)
+	}
+	if _, err := tenancy.CurrentExport(t.Context(), l.app, uuid.MustParse(tenantB)); !errors.Is(err, tenancy.ErrNoExport) {
+		t.Errorf("tenant B has the export of tenant A: %v", err)
+	}
+
+	// A request after the cooldown replaces it: the replaced one is not current, and its parts stay.
+	l.age(t, "1 hour")
+	next, err := l.start(t, tenantA, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := tenancy.CurrentExport(t.Context(), l.app, tenant); err != nil || got.ID != next.ID || got.State != tenancy.ExportPending {
+		t.Fatalf("the current export is %+v (%v), want the new pending one %s", got, err, next.ID)
+	}
+
+	l.expire(t, "1 minute")
+	if _, err := tenancy.CurrentExport(t.Context(), l.app, tenant); !errors.Is(err, tenancy.ErrNoExport) {
+		t.Errorf("an expired export is current: %v", err)
+	}
+}
+
 func TestAnotherTenantSeesNoExportAndNoPart(t *testing.T) {
 	l := newStored(t)
 	done := l.ready(t, tenantA, identity(t).Recipient().String())

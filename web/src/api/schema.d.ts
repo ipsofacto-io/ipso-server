@@ -466,6 +466,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/exports/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the export the tenant holds.
+         * @description Only an admin who is a person takes it (ADR-0108, ADR-0111, ADR-0115). It answers the newest export of the tenant that is not replaced and has not expired, in any state, so the web app finds the export again after a reload or from another browser, and a 409 from `start_export` can be followed by a read. It is 404 when the tenant holds none. A viewer, any other role and every agent receive the plain 403.
+         */
+        get: operations["current_export"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/exports/{id}": {
         parameters: {
             query?: never;
@@ -2023,6 +2043,32 @@ export interface operations {
             409: components["responses"]["Conflict"];
             413: components["responses"]["TooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    current_export: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The export. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Export"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Timeout"];

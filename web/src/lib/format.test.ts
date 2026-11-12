@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { fieldToTime, formatDate, formatTime, nowAsTime, nowForField, shortId, timeToField } from './format';
+import { fieldToTime, formatBytes, formatDate, formatTime, nowAsTime, nowForField, shortId, timeToField } from './format';
 
 describe('format', () => {
   it('writes a time in UTC to the minute', () => {
@@ -27,5 +27,16 @@ describe('format', () => {
   it('shortens an id', () => {
     expect(shortId('0194f2a0-0000-7000-8000-000000000101')).toBe('0194f2a0');
     expect(shortId('abc')).toBe('abc');
+  });
+});
+
+describe('formatBytes', () => {
+  it('says a size in the unit a person reads', () => {
+    expect(formatBytes(0)).toBe('0 B');
+    expect(formatBytes(812)).toBe('812 B');
+    expect(formatBytes(1024)).toBe('1.00 KiB');
+    expect(formatBytes(3.4 * 1024 * 1024)).toBe('3.40 MiB');
+    expect(formatBytes(12.5 * 1024 * 1024)).toBe('12.5 MiB');
+    expect(formatBytes(1024 ** 3)).toBe('1.00 GiB');
   });
 });

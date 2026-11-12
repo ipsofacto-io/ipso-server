@@ -36,6 +36,7 @@ export function fixturesPlugin(): Plugin {
         const reply = respond({ method, url, cookie: request.headers.cookie ?? '', contentType: request.headers['content-type'], body }, new Date(), state);
         response.statusCode = reply.status;
         for (const [name, value] of Object.entries(reply.headers)) response.setHeader(name, value);
+        if (reply.raw !== undefined) return response.end(reply.raw);
         if (reply.body === undefined) return response.end();
         response.setHeader('Content-Type', 'application/json');
         response.end(JSON.stringify(reply.body));
