@@ -754,6 +754,60 @@ paths:
           $ref: '#/components/responses/Internal'
         '503':
           $ref: '#/components/responses/Timeout'
+  /v1/decisions/{decisionID}/check-proposals/{id}/approval:
+    post:
+      operationId: approve_check_proposal
+      tags: [review]
+      summary: Approve or reject a drafted agent-edit check.
+      description: >-
+        Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0116). The role must cover every scope of the decision the check enforces, for an approval and for a rejection alike.
+        The check must be a pending check proposal of that decision, or the answer is 404. A drafted check is decided once, and a second answer is 409. A decided check leaves the review queue. The answer writes no decision and builds no bundle (ADR-0086, ADR-0116).
+      parameters:
+        - name: decisionID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckApprovalRequest'
+      responses:
+        '201':
+          description: The outcome that was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckApproval'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
   /v1/check-proposals:
     get:
       operationId: list_check_proposals
@@ -2112,6 +2166,28 @@ components:
           type: [string, 'null']
           format: uuid
           description: The decision the approval wrote, and null for a rejection.
+    CheckApprovalRequest:
+      type: object
+      additionalProperties: false
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [approved, rejected]
+    CheckApproval:
+      type: object
+      additionalProperties: false
+      required: [id, proposal_id, outcome]
+      properties:
+        id:
+          type: string
+          format: uuid
+        proposal_id:
+          type: string
+          format: uuid
+        outcome:
+          type: string
+          enum: [approved, rejected]
     Proposal:
       type: object
       additionalProperties: false

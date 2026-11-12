@@ -192,6 +192,10 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 	if agentApproved["decision_id"] == nil {
 		t.Fatalf("the agent proposal wrote no decision: %v", agentApproved)
 	}
+	checked := s.expect(http.StatusCreated, approverA, http.MethodPost, checkApprovalPath(f.tls, f.checkProposal), map[string]any{"outcome": "approved"})
+	if checked["outcome"] != "approved" || idOf(t, checked, "proposal_id") != f.checkProposal {
+		t.Fatalf("the check approval answered %v", checked)
+	}
 	_, recipient := newRecipient(t)
 	requested := s.expect(http.StatusAccepted, personA, http.MethodPost, "/v1/exports", map[string]any{"recipient": recipient})
 	if requested["state"] != "pending" || idOf(t, requested, "requested_by") != f.callers[personA].Principal {
@@ -240,8 +244,8 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 		byAction["api.allow_premise_host"].Principal != f.callers[personA].Principal {
 		t.Errorf("the log names the wrong people: %+v", byAction)
 	}
-	if len(s.logged()) != before+4 {
-		t.Errorf("%d entries after the clearance, host, agent approval and export request, from %d", len(s.logged()), before)
+	if len(s.logged()) != before+5 {
+		t.Errorf("%d entries after the clearance, host, agent approval, check approval and export request, from %d", len(s.logged()), before)
 	}
 }
 
@@ -275,6 +279,8 @@ func TestAWriteTheRoleDoesNotAllowStoresAndLogsNothing(t *testing.T) {
 			return http.MethodPost, "/v1/exports", map[string]any{"recipient": aRecipient}
 		case "approve_proposal":
 			return http.MethodPost, "/v1/proposals/" + f.proposal.String() + "/approval", approval("denied", []uuid.UUID{f.org})
+		case "approve_check_proposal":
+			return http.MethodPost, checkApprovalPath(f.tls, f.checkProposal), map[string]any{"outcome": "approved"}
 		default:
 			return http.MethodPost, "/v1/agent-proposals/" + f.agentProposal.String() + "/approval", approval("denied", []uuid.UUID{f.org})
 		}
@@ -284,7 +290,7 @@ func TestAWriteTheRoleDoesNotAllowStoresAndLogsNothing(t *testing.T) {
 		+ (SELECT count(*) FROM registry.waiver WHERE tenant_id = $1) + (SELECT count(*) FROM registry.premise_host_allow WHERE tenant_id = $1)
 		+ (SELECT count(*) FROM registry.decision_version WHERE tenant_id = $1) + (SELECT count(*) FROM proposals.approval WHERE tenant_id = $1)
 		+ (SELECT count(*) FROM proposals.agent_approval WHERE tenant_id = $1) + (SELECT count(*) FROM identity.action_log WHERE tenant_id = $1)
-		+ (SELECT count(*) FROM tenancy.export WHERE tenant_id = $1)`
+		+ (SELECT count(*) FROM proposals.check_approval WHERE tenant_id = $1) + (SELECT count(*) FROM tenancy.export WHERE tenant_id = $1)`
 	rows := s.count(tenantA, `SELECT `+tables)
 	roleOf := map[string]string{agentA: identity.RoleAgent, viewerA: identity.RoleViewer, auditorA: identity.RoleAuditor, contributorA: identity.RoleContributor, nobodyA: ""}
 	for subject, role := range roleOf {
@@ -685,5 +691,126 @@ func TestADecidedProposalLeavesItsQueue(t *testing.T) {
 	s.expect(http.StatusCreated, ownerA, http.MethodPost, "/v1/agent-proposals/"+f.agentProposal.String()+"/approval", map[string]any{"outcome": "rejected"})
 	if listed("proposals", "proposals", f.proposal) || listed("agent-proposals", "agent_proposals", f.agentProposal) {
 		t.Fatal("a decided proposal is still in its queue")
+	}
+}
+
+// checkApprovalPath is the route that answers the check a person finds in the review queue for a decision.
+func checkApprovalPath(decision, proposal uuid.UUID) string {
+	return "/v1/decisions/" + decision.String() + "/check-proposals/" + proposal.String() + "/approval"
+}
+
+// A person answers a drafted check once, and it leaves the review queue. The approver is the session's person and
+// never the body, the answer writes no decision and leaves the check row pending, and a check of another decision,
+// another tenant or no one is 404 and stores nothing (ADR-0116).
+func TestADraftedCheckIsAnsweredOnceByAPersonAndLeavesTheQueue(t *testing.T) {
+	s := newScribe(t)
+	f := s.f
+	queued := func() int {
+		return len(list(s.expect(http.StatusOK, personA, http.MethodGet, "/v1/check-proposals", nil), "check_proposals"))
+	}
+	rows := func() int {
+		return s.count(tenantA, `SELECT (SELECT count(*) FROM proposals.check_approval WHERE tenant_id = $1) + (SELECT count(*) FROM identity.action_log WHERE tenant_id = $1)`)
+	}
+	if queued() != 1 {
+		t.Fatalf("the queue holds %d checks, want 1", queued())
+	}
+	target := checkApprovalPath(f.tls, f.checkProposal)
+	start := rows()
+
+	for name, c := range map[string]struct {
+		body string
+		want int
+	}{
+		"an approver in the body": {`{"outcome":"approved","approver":"someone"}`, http.StatusBadRequest},
+		"an outcome of neither":   {`{"outcome":"maybe"}`, http.StatusBadRequest},
+		"no outcome":              {`{}`, http.StatusBadRequest},
+		"a decision with it":      {`{"outcome":"approved","decision":{"body":{"slug":"x","title":"X"},"scope_refs":["` + f.org.String() + `"],"valid_from":"2026-02-01T00:00:00Z"}}`, http.StatusBadRequest},
+	} {
+		if w := s.raw(approverA, http.MethodPost, target, "application/json", c.body); w.Code != c.want {
+			t.Errorf("%s: status %d %s, want %d", name, w.Code, w.Body, c.want)
+		}
+	}
+	other := f.insert(t, `SELECT id FROM proposals.check_proposal WHERE tenant_id = $1`, tenantB)
+	approved := map[string]any{"outcome": "approved"}
+	s.expect(http.StatusNotFound, approverA, http.MethodPost, checkApprovalPath(f.api, f.checkProposal), approved)
+	s.expect(http.StatusNotFound, approverA, http.MethodPost, checkApprovalPath(f.tls, uuid.New()), approved)
+	s.expect(http.StatusNotFound, approverA, http.MethodPost, checkApprovalPath(f.tls, other), approved)
+	if rows() != start {
+		t.Fatalf("a refused answer stored %d rows", rows()-start)
+	}
+
+	decisions := s.count(tenantA, `SELECT count(*) FROM registry.decision_version WHERE tenant_id = $1`)
+	done := s.expect(http.StatusCreated, approverA, http.MethodPost, target, approved)
+	if done["outcome"] != "approved" || idOf(t, done, "proposal_id") != f.checkProposal {
+		t.Fatalf("the answer was %v", done)
+	}
+	var approver uuid.UUID
+	var outcome string
+	if err := pgtest.Scan(t.Context(), f.db, tenantA.String(), `SELECT approver_id, outcome FROM proposals.check_approval WHERE tenant_id = $1 AND proposal_id = $2`,
+		[]any{tenantA, f.checkProposal}, &approver, &outcome); err != nil {
+		t.Fatal(err)
+	}
+	if approver != f.callers[approverA].Principal || outcome != "approved" {
+		t.Fatalf("the answer names %s and %q", approver, outcome)
+	}
+	if n := s.count(tenantA, `SELECT count(*) FROM proposals.check_proposal WHERE tenant_id = $1 AND id = $2 AND status = 'pending'`, f.checkProposal); n != 1 {
+		t.Fatal("the drafted check is no longer pending")
+	}
+	if after := s.count(tenantA, `SELECT count(*) FROM registry.decision_version WHERE tenant_id = $1`); after != decisions {
+		t.Fatal("an answer to a check wrote a decision")
+	}
+	if queued() != 0 {
+		t.Fatal("a decided check is still in the queue")
+	}
+	entries := 0
+	for _, a := range s.logged() {
+		if a.Action != "api.approve_check_proposal" {
+			continue
+		}
+		entries++
+		if a.Principal != f.callers[approverA].Principal || a.PrincipalKind != identity.KindHuman {
+			t.Errorf("the entry names %+v", a)
+		}
+	}
+	if entries != 1 {
+		t.Fatalf("%d log entries for the answer", entries)
+	}
+
+	// A check is decided once, whoever answers and whatever the second answer says, and a repeat stores nothing.
+	afterFirst := rows()
+	s.expect(http.StatusConflict, approverA, http.MethodPost, target, approved)
+	s.expect(http.StatusConflict, ownerA, http.MethodPost, target, map[string]any{"outcome": "rejected"})
+	if rows() != afterFirst {
+		t.Fatalf("a second answer stored %d rows", rows()-afterFirst)
+	}
+}
+
+// A scoped approver answers the checks of the decisions inside its scope, an approval and a rejection alike, and is
+// refused whole for a decision outside it or one the tenant has no row for (ADR-0116, ADR-0109).
+func TestAScopedApproverAnswersOnlyTheChecksInsideItsScope(t *testing.T) {
+	s := newScribe(t)
+	f := s.f
+	draft := func(decision uuid.UUID, rego string) uuid.UUID {
+		return f.insert(t, `
+			INSERT INTO proposals.check_proposal
+				(tenant_id, decision_id, decision_version, spec, rego, rego_sha256, fixtures, fixtures_total, fixtures_passed, repaired, model_id, prompt_version)
+			VALUES ($1, $2, 1, '{"rules":[]}', $3::text, sha256(convert_to($3::text, 'UTF8')), '[{}, {}]', 2, 2, false, 'm', 'p')
+			RETURNING id`, tenantA, decision, rego)
+	}
+	first, second := draft(f.api, "package a"), draft(f.api, "package b")
+	approved, rejected := map[string]any{"outcome": "approved"}, map[string]any{"outcome": "rejected"}
+
+	// The decision of f.tls is on the whole org, which the approver of one repository does not cover.
+	s.expect(http.StatusForbidden, repoApproverA, http.MethodPost, checkApprovalPath(f.tls, f.checkProposal), approved)
+	s.expect(http.StatusForbidden, repoApproverA, http.MethodPost, checkApprovalPath(f.tls, f.checkProposal), rejected)
+	// A decision the tenant has no row for names the whole tenant, which no scoped approver covers.
+	s.expect(http.StatusForbidden, repoApproverA, http.MethodPost, checkApprovalPath(uuid.New(), first), approved)
+	if n := s.count(tenantA, `SELECT count(*) FROM proposals.check_approval WHERE tenant_id = $1`); n != 0 {
+		t.Fatalf("a refused answer stored %d rows", n)
+	}
+	s.expect(http.StatusCreated, repoApproverA, http.MethodPost, checkApprovalPath(f.api, first), approved)
+	s.expect(http.StatusCreated, repoApproverA, http.MethodPost, checkApprovalPath(f.api, second), rejected)
+	if n := s.count(tenantA, `SELECT count(*) FROM proposals.check_approval WHERE tenant_id = $1`); n != 2 {
+		t.Fatalf("%d answers stored, want 2", n)
 	}
 }

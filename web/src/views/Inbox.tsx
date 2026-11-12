@@ -197,7 +197,7 @@ export function InboxView() {
   return (
     <Page
       title="Inbox"
-      intro="Drafts that wait for a person. Approve a draft to record it as a decision, or reject it. A drafted check cannot be approved here yet: approve it in its pull request."
+      intro="Drafts that wait for a person. Approve a draft to record it as a decision, or reject it. A drafted check cannot be approved here yet: a person with the role answers it through the API."
     >
       <Queue
         title="Pull requests"

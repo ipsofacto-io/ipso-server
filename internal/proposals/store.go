@@ -396,8 +396,9 @@ func checkInbox(ctx context.Context, db *sql.DB, tenant uuid.UUID, before any, l
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, status, decision_id, decision_version, engine, target, spec, rego, fixtures, repaired,
 			       model_id, prompt_version, lower(sys_period)
-			FROM proposals.check_proposal
+			FROM proposals.check_proposal c
 			WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id < $2::uuid)
+			  AND NOT EXISTS (SELECT 1 FROM proposals.check_approval a WHERE a.tenant_id = c.tenant_id AND a.proposal_id = c.id)
 			ORDER BY id DESC
 			LIMIT $3`, tenant, before, limit)
 		if err != nil {

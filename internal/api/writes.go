@@ -51,6 +51,7 @@ func writeRoutes(db *sql.DB, log *slog.Logger) []route {
 		{"POST /v1/premise-hosts", "allow_premise_host", authz.AllowlistWrite, nil, nil, http.HandlerFunc(h.allowPremiseHost)},
 		{"POST /v1/proposals/{id}/approval", "approve_proposal", authz.DecisionApprove, nil, targetsApproval, http.HandlerFunc(h.approveProposal)},
 		{"POST /v1/agent-proposals/{id}/approval", "approve_agent_proposal", authz.DecisionApprove, nil, targetsApproval, http.HandlerFunc(h.approveAgentProposal)},
+		{"POST /v1/decisions/{decisionID}/check-proposals/{id}/approval", "approve_check_proposal", authz.DecisionApprove, nil, targetsDecisionInPath, http.HandlerFunc(h.approveCheckProposal)},
 	}
 }
 
@@ -453,5 +454,42 @@ func (h *writeHandlers) approve(w http.ResponseWriter, r *http.Request, op strin
 			subject += " as decision " + approval.DecisionID.String()
 		}
 		return subject, out, nil
+	})
+}
+
+type checkApprovalRequest struct {
+	Outcome string `json:"outcome"`
+}
+
+type checkApprovalJSON struct {
+	ID         uuid.UUID `json:"id"`
+	ProposalID uuid.UUID `json:"proposal_id"`
+	Outcome    string    `json:"outcome"`
+}
+
+// approveCheckProposal answers a check an LLM drafted for a decision (ADR-0116). The path names the decision,
+// so the guard covers every scope of the decision the check enforces with targetsDecisionInPath, for an
+// approval and for a rejection alike, and the store requires that the drafted check belongs to that decision.
+// It writes no decision, and the approver is the authenticated person.
+func (h *writeHandlers) approveCheckProposal(w http.ResponseWriter, r *http.Request) {
+	decision, ok := pathID(w, r, "decisionID")
+	if !ok {
+		return
+	}
+	id, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	req, ok := decodeBody[checkApprovalRequest](w, r)
+	if !ok {
+		return
+	}
+	h.write(w, r, "approve_check_proposal", http.StatusCreated, func(ctx context.Context, tx *sql.Tx, caller Caller) (string, any, error) {
+		approval, err := proposals.ApproveCheck(ctx, tx, caller.Tenant, caller.Principal, decision, id, req.Outcome)
+		if err != nil {
+			return "", nil, err
+		}
+		return fmt.Sprintf("%s of check proposal %s for decision %s", approval.Outcome, approval.ProposalID, decision),
+			checkApprovalJSON{ID: approval.ID, ProposalID: approval.ProposalID, Outcome: approval.Outcome}, nil
 	})
 }

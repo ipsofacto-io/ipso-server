@@ -53,6 +53,7 @@ var mayCall = func() map[string][]string {
 		"allow_premise_host":        {identity.RoleAdmin},
 		"approve_proposal":          {identity.RoleApprover, identity.RoleDecisionOwner},
 		"approve_agent_proposal":    {identity.RoleApprover, identity.RoleDecisionOwner},
+		"approve_check_proposal":    {identity.RoleApprover, identity.RoleDecisionOwner},
 
 		// The export of the whole tenant (ADR-0111): only an admin who is a person holds tenant.export.
 		"start_export":    {identity.RoleAdmin},
@@ -66,7 +67,7 @@ var mayCall = func() map[string][]string {
 var writeOps = []string{
 	"create_scope", "reparent_scope", "retire_scope", "record_supersession", "record_grandfather_period",
 	"record_baseline", "record_waiver", "clear_premise_reason", "allow_premise_host", "approve_proposal",
-	"approve_agent_proposal", "start_export",
+	"approve_agent_proposal", "approve_check_proposal", "start_export",
 }
 
 // exportOps are the reads of the export (ADR-0111, and current_export of ADR-0115), which only an admin takes.
@@ -212,6 +213,8 @@ func bodyOf(op string) string {
 		return `{"host":"example.com","allowed":true}`
 	case "start_export":
 		return `{"recipient":"` + aRecipient + `"}`
+	case "approve_check_proposal":
+		return `{"outcome":"approved"}`
 	case "approve_proposal", "approve_agent_proposal":
 		return `{"outcome":"approved","decision":{"body":{"slug":"use-tls","title":"Use TLS"},"scope_refs":["` + idScope + `"],"valid_from":"2026-01-01T00:00:00Z"}}`
 	}
