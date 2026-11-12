@@ -207,8 +207,8 @@ jobs:
           fi
           echo "${out}" | grep -q "refusing to start"
       # The worker serves no request, so its sweeps are the proof that it runs: it connected as the
-      # application role, passed its start gates, and used River's tables. A job of each hourly kind
-      # completes when the worker starts, whether or not a notice or a premise is due.
+      # application role, passed its start gates, and used River's tables. A job of each sweep kind
+      # completes when the worker starts, whether or not a notice, a premise or an export is due.
       - name: The worker completes its first sweeps
         run: |
           set -euo pipefail
@@ -218,15 +218,15 @@ jobs:
           for attempt in $(seq 1 45); do
             completed="$(${COMPOSE} exec -T -e PGPASSWORD="${IPSO_APP_PASSWORD}" postgres \
               psql --host=127.0.0.1 --username=ipso_app --dbname=ipso --tuples-only --no-align \
-              --command="SELECT count(DISTINCT kind) FROM river.river_job WHERE kind IN ('waiver_notices', 'premise_sweep') AND state = 'completed'")"
-            if [ "${completed}" -ge 2 ]; then
+              --command="SELECT count(DISTINCT kind) FROM river.river_job WHERE kind IN ('waiver_notices', 'premise_sweep', 'tenant_export_sweep') AND state = 'completed'")"
+            if [ "${completed}" -ge 3 ]; then
               ${COMPOSE} ps --status running --services > "${RUNNER_TEMP}/running.txt"
               grep -qx worker "${RUNNER_TEMP}/running.txt"
               exit 0
             fi
             sleep 2
           done
-          echo "::error::the worker did not complete a waiver notice sweep and a premise sweep within 90 seconds"
+          echo "::error::the worker did not complete a waiver notice sweep, a premise sweep and an export sweep within 90 seconds"
           exit 1
       # The worker must refuse the migration role, which owns the tables, like the api.
       - name: Refuse to run the worker as the migration role

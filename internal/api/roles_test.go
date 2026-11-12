@@ -53,6 +53,11 @@ var mayCall = func() map[string][]string {
 		"allow_premise_host":        {identity.RoleAdmin},
 		"approve_proposal":          {identity.RoleApprover, identity.RoleDecisionOwner},
 		"approve_agent_proposal":    {identity.RoleApprover, identity.RoleDecisionOwner},
+
+		// The export of the whole tenant (ADR-0111): only an admin who is a person holds tenant.export.
+		"start_export":    {identity.RoleAdmin},
+		"get_export":      {identity.RoleAdmin},
+		"download_export": {identity.RoleAdmin},
 	}
 }()
 
@@ -60,8 +65,12 @@ var mayCall = func() map[string][]string {
 var writeOps = []string{
 	"create_scope", "reparent_scope", "retire_scope", "record_supersession", "record_grandfather_period",
 	"record_baseline", "record_waiver", "clear_premise_reason", "allow_premise_host", "approve_proposal",
-	"approve_agent_proposal",
+	"approve_agent_proposal", "start_export",
 }
+
+// exportOps are the two reads of ADR-0111, which only an admin takes. The third operation of the export is the
+// write start_export, which is in writeOps.
+var exportOps = []string{"get_export", "download_export"}
 
 // the five audit routes of ADR-0055.
 var auditOps = []string{"audit_decisions", "audit_beliefs", "audit_merges", "audit_supersessions", "audit_waivers"}
@@ -177,6 +186,8 @@ const (
 	idDecisionB = "00000000-0000-7000-8000-000000000005"
 	idScope     = "00000000-0000-4000-8000-0000000000a1"
 	aDigest     = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	// aRecipient is an age public key, the one of the age documentation. No test opens anything with it.
+	aRecipient = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
 )
 
 // bodyOf is a valid body for an operation that takes one, and the empty string for one that takes none.
@@ -198,6 +209,8 @@ func bodyOf(op string) string {
 		return `{}`
 	case "allow_premise_host":
 		return `{"host":"example.com","allowed":true}`
+	case "start_export":
+		return `{"recipient":"` + aRecipient + `"}`
 	case "approve_proposal", "approve_agent_proposal":
 		return `{"outcome":"approved","decision":{"body":{"slug":"use-tls","title":"Use TLS"},"scope_refs":["` + idScope + `"],"valid_from":"2026-01-01T00:00:00Z"}}`
 	}

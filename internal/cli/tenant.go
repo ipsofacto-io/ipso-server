@@ -213,10 +213,14 @@ func tenantExport(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		fprintf(stderr, "tenant export: --tenant, --out and at least one --recipient are required\n%s\n", tenantUsage)
 		return 2
 	}
-	keys, err := age.ParseRecipients(strings.NewReader(strings.Join(recipients, "\n")))
-	if err != nil || len(keys) != len(recipients) {
-		fprintf(stderr, "tenant export: a --recipient is not an age public key (age1...)\n")
-		return 2
+	keys := make([]age.Recipient, 0, len(recipients))
+	for _, recipient := range recipients {
+		key, err := tenancy.ParseRecipient(recipient)
+		if err != nil {
+			fprintf(stderr, "tenant export: a --recipient is not an age public key (age1...)\n")
+			return 2
+		}
+		keys = append(keys, key)
 	}
 	db, err := applicationDB(ctx, d, "tenant export")
 	if err != nil {

@@ -32,6 +32,10 @@ const (
 	sessionTable      = "identity.session"
 	tombstoneTable    = "tenancy.offboarding"
 	installationTable = "tenancy.installation"
+	// The exports a tenant admin asks for through the API (ADR-0111). An archive never holds the archive
+	// before it, so neither table is exported or restored. Offboarding purges both.
+	exportTable     = "tenancy.export"
+	exportPartTable = "tenancy.export_part"
 )
 
 // Table is a table with a tenant_id column.
@@ -100,12 +104,12 @@ func catalog(ctx context.Context, q queryer) ([]Table, error) {
 // the database, the sessions, which hold credential hashes and end on their own, the tombstone, and the
 // installation bindings. A binding is unique across tenants, so a restore into a fresh tenant would find it
 // taken by the tenant it was exported from, and moving a live installation to a copy is the operator's
-// choice (ADR-0101).
+// choice (ADR-0101). The two tables of the exports made through the API are left out as well (ADR-0111).
 func exported(all []Table) []Table {
 	var out []Table
 	for _, t := range all {
 		switch t.String() {
-		case tenantKeyTable, sessionTable, tombstoneTable, installationTable:
+		case tenantKeyTable, sessionTable, tombstoneTable, installationTable, exportTable, exportPartTable:
 			continue
 		}
 		out = append(out, t)

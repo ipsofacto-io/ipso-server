@@ -7,7 +7,7 @@ info:
     The routes that write (ADR-0109) are actions only a person takes: each asks the role policy, which must cover
     every scope the request names, and an agent gets 403. A waiver and an approval take the approver from the
     session or the token and never from the body, and each write is logged with the principal in the same
-    transaction. A repeat, and a change the registry refuses because of what it already holds, is 409. The one
+    transaction. A repeat, and a change the registry refuses because of what it already holds, is 409. The three export routes (ADR-0111) let an admin ask for the export of the tenant and download it. The one
     route no person calls is POST /v1/verdicts, which a CI job calls with its own GitHub
     Actions token and which stores the verdicts of one run (ADR-0102). Every other route asks the role policy
     before it runs, and a principal no role of which allows the route gets 403 (ADR-0108). The five audit
@@ -34,6 +34,8 @@ tags:
     description: The five audit questions of section 2.3 (ADR-0055).
   - name: verification
     description: The verdicts a CI job uploads, and the per-repository and per-decision results (ADR-0102).
+  - name: export
+    description: The export of the whole tenant that an admin asks for and downloads (ADR-0111).
 paths:
   /v1/resolve:
     post:
@@ -1065,6 +1067,154 @@ paths:
           $ref: '#/components/responses/Internal'
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/exports:
+    post:
+      operationId: start_export
+      tags: [export]
+      summary: Ask for an export of the tenant, encrypted to an age public key.
+      description: >-
+        Only an admin who is a person takes it (ADR-0108, ADR-0111), so an agent receives 403. The export is the
+        archive `ipso-server tenant export` writes, and `ipso-server tenant restore` reads it (ADR-0100). The
+        worker makes it, so the answer is 202 and the export is `pending` until it is `ready`: read it with
+        `get_export`. It is encrypted to the one native or hybrid age public key in `recipient`, which the
+        route refuses with 400 when it cannot read it, and the server never keeps the archive in the clear.
+        A tenant holds one current export. While one is pending or running this is 409. A tenant may ask again
+        ten minutes after its last export finished or failed, and sooner is 429 with `Retry-After`. A new request
+        replaces a finished export: the old one is no longer served, and its parts are kept for half an hour so
+        that a download in flight can end. An export is kept for 24 hours and then deleted. The request is
+        logged with the person's id in the same transaction.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportRequest'
+      responses:
+        '202':
+          description: The request was recorded. The export is pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Export'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/exports/{id}:
+    get:
+      operationId: get_export
+      tags: [export]
+      summary: Read the state of an export.
+      description: >-
+        Only an admin who is a person takes it (ADR-0108, ADR-0111). `bytes` and `sha256` describe the
+        ciphertext and are set once the export is `ready`. An id the tenant does not have, one that has
+        expired, and one that belongs to another tenant are the same 404.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The export.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Export'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/exports/{id}/archive:
+    get:
+      operationId: download_export
+      tags: [export]
+      summary: Download the archive of a ready export.
+      description: >-
+        Only an admin who is a person takes it (ADR-0108, ADR-0111). The body is the age file, which the
+        holder of the private key of `recipient` opens with stock `age`, `gunzip` and `jq`, and it is as long
+        as `bytes` says. This is the one route that is not held to the response cap or the request deadline:
+        it streams, a client that stalls for two minutes is dropped, one download lasts at most 30 minutes, and
+        a process sends at most two at once, so another one is 429 with `Retry-After`. If the server cannot
+        finish the stream it closes the connection short of the declared length, and age authenticates the
+        file, so a cut archive is never taken for a whole one. A download that begins is logged with the
+        person's id before the first byte. An export that is not ready is 409, and one that is unknown or
+        expired is 404.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The archive.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              description: An attachment named ipso-export-{id}.age.
+            Content-Length:
+              schema:
+                type: integer
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                contentMediaType: application/octet-stream
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          description: The method is not GET.
+          headers:
+            Allow:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
 components:
   securitySchemes:
     bearerAuth:
@@ -1838,6 +1988,53 @@ components:
           type: string
         allowed:
           type: boolean
+    ExportRequest:
+      type: object
+      additionalProperties: false
+      required: [recipient]
+      properties:
+        recipient:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          pattern: '^age1[0-9a-z]+$'
+          description: One native (age1...) or hybrid (age1pq1...) age public key. A private key, a list, a comment and a plugin recipient are 400, and the answer never quotes what was sent.
+    Export:
+      type: object
+      additionalProperties: false
+      required: [id, state, requested_by, created_at, finished_at, expires_at, bytes, sha256]
+      properties:
+        id:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum: [pending, running, ready, failed]
+          description: Pending until the worker takes it, running while it is made, ready when it can be downloaded, and failed when the worker could not make it. Ask again after a failure.
+        requested_by:
+          type: string
+          format: uuid
+          description: The person who asked.
+        created_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: [string, 'null']
+          format: date-time
+          description: Null until the export is ready or failed.
+        expires_at:
+          type: string
+          format: date-time
+          description: After this the export is 404 and is deleted. It is 24 hours after the request while the export is made, and 24 hours after it finished.
+        bytes:
+          type: [integer, 'null']
+          format: int64
+          minimum: 1
+          description: The size of the archive, set when the export is ready.
+        sha256:
+          type: [string, 'null']
+          pattern: '^[0-9a-f]{64}$'
+          description: The SHA-256 of the archive in lowercase hexadecimal, set when the export is ready.
     DecisionDraft:
       type: object
       additionalProperties: false

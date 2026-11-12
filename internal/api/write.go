@@ -13,7 +13,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
+	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
 )
 
 var errTrailingData = errors.New("data after the body")
@@ -83,12 +85,19 @@ func pathID(w http.ResponseWriter, r *http.Request, name string) (uuid.UUID, boo
 //
 //   - a value the domain refused, and a data exception (class 22), or a value a CHECK constraint refused, is
 //     400;
+//   - a request for an export too soon after the last one is 429 with the wait;
 //   - an id the tenant does not have is 404;
 //   - a decision body over 1 MiB in text form is 413, and the database error behind it is never reached;
 //   - every other refusal of what the registry holds (a unique, foreign key, exclusion or trigger check), such as a repeat, a scope that still has a child or a role
 //     binding, a supersession the decisions do not span, or a waiver outside its decision, is 409;
 //   - anything else is 500.
 func writeStoreError(w http.ResponseWriter, log *slog.Logger, op string, err error) {
+	var soon *tenancy.TooSoonError
+	if errors.As(err, &soon) {
+		w.Header().Set("Retry-After", ratelimit.RetryAfter(soon.Wait))
+		writeError(w, http.StatusTooManyRequests, errRateLimited)
+		return
+	}
 	switch {
 	case errors.Is(err, registry.ErrInvalidQuery):
 		writeError(w, http.StatusBadRequest, errInvalidQuery)
@@ -98,6 +107,15 @@ func writeStoreError(w http.ResponseWriter, log *slog.Logger, op string, err err
 		return
 	case errors.Is(err, registry.ErrBodyTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, errTooLarge)
+		return
+	case errors.Is(err, tenancy.ErrBadRecipient):
+		writeError(w, http.StatusBadRequest, errInvalidQuery)
+		return
+	case errors.Is(err, tenancy.ErrNoExport):
+		writeError(w, http.StatusNotFound, errNotFound)
+		return
+	case errors.Is(err, tenancy.ErrExportNotReady):
+		writeError(w, http.StatusConflict, errConflict)
 		return
 	}
 	var pg *pgconn.PgError

@@ -6,6 +6,8 @@
 package compose
 
 import (
+	"bufio"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -18,6 +20,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"filippo.io/age"
 )
 
 const (
@@ -118,6 +122,33 @@ func call(t *testing.T, method, path, bearer string) (int, string) {
 	return status, body
 }
 
+// bearerCall is call with a JSON body, and with the whole answer: an archive is far over what call keeps.
+func bearerCall(t *testing.T, method, path, bearer, body string) (int, []byte) {
+	t.Helper()
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), method, setting(t, "IPSO_SMOKE_API", defaultAPI)+path, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	answer, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, answer
+}
+
 func waitForHealth(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), startupTime)
@@ -167,6 +198,48 @@ func TestTheStackServesTheAPIToItsTestUserOnly(t *testing.T) {
 	t.Run("a tenant in the query is refused", func(t *testing.T) {
 		if status, _ := call(t, http.MethodGet, "/v1/scopes?tenant=00000000-0000-4000-8000-0000000000ff", good); status != http.StatusBadRequest {
 			t.Errorf("status %d, want 400", status)
+		}
+	})
+	t.Run("an admin exports the tenant and opens the archive with the key it gave", func(t *testing.T) {
+		identity, err := age.GenerateX25519Identity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		status, body := bearerCall(t, http.MethodPost, "/v1/exports", good, `{"recipient":"`+identity.Recipient().String()+`"}`)
+		var export struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		}
+		if status != http.StatusAccepted || json.Unmarshal(body, &export) != nil || export.ID == "" {
+			t.Fatalf("POST /v1/exports: status %d: %s", status, body)
+		}
+		// The worker finds the request with its sweep, which runs every minute.
+		deadline := time.Now().Add(3 * time.Minute)
+		for export.State != "ready" {
+			if time.Now().After(deadline) {
+				t.Fatalf("the export was still %s after 3 minutes", export.State)
+			}
+			time.Sleep(2 * time.Second)
+			status, body = bearerCall(t, http.MethodGet, "/v1/exports/"+export.ID, good, "")
+			if status != http.StatusOK || json.Unmarshal(body, &export) != nil || export.State == "failed" {
+				t.Fatalf("GET /v1/exports/%s: status %d: %s", export.ID, status, body)
+			}
+		}
+		status, archive := bearerCall(t, http.MethodGet, "/v1/exports/"+export.ID+"/archive", good, "")
+		if status != http.StatusOK {
+			t.Fatalf("the archive: status %d", status)
+		}
+		plain, err := age.Decrypt(strings.NewReader(string(archive)), identity)
+		if err != nil {
+			t.Fatalf("the holder of the key cannot open the archive: %v", err)
+		}
+		zr, err := gzip.NewReader(plain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, err := bufio.NewReader(zr).ReadString('\n')
+		if err != nil || !strings.Contains(first, `"format":"ipso-tenant-export/1"`) || !strings.Contains(first, setting(t, "IPSO_TENANT_ID", "")) {
+			t.Fatalf("the header is %q (%v)", first, err)
 		}
 	})
 	// Last, because it empties the front's bucket for this address.

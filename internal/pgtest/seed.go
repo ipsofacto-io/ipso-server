@@ -17,7 +17,7 @@ const (
 // SeedEveryTable writes a tenant with at least one row in every table the application role can write
 // and that the lifecycle commands treat: the tenant, its wrapped key and its installation binding, scopes and their history,
 // decisions and their history, supersession, waivers, premises, proposals, identity, role bindings, sessions, the action
-// log, usage, and an uploaded verdict. It runs as the application role under row-level security, so every trigger runs as it
+// log, usage, an uploaded verdict, and an export with its part. It runs as the application role under row-level security, so every trigger runs as it
 // does in production. The tombstone has no application insert and is not seeded here.
 func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 	t.Helper()
@@ -151,4 +151,16 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 	mustExec(`
 		INSERT INTO verification.verdict (tenant_id, upload_id, decision_id, slug, check_index, mode, result, violations)
 		VALUES ($1::uuid, $2::uuid, '01M5QJ0V9EVXKR4C89XNBNT5GG', 'use-tls', 0, 'block', 'fail', 2)`, tenant, upload)
+
+	// A finished export an admin asked for, with its one part (ADR-0111). It finished an hour ago, so a new
+	// request is past the cooldown and replaces it.
+	var export string
+	mustScan(`
+		INSERT INTO tenancy.export (tenant_id, requested_by, recipient, state, created_at, finished_at, expires_at, bytes, parts, sha256)
+		VALUES ($1::uuid, $2::uuid, 'age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p', 'ready',
+		        now() - interval '2 hours', now() - interval '1 hour', now() + interval '1 day', 4, 1, sha256('data'::bytea))
+		RETURNING id`, []any{tenant, person}, &export)
+	mustExec(`
+		INSERT INTO tenancy.export_part (tenant_id, export_id, seq, data)
+		VALUES ($1::uuid, $2::uuid, 0, 'data'::bytea)`, tenant, export)
 }

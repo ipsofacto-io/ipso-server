@@ -54,8 +54,9 @@ func TestEveryOperationAsksTheRoleOfTheCaller(t *testing.T) {
 	handler := f.handler(t, Limits{Rate: 1000, Burst: 1000})
 	operations := f.operations(t)
 	// The writes are called in writes_integration_test.go, each as every role.
-	if len(operations)+len(writeOps) != len(mayCall) {
-		t.Fatalf("%d operations here and %d writes, %d in the matrix", len(operations), len(writeOps), len(mayCall))
+	// The export routes are called in exports_integration_test.go, as every role.
+	if len(operations)+len(writeOps)+len(exportOps) != len(mayCall) {
+		t.Fatalf("%d operations here, %d writes and %d export reads, %d in the matrix", len(operations), len(writeOps), len(exportOps), len(mayCall))
 	}
 	contentType := func(o operation) string {
 		if o.body != nil {
