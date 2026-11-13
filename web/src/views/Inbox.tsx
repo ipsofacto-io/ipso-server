@@ -133,7 +133,7 @@ export function InboxView() {
   return (
     <Page
       title="Inbox"
-      intro="Drafts that wait for a person. Approve a draft to record it as a decision, or reject it. Approving a drafted check records the answer only: it writes no decision, and the check reaches no repository yet."
+      intro="Drafts that wait for a person. Approve a draft to record it as a decision, or reject it. Approving a drafted check records the answer only: it writes no decision, and an approved check reaches a repository only when someone runs ipso deliver there."
     >
       <Queue
         title="Pull requests"

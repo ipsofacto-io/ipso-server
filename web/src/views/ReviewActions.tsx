@@ -276,12 +276,12 @@ export function CheckActions({ decisionId, id, title, report }: { decisionId: st
     return (
       <Confirm
         label={`Approve ${title}`}
-        question="Approve this check? The answer is recorded once and cannot be changed. It writes no decision, and the check reaches no repository yet. Only a person whose role covers every scope of the decision may answer."
+        question="Approve this check? The answer is recorded once and cannot be changed. It writes no decision, and the check reaches a repository only when someone runs ipso deliver there. Only a person whose role covers every scope of the decision may answer."
         button="Approve the check"
         busy="Approving"
         variant="primary"
         send={send('approved')}
-        success={{ tone: 'info', title: `Approved ${title}.`, body: 'It left the queue. The answer is recorded, and the check reaches no repository yet.' }}
+        success={{ tone: 'info', title: `Approved ${title}.`, body: 'It left the queue. The answer is recorded. Run ipso deliver in the repository of the decision to bring the check in.' }}
         stale={STALE}
         report={report}
         onCancel={close}

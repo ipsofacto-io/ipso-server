@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ipsofacto-io/ipso-server/internal/proposals"
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
 )
 
@@ -270,6 +271,22 @@ func (h *registryRoutes) premiseHosts(w http.ResponseWriter, r *http.Request) {
 		out = append(out, hostJSON{ID: host.ID, Host: host.Host, Allowed: host.Allowed})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"premise_hosts": out})
+}
+
+// acceptedChecks lists the approved drafted checks of the decisions in force for a repository (ADR-0120). It
+// reads the present, writes nothing, and holds back the Rego of a check approved for another version of its
+// decision.
+func (h *registryRoutes) acceptedChecks(w http.ResponseWriter, r *http.Request) {
+	tenant, page, ok := listOf(w, r)
+	if !ok {
+		return
+	}
+	checks, err := proposals.AcceptedChecks(r.Context(), h.db, tenant, r.URL.Query().Get("repo"), h.now(), page)
+	if err != nil {
+		writeRegistryError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"accepted_checks": checks})
 }
 
 // read checks the tenant of a GET route and reads its times. A route with no valid time leaves it

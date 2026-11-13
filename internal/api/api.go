@@ -272,6 +272,7 @@ func routes(db *sql.DB, now func() time.Time, log *slog.Logger) []route {
 		{"GET /v1/proposals", "list_proposals", authz.ProposalsRead, []string{"limit", "before"}, nil, reviews},
 		{"GET /v1/agent-proposals", "list_agent_proposals", authz.ProposalsRead, []string{"limit", "before"}, nil, reviews},
 		{"GET /v1/check-proposals", "list_check_proposals", authz.ProposalsRead, []string{"limit", "before"}, nil, reviews},
+		{"GET /v1/accepted-checks", "list_accepted_checks", authz.ProposalsRead, []string{"repo", "limit", "before"}, nil, http.HandlerFunc(reg.acceptedChecks)},
 		{"GET /v1/audit/decisions", "audit_decisions", authz.AuditRead, []string{"repo", "path", "env", "valid", "known"}, nil, audits},
 		{"GET /v1/audit/beliefs", "audit_beliefs", authz.AuditRead, []string{"repo", "path", "env", "valid", "then", "now"}, nil, audits},
 		{"GET /v1/audit/merges", "audit_merges", authz.AuditRead, []string{"repo", "path", "env", "at", "known"}, nil, audits},

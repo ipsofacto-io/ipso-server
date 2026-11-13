@@ -899,6 +899,48 @@ paths:
           $ref: '#/components/responses/Internal'
         '503':
           $ref: '#/components/responses/Timeout'
+  /v1/accepted-checks:
+    get:
+      operationId: list_accepted_checks
+      tags: [review]
+      summary: List the approved agent-edit checks of the decisions in force for a repository (ADR-0120).
+      description: >-
+        Resolves the decisions in force for the repository now, as a check request does, and returns the drafted
+        checks that a person approved for them, newest first. A rejected check and one nobody answered are never
+        listed. A check approved for a version of its decision that is not the version in force is listed with a
+        null rego and a null rego_sha256, so a client can say that it was held and the server serves no rule that
+        no person accepted for the decision as it stands. The answer reads the present and writes nothing.
+        ipso deliver writes the checks into a repository.
+      parameters:
+        - $ref: '#/components/parameters/Repo'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of accepted checks, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [accepted_checks]
+                properties:
+                  accepted_checks:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AcceptedCheck'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
   /v1/audit/decisions:
     get:
       operationId: audit_decisions
@@ -2391,6 +2433,37 @@ components:
         captured_at:
           type: string
           format: date-time
+    AcceptedCheck:
+      type: object
+      additionalProperties: false
+      required: [id, decision_id, edr_id, decision_version, version_in_force, rego, rego_sha256]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The id of the drafted check. ipso deliver names the Rego file after it.
+        decision_id:
+          type: string
+          format: uuid
+        edr_id:
+          type: [string, 'null']
+          pattern: '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+          description: The id of the EDR file of the decision, when its body holds one that is a ULID.
+        decision_version:
+          type: integer
+          minimum: 1
+          description: The version of the decision the check was drafted and approved for.
+        version_in_force:
+          type: integer
+          minimum: 1
+          description: The version of the decision in force now.
+        rego:
+          type: [string, 'null']
+          description: The stored Rego, byte for byte. Null when decision_version is not version_in_force.
+        rego_sha256:
+          type: [string, 'null']
+          pattern: '^[0-9a-f]{64}$'
+          description: The sha256 of the rego in lowercase hex. Null when the rego is.
     AuditDecisions:
       type: object
       additionalProperties: false
