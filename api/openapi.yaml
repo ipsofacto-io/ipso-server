@@ -552,7 +552,64 @@ paths:
           $ref: '#/components/responses/Internal'
         '503':
           $ref: '#/components/responses/Timeout'
+  /v1/premise-reasons:
+    get:
+      operationId: list_premise_reasons
+      tags: [registry]
+      summary: List the open review reasons of the premises.
+      description: >-
+        A reason is open while no clearance names it, whatever the valid period of its decision, so every reason that POST /v1/decisions/{decisionID}/premises/{premiseID}/clearance can close is here (ADR-0053, ADR-0117). Each carries the fail that opened it as the evaluation stored it: the URL, the pointer, the expected value and the observed value. The body of the response is never stored and is never returned, and neither is its digest. The observed value was taken from a public URL, so it is untrusted: show it as text. The answer is the present and takes no time. Any role that may read the registry reads it.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of open reasons, by id from the highest.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PremiseReasonPage'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
   /v1/premise-hosts:
+    get:
+      operationId: list_premise_hosts
+      tags: [registry]
+      summary: List the hosts of the premise allowlist.
+      description: >-
+        The latest row of each host, the one the probe reads: the greatest start of its period and then the greatest id. A host whose latest row says allowed false was withdrawn and is listed so that it can be allowed again. A tenant with no row allows no host (ADR-0053, ADR-0098, ADR-0117). Pages are by the id of that latest row, so a host that is allowed or withdrawn again moves to the top. Any role that may read the registry reads it.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of the allowlist, by id from the highest.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PremiseHostPage'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
     post:
       operationId: allow_premise_host
       tags: [registry]
@@ -2071,6 +2128,53 @@ components:
           type: string
         allowed:
           type: boolean
+    PremiseReason:
+      type: object
+      additionalProperties: false
+      required: [id, decision_id, premise_id, opened_at, url, pointer, expected, observed]
+      properties:
+        id:
+          type: string
+          format: uuid
+        decision_id:
+          type: string
+          format: uuid
+        premise_id:
+          type: string
+        opened_at:
+          type: string
+          format: date-time
+          description: When the reason was opened.
+        url:
+          type: string
+          description: The URL the probe fetched.
+        pointer:
+          type: string
+          description: The JSON Pointer read from the response.
+        expected:
+          type: [string, number, boolean, object, array, 'null']
+          description: What the premise expects, as stored. At most 1024 bytes.
+        observed:
+          type: [string, number, boolean, object, array, 'null']
+          description: What the probe read, as stored, at most 1024 bytes. It comes from a public URL and is untrusted.
+    PremiseReasonPage:
+      type: object
+      additionalProperties: false
+      required: [premise_reasons]
+      properties:
+        premise_reasons:
+          type: array
+          items:
+            $ref: '#/components/schemas/PremiseReason'
+    PremiseHostPage:
+      type: object
+      additionalProperties: false
+      required: [premise_hosts]
+      properties:
+        premise_hosts:
+          type: array
+          items:
+            $ref: '#/components/schemas/PremiseHost'
     ExportRequest:
       type: object
       additionalProperties: false

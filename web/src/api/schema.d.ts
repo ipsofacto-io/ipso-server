@@ -226,6 +226,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/premise-reasons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the open review reasons of the premises.
+         * @description A reason is open while no clearance names it, whatever the valid period of its decision, so every reason that POST /v1/decisions/{decisionID}/premises/{premiseID}/clearance can close is here (ADR-0053, ADR-0117). Each carries the fail that opened it as the evaluation stored it: the URL, the pointer, the expected value and the observed value. The body of the response is never stored and is never returned, and neither is its digest. The observed value was taken from a public URL, so it is untrusted: show it as text. The answer is the present and takes no time. Any role that may read the registry reads it.
+         */
+        get: operations["list_premise_reasons"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/premise-hosts": {
         parameters: {
             query?: never;
@@ -233,7 +253,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List the hosts of the premise allowlist.
+         * @description The latest row of each host, the one the probe reads: the greatest start of its period and then the greatest id. A host whose latest row says allowed false was withdrawn and is listed so that it can be allowed again. A tenant with no row allows no host (ADR-0053, ADR-0098, ADR-0117). Pages are by the id of that latest row, so a host that is allowed or withdrawn again moves to the top. Any role that may read the registry reads it.
+         */
+        get: operations["list_premise_hosts"];
         put?: never;
         /**
          * Allow or withdraw a host a premise probe may dial.
@@ -831,6 +855,32 @@ export interface components {
             id: string;
             host: string;
             allowed: boolean;
+        };
+        PremiseReason: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            decision_id: string;
+            premise_id: string;
+            /**
+             * Format: date-time
+             * @description When the reason was opened.
+             */
+            opened_at: string;
+            /** @description The URL the probe fetched. */
+            url: string;
+            /** @description The JSON Pointer read from the response. */
+            pointer: string;
+            /** @description What the premise expects, as stored. At most 1024 bytes. */
+            expected: string | number | boolean | Record<string, never> | unknown[] | null;
+            /** @description What the probe read, as stored, at most 1024 bytes. It comes from a public URL and is untrusted. */
+            observed: string | number | boolean | Record<string, never> | unknown[] | null;
+        };
+        PremiseReasonPage: {
+            premise_reasons: components["schemas"]["PremiseReason"][];
+        };
+        PremiseHostPage: {
+            premise_hosts: components["schemas"]["PremiseHost"][];
         };
         ExportRequest: {
             /** @description One native (age1...) or hybrid (age1pq1...) age public key. A private key, a list, a comment and a plugin recipient are 400, and the answer never quotes what was sent. */
@@ -1580,6 +1630,66 @@ export interface operations {
             409: components["responses"]["Conflict"];
             413: components["responses"]["TooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    list_premise_reasons: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                /** @description The last id of the previous page. */
+                before?: components["parameters"]["Before"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of open reasons, by id from the highest. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PremiseReasonPage"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    list_premise_hosts: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                /** @description The last id of the previous page. */
+                before?: components["parameters"]["Before"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the allowlist, by id from the highest. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PremiseHostPage"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Timeout"];

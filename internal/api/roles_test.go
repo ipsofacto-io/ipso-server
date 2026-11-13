@@ -31,6 +31,8 @@ var mayCall = func() map[string][]string {
 		"get_decision":         every,
 		"list_scopes":          every,
 		"list_waivers":         every,
+		"list_premise_reasons": every,
+		"list_premise_hosts":   every,
 		"list_proposals":       every,
 		"list_agent_proposals": every,
 		"list_check_proposals": every,

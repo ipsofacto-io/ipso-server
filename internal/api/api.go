@@ -267,6 +267,8 @@ func routes(db *sql.DB, now func() time.Time, log *slog.Logger) []route {
 		{"GET /v1/decisions/{ref}", "get_decision", authz.RegistryRead, []string{"valid", "known"}, nil, http.HandlerFunc(reg.decision)},
 		{"GET /v1/scopes", "list_scopes", authz.RegistryRead, []string{"known", "limit", "before"}, nil, http.HandlerFunc(reg.scopes)},
 		{"GET /v1/waivers", "list_waivers", authz.RegistryRead, []string{"valid", "known", "limit", "before"}, nil, http.HandlerFunc(reg.waivers)},
+		{"GET /v1/premise-reasons", "list_premise_reasons", authz.RegistryRead, []string{"limit", "before"}, nil, http.HandlerFunc(reg.premiseReasons)},
+		{"GET /v1/premise-hosts", "list_premise_hosts", authz.RegistryRead, []string{"limit", "before"}, nil, http.HandlerFunc(reg.premiseHosts)},
 		{"GET /v1/proposals", "list_proposals", authz.ProposalsRead, []string{"limit", "before"}, nil, reviews},
 		{"GET /v1/agent-proposals", "list_agent_proposals", authz.ProposalsRead, []string{"limit", "before"}, nil, reviews},
 		{"GET /v1/check-proposals", "list_check_proposals", authz.ProposalsRead, []string{"limit", "before"}, nil, reviews},
