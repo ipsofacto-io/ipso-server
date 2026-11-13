@@ -38,6 +38,7 @@ func (f *fixture) operations(t *testing.T) []operation {
 		{"list_proposals", http.MethodGet, "/v1/proposals", nil},
 		{"list_agent_proposals", http.MethodGet, "/v1/agent-proposals", nil},
 		{"list_check_proposals", http.MethodGet, "/v1/check-proposals", nil},
+		{"list_accepted_checks", http.MethodGet, "/v1/accepted-checks?repo=acme%2Fapi", nil},
 		{"audit_decisions", http.MethodGet, "/v1/audit/decisions?" + subject + "&valid=" + valid + "&known=" + known, nil},
 		{"audit_beliefs", http.MethodGet, "/v1/audit/beliefs?" + subject + "&valid=" + valid + "&then=" + at(f.before) + "&now=" + known, nil},
 		{"audit_merges", http.MethodGet, "/v1/audit/merges?" + subject + "&at=" + valid + "&known=" + known, nil},
@@ -52,7 +53,7 @@ func (f *fixture) operations(t *testing.T) []operation {
 func TestEveryOperationAsksTheRoleOfTheCaller(t *testing.T) {
 	f := newFixture(t)
 	c := newContract(t)
-	// Three subjects make 16 calls each for one tenant, past the default burst of 20.
+	// Three subjects make 17 calls each for one tenant, past the default burst of 20.
 	handler := f.handler(t, Limits{Rate: 1000, Burst: 1000})
 	operations := f.operations(t)
 	// The writes are called in writes_integration_test.go, each as every role.

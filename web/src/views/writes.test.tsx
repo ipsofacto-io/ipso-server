@@ -204,7 +204,7 @@ describe('answering a drafted check', () => {
     await u.click(await screen.findByRole('button', { name: `Approve ${CHECK}` }));
     const group = await screen.findByRole('group', { name: `Approve ${CHECK}` });
     expect(within(group).getByText(/writes no decision/)).toBeInTheDocument();
-    expect(within(group).getByText(/reaches no repository yet/)).toBeInTheDocument();
+    expect(within(group).getByText(/reaches a repository only when someone runs ipso deliver there/)).toBeInTheDocument();
     expect(posts(stub)).toHaveLength(0);
     await u.click(within(group).getByRole('button', { name: 'Approve the check' }));
     expect(await screen.findByText(`Approved ${CHECK}.`)).toBeInTheDocument();

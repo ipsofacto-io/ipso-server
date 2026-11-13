@@ -381,6 +381,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/accepted-checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the approved agent-edit checks of the decisions in force for a repository (ADR-0120).
+         * @description Resolves the decisions in force for the repository now, as a check request does, and returns the drafted checks that a person approved for them, newest first. A rejected check and one nobody answered are never listed. A check approved for a version of its decision that is not the version in force is listed with a null rego and a null rego_sha256, so a client can say that it was held and the server serves no rule that no person accepted for the decision as it stands. The answer reads the present and writes nothing. ipso deliver writes the checks into a repository.
+         */
+        get: operations["list_accepted_checks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/audit/decisions": {
         parameters: {
             query?: never;
@@ -1014,6 +1034,25 @@ export interface components {
             prompt_version: string;
             /** Format: date-time */
             captured_at: string;
+        };
+        AcceptedCheck: {
+            /**
+             * Format: uuid
+             * @description The id of the drafted check. ipso deliver names the Rego file after it.
+             */
+            id: string;
+            /** Format: uuid */
+            decision_id: string;
+            /** @description The id of the EDR file of the decision, when its body holds one that is a ULID. */
+            edr_id: string | null;
+            /** @description The version of the decision the check was drafted and approved for. */
+            decision_version: number;
+            /** @description The version of the decision in force now. */
+            version_in_force: number;
+            /** @description The stored Rego, byte for byte. Null when decision_version is not version_in_force. */
+            rego: string | null;
+            /** @description The sha256 of the rego in lowercase hex. Null when the rego is. */
+            rego_sha256: string | null;
         };
         AuditDecisions: {
             decisions: components["schemas"]["Decision"][];
@@ -1922,6 +1961,40 @@ export interface operations {
                 content: {
                     "application/json": {
                         check_proposals: components["schemas"]["CheckProposal"][];
+                    };
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    list_accepted_checks: {
+        parameters: {
+            query: {
+                /** @description A lowercase owner/name. */
+                repo: components["parameters"]["Repo"];
+                limit?: components["parameters"]["Limit"];
+                /** @description The last id of the previous page. */
+                before?: components["parameters"]["Before"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of accepted checks, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        accepted_checks: components["schemas"]["AcceptedCheck"][];
                     };
                 };
             };

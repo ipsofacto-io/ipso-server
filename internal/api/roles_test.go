@@ -36,6 +36,7 @@ var mayCall = func() map[string][]string {
 		"list_proposals":       every,
 		"list_agent_proposals": every,
 		"list_check_proposals": every,
+		"list_accepted_checks": every,
 		"audit_decisions":      auditors,
 		"audit_beliefs":        auditors,
 		"audit_merges":         auditors,
