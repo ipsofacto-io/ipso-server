@@ -2652,6 +2652,114 @@
       "type": "Synchronous/HTTP"
     },
     {
+      "description": "a request to approve a drafted check",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds a drafted check that nobody answered, and the session belongs to an approver"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "outcome": "approved"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "path": {
+            "expression": "/v1/decisions/${decisionId}/check-proposals/${checkProposalId}/approval",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          },
+          "path": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          }
+        },
+        "method": "POST",
+        "path": "/v1/decisions/4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8/check-proposals/6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c/approval"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "outcome": "approved",
+            "proposal_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.id": {
+              "type": "Uuid"
+            },
+            "$.proposal_id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.proposal_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
       "description": "a request to approve a proposal from a coding agent",
       "pending": false,
       "providerStates": [
@@ -3844,6 +3952,114 @@
       "type": "Synchronous/HTTP"
     },
     {
+      "description": "a request to reject a drafted check",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds a drafted check that nobody answered, and the session belongs to an approver"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "outcome": "rejected"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "path": {
+            "expression": "/v1/decisions/${decisionId}/check-proposals/${checkProposalId}/approval",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          },
+          "path": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          }
+        },
+        "method": "POST",
+        "path": "/v1/decisions/4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8/check-proposals/6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c/approval"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "outcome": "rejected",
+            "proposal_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.id": {
+              "type": "Uuid"
+            },
+            "$.proposal_id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.proposal_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
       "description": "a request to reject a proposal from a pull request",
       "pending": false,
       "providerStates": [
@@ -4268,6 +4484,80 @@
           }
         },
         "status": 401
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a second answer to a drafted check",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds a drafted check that was answered, and the session belongs to an approver"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "outcome": "rejected"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "path": {
+            "expression": "/v1/decisions/${decisionId}/check-proposals/${checkProposalId}/approval",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          },
+          "path": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          }
+        },
+        "method": "POST",
+        "path": "/v1/decisions/4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8/check-proposals/6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c/approval"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "error": "conflict"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": 409
       },
       "type": "Synchronous/HTTP"
     },

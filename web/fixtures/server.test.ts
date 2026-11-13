@@ -80,6 +80,43 @@ describe('the write routes of the fixtures server', () => {
   });
 });
 
+describe('the answer to a drafted check in the fixtures server', () => {
+  const CHECK = '0194f2a0-0000-7000-8000-000000000501';
+  const path = (decision: string = ids.useTls, check: string = CHECK) => `/v1/decisions/${decision}/check-proposals/${check}/approval`;
+  const queue = (state: ReturnType<typeof newFixtureState>) =>
+    (respond({ method: 'GET', url: '/v1/check-proposals', cookie }, NOW, state).body as { check_proposals: { id: string }[] }).check_proposals;
+
+  it('needs a session and a body with the outcome and nothing else', () => {
+    expect(post(path(), { outcome: 'approved' }, newFixtureState(), { cookie: '' }).reply.status).toBe(401);
+    expect(post(path(), {}).reply.status).toBe(400);
+    expect(post(path(), { outcome: 'maybe' }).reply.status).toBe(400);
+    expect(post(path(), { outcome: 'approved', approver: 'someone' }).reply.status).toBe(400);
+    expect(post(path(), { outcome: 'approved', decision: approval.decision }).reply.status).toBe(400);
+  });
+
+  it('answers 404 for a check that is not under that decision, and for one that does not exist', () => {
+    expect(post(path(ids.pinImages), { outcome: 'approved' }).reply.status).toBe(404);
+    expect(post(path(ids.useTls, '0194f2a0-0000-7000-8000-0000000009ff'), { outcome: 'rejected' }).reply.status).toBe(404);
+  });
+
+  it('records one outcome, takes the check out of the queue, and answers a second time with 409', () => {
+    const state = newFixtureState();
+    expect(queue(state).map((item) => item.id)).toEqual([CHECK]);
+    const first = post(path(), { outcome: 'approved' }, state);
+    expect(first.reply).toMatchObject({ status: 201, body: { proposal_id: CHECK, outcome: 'approved' } });
+    expect(queue(state)).toEqual([]);
+    expect(post(path(), { outcome: 'rejected' }, state).reply.status).toBe(409);
+    expect(post(path(), { outcome: 'approved' }, state).reply.status).toBe(409);
+  });
+
+  it('writes no decision and leaves the proposals alone', () => {
+    const state = newFixtureState();
+    post(path(), { outcome: 'rejected' }, state);
+    expect(state.decisions).toEqual([]);
+    expect(state.answered.has(PROPOSAL)).toBe(false);
+  });
+});
+
 describe('the export routes of the fixtures server', () => {
   const RECIPIENT = 'age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p';
   const at = (seconds: number) => new Date(NOW.getTime() + seconds * 1000);

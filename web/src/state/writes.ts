@@ -1,6 +1,6 @@
 // What the server refuses in a waiver and in a supersession, said before the request (ADR-0054, ADR-0052). The
 // server stays the authority: a value that passes here can still be refused, and the form shows that answer.
-import type { GrandfatherRequest, SupersessionRequest, WaiverRequest } from '../api/types';
+import type { CheckApprovalRequest, GrandfatherRequest, SupersessionRequest, WaiverRequest } from '../api/types';
 import { fieldToTime } from '../lib/format';
 
 export const WAIVER_MAX_DAYS = 90;
@@ -103,4 +103,9 @@ export function grandfatherRequest(form: SupersessionForm): GrandfatherRequest |
   if (form.terms === 'none') return null;
   const valid_from = fieldToTime(form.effectiveAt);
   return form.terms === 'baseline' ? { valid_from } : { valid_from, valid_until: fieldToTime(form.deadline) };
+}
+
+/** The answer to a drafted check: an outcome and nothing else, never an approver (ADR-0116, ADR-0118). */
+export function checkAnswer(outcome: CheckApprovalRequest['outcome']): CheckApprovalRequest {
+  return { outcome };
 }

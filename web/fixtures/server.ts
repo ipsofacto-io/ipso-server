@@ -1,6 +1,7 @@
 // A stand-in for the control plane, as far as the web app uses it. It keeps the rules of the real one that a
 // client can break: no session is a 401, a query key the route does not list is a 400, a list pages by id from
-// the highest, a write needs a JSON body with no key the route does not list, and a draft is answered once.
+// the highest, a write needs a JSON body with no key the route does not list, and a draft or a drafted check is
+// answered once.
 // `respond` takes the state of its writes as an argument, so a test starts from nothing and `npm run fixtures`
 // keeps one state for as long as it runs. The role policy is not played here: every person may write.
 import type { Decision, Waiver } from '../src/api/types.ts';
@@ -18,7 +19,7 @@ export interface FixtureRequest {
 
 /** What the writes of one run changed. */
 export interface FixtureState {
-  /** The ids of the drafts a person answered. An answered draft leaves its queue. */
+  /** The ids of the drafts and drafted checks a person answered. An answered one leaves its queue. */
   answered: Set<string>;
   decisions: Decision[];
   waivers: Waiver[];
@@ -176,6 +177,21 @@ function write(request: FixtureRequest, path: string, now: Date, state: FixtureS
     return json(201, { id: fresh(state), proposal_id: id, outcome, decision_id: decisionId });
   }
 
+  // The answer to a drafted check (ADR-0116): an outcome and nothing else, under the decision the check is for.
+  const checkAnswer = /^\/v1\/decisions\/([^/]+)\/check-proposals\/([^/]+)\/approval$/.exec(path);
+  if (checkAnswer) {
+    const decisionId = decodeURIComponent(checkAnswer[1] ?? '');
+    const id = decodeURIComponent(checkAnswer[2] ?? '');
+    const parsed = parse(request, ['outcome']);
+    if (!parsed.ok) return parsed.reply;
+    const { outcome } = parsed.fields;
+    if (outcome !== 'approved' && outcome !== 'rejected') return bad;
+    if (!checkProposals(now).some((item) => item.id === id && item.decision_id === decisionId)) return error(404, 'not found');
+    if (state.answered.has(id)) return error(409, 'conflict');
+    state.answered.add(id);
+    return json(201, { id: fresh(state), proposal_id: id, outcome });
+  }
+
   if (path === '/v1/exports') {
     const parsed = parse(request, ['recipient']);
     if (!parsed.ok) return parsed.reply;
@@ -300,7 +316,7 @@ export function respond(request: FixtureRequest, now: Date = new Date(), state: 
   if (path === '/v1/waivers') return allow(...TIMES, ...PAGED) ?? json(200, { ...echo, waivers: page([...waivers(now), ...state.waivers], query) });
   if (path === '/v1/proposals') return allow(...PAGED) ?? json(200, { proposals: page(proposals(now).filter((p) => !state.answered.has(p.id)), query) });
   if (path === '/v1/agent-proposals') return allow(...PAGED) ?? json(200, { agent_proposals: page(agentProposals(now).filter((p) => !state.answered.has(p.id)), query) });
-  if (path === '/v1/check-proposals') return allow(...PAGED) ?? json(200, { check_proposals: page(checkProposals(now), query) });
+  if (path === '/v1/check-proposals') return allow(...PAGED) ?? json(200, { check_proposals: page(checkProposals(now).filter((p) => !state.answered.has(p.id)), query) });
   if (path === '/v1/verdicts') {
     const refused = allow('repo', 'decision', ...PAGED);
     if (refused) return refused;

@@ -33,6 +33,9 @@ export type SupersessionRequest = Schemas['SupersessionRequest'];
 export type Supersession = Schemas['Supersession'];
 export type GrandfatherRequest = Schemas['GrandfatherRequest'];
 export type GrandfatherPeriod = Schemas['GrandfatherPeriod'];
+// The answer to a drafted check names an outcome and writes no decision (ADR-0116, ADR-0118).
+export type CheckApprovalRequest = Schemas['CheckApprovalRequest'];
+export type CheckApproval = Schemas['CheckApproval'];
 
 // The export of the tenant (ADR-0111, ADR-0115).
 export type Export = Schemas['Export'];
