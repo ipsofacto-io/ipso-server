@@ -16,6 +16,7 @@ import { DecisionDetailView } from './views/DecisionDetail';
 import { DecisionsView } from './views/Decisions';
 import { ExportView } from './views/Export';
 import { InboxView } from './views/Inbox';
+import { PremisesView } from './views/Premises';
 import { RecordSupersessionView } from './views/RecordSupersession';
 import { RecordWaiverView } from './views/RecordWaiver';
 import { ScopesView } from './views/Scopes';
@@ -42,6 +43,7 @@ export function AppRoutes() {
         <Route path="inbox" element={<InboxView />} />
         <Route path="waivers" element={<WaiversView />} />
         <Route path="waivers/new" element={<RecordWaiverView />} />
+        <Route path="premises" element={<PremisesView />} />
         <Route path="supersessions/new" element={<RecordSupersessionView />} />
         <Route path="export" element={<ExportView />} />
         <Route path="audit" element={<AuditIndexView />} />

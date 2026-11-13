@@ -109,7 +109,7 @@ describe('the shell', () => {
     expect(await screen.findByRole('heading', { name: 'Not found' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Skip to content' })).toHaveAttribute('href', '#main');
     const menu = screen.getByRole('navigation', { name: 'Main' });
-    expect(Array.from(menu.querySelectorAll('a')).map((a) => a.textContent)).toEqual(['Decisions', 'Scopes', 'Inbox', 'Waivers', 'Audit']);
+    expect(Array.from(menu.querySelectorAll('a')).map((a) => a.textContent)).toEqual(['Decisions', 'Scopes', 'Inbox', 'Waivers', 'Premises', 'Audit']);
   });
 
   it('sends the root to the registry', async () => {

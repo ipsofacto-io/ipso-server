@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 
 import { calls } from '../api/calls';
 import { useResource, useWrite } from '../api/hooks';
 import type { ApprovalRequest, CheckApprovalRequest } from '../api/types';
 import { Button, TextField } from '../brand';
+import { Confirm, useActionsFocus, type Report } from '../components/Confirm';
 import { ErrorNotice } from '../components/ErrorNotice';
 import { Loading } from '../components/Loading';
-import { useFocusOnMount } from '../components/useFocusOnMount';
 import { ScopePicker } from '../components/ScopePicker';
 import { SelectField } from '../components/SelectField';
 import type { Json } from '../lib/json';
@@ -18,13 +18,6 @@ import { checkAnswer } from '../state/writes';
 import { scopesForLabels } from './Scopes';
 
 export type Queue = 'proposals' | 'agent-proposals';
-
-/** What a queue says above its cards after a write, and the reason it reads the queue again. */
-export interface Report {
-  tone: 'info' | 'error';
-  title: string;
-  body?: ReactNode;
-}
 
 type Mode = 'idle' | 'approve' | 'reject';
 
@@ -91,79 +84,11 @@ function RejectConfirm({ queue, id, title, report, onCancel }: { queue: Queue; i
       variant="danger"
       send={() => decide(queue, id, rejection)}
       success={{ tone: 'info', title: `Rejected "${title}".`, body: 'It left the queue.' }}
+      stale={STALE}
       report={report}
       onCancel={onCancel}
     />
   );
-}
-
-/**
- * One confirmation and one request, for an answer that cannot be undone. A 409 or a 404 means that the draft was
- * answered or removed under the person, so the queue reads again. Any other refusal stays here, in words. The group
- * takes the focus, because the button that opened it is gone.
- */
-function Confirm({
-  label,
-  question,
-  button,
-  busy,
-  variant,
-  send,
-  success,
-  report,
-  onCancel,
-}: {
-  label: string;
-  question: string;
-  button: string;
-  busy: string;
-  variant: 'primary' | 'danger';
-  send(): Promise<unknown>;
-  success: Report;
-  report(report: Report): void;
-  onCancel(): void;
-}) {
-  const write = useWrite(send);
-  const group = useFocusOnMount<HTMLDivElement>();
-
-  async function answer() {
-    const outcome = await write.run();
-    if (outcome.status === 'done') report(success);
-    else if (outcome.status === 'failed' && (outcome.error.status === 409 || outcome.error.status === 404)) report(STALE);
-  }
-
-  return (
-    <div ref={group} tabIndex={-1} className="review" role="group" aria-label={label}>
-      <p>{question}</p>
-      {write.status === 'failed' ? <ErrorNotice error={write.error} /> : null}
-      <div className="actions">
-        <Button variant={variant} size="sm" onClick={answer} disabled={write.status === 'sending'}>
-          {write.status === 'sending' ? busy : button}
-        </Button>
-        <Button variant="quiet" size="sm" onClick={onCancel} disabled={write.status === 'sending'}>
-          Cancel
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-/** Where the focus goes after a Cancel: the confirmation that held it is gone, so it returns to the buttons. */
-function useActionsFocus(idle: boolean) {
-  const actions = useRef<HTMLDivElement>(null);
-  const cancelled = useRef(false);
-  useEffect(() => {
-    if (idle && cancelled.current) {
-      cancelled.current = false;
-      actions.current?.querySelector('button')?.focus();
-    }
-  }, [idle]);
-  return {
-    actions,
-    cancel: () => {
-      cancelled.current = true;
-    },
-  };
 }
 
 function ApproveForm({
@@ -357,6 +282,7 @@ export function CheckActions({ decisionId, id, title, report }: { decisionId: st
         variant="primary"
         send={send('approved')}
         success={{ tone: 'info', title: `Approved ${title}.`, body: 'It left the queue. The answer is recorded, and the check reaches no repository yet.' }}
+        stale={STALE}
         report={report}
         onCancel={close}
       />
@@ -372,6 +298,7 @@ export function CheckActions({ decisionId, id, title, report }: { decisionId: st
         variant="danger"
         send={send('rejected')}
         success={{ tone: 'info', title: `Rejected ${title}.`, body: 'It left the queue.' }}
+        stale={STALE}
         report={report}
         onCancel={close}
       />

@@ -1,11 +1,11 @@
 // A stand-in for the control plane, as far as the web app uses it. It keeps the rules of the real one that a
 // client can break: no session is a 401, a query key the route does not list is a 400, a list pages by id from
-// the highest, a write needs a JSON body with no key the route does not list, and a draft or a drafted check is
-// answered once.
+// the highest, a write needs a JSON body with no key the route does not list, a draft or a drafted check is
+// answered once, and a review reason is cleared once.
 // `respond` takes the state of its writes as an argument, so a test starts from nothing and `npm run fixtures`
 // keeps one state for as long as it runs. The role policy is not played here: every person may write.
-import type { Decision, Waiver } from '../src/api/types.ts';
-import { agentProposals, checkProposals, decisions, ids, proposals, scopes, verdicts, waivers } from './data.ts';
+import type { Decision, PremiseHost, Waiver } from '../src/api/types.ts';
+import { agentProposals, checkProposals, decisions, ids, premiseHostRows, premiseReasons, proposals, scopes, verdicts, waivers } from './data.ts';
 
 export interface FixtureRequest {
   method: string;
@@ -30,6 +30,10 @@ export interface FixtureState {
   sequence: number;
   /** The one export the tenant holds, as the stand-in makes it. */
   held: FixtureExport | null;
+  /** The ids of the review reasons a person cleared. A cleared reason leaves the list. */
+  cleared: Set<string>;
+  /** The rows added to the allowlist, after those of the data. The latest row of a host decides. */
+  hosts: PremiseHost[];
 }
 
 /** An export asked for through POST /v1/exports. Its state follows the time since it was asked. */
@@ -41,7 +45,7 @@ export interface FixtureExport {
 }
 
 export function newFixtureState(): FixtureState {
-  return { answered: new Set(), decisions: [], waivers: [], superseded: new Set([ids.legacyFtp]), terms: new Set(), sequence: 1000, held: null };
+  return { answered: new Set(), decisions: [], waivers: [], superseded: new Set([ids.legacyFtp]), terms: new Set(), sequence: 1000, held: null, cleared: new Set(), hosts: [] };
 }
 
 export interface FixtureReply {
@@ -73,6 +77,10 @@ function page<T extends { id: string }>(items: T[], query: URLSearchParams): T[]
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+// A host of the allowlist is a DNS name in lowercase ASCII and never an address (ADR-0098). This is the rule of the
+// server, written out again on purpose: the app's own check (src/state/premises.ts) is tested against it.
+const HOST = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
+const NUMERIC_HOST = /^[0-9.]+$/;
 const MAX_BODY = 1 << 20;
 const WAIVER_MAX = 90 * 24 * 60 * 60 * 1000;
 
@@ -141,6 +149,16 @@ function parse(request: FixtureRequest, allowed: string[]): Parsed {
   return { ok: true, fields: value };
 }
 
+/** The latest row of each host, the one a probe reads: the greatest id, as a row written later has a greater one. */
+function latestHosts(rows: PremiseHost[]): PremiseHost[] {
+  const latest = new Map<string, PremiseHost>();
+  for (const row of rows) {
+    const held = latest.get(row.host);
+    if (!held || held.id < row.id) latest.set(row.host, row);
+  }
+  return [...latest.values()];
+}
+
 const fresh = (state: FixtureState): string => `0194f2a0-0000-7000-8000-${String(++state.sequence).padStart(12, '0')}`;
 
 function write(request: FixtureRequest, path: string, now: Date, state: FixtureState): FixtureReply {
@@ -190,6 +208,33 @@ function write(request: FixtureRequest, path: string, now: Date, state: FixtureS
     if (state.answered.has(id)) return error(409, 'conflict');
     state.answered.add(id);
     return json(201, { id: fresh(state), proposal_id: id, outcome });
+  }
+
+  // The clearance of a review reason (ADR-0109): an empty object, under the decision and the premise the reason is on.
+  const clearance = /^\/v1\/decisions\/([^/]+)\/premises\/([^/]+)\/clearance$/.exec(path);
+  if (clearance) {
+    const decisionId = decodeURIComponent(clearance[1] ?? '');
+    const premiseId = decodeURIComponent(clearance[2] ?? '');
+    if (!isUuid(decisionId) || !SLUG.test(premiseId) || premiseId.length > 128) return bad;
+    const parsed = parse(request, []);
+    if (!parsed.ok) return parsed.reply;
+    const open = premiseReasons(now).find((reason) => reason.decision_id === decisionId && reason.premise_id === premiseId && !state.cleared.has(reason.id));
+    if (!open) return error(404, 'not found');
+    state.cleared.add(open.id);
+    return json(201, { id: fresh(state), decision_id: decisionId, premise_id: premiseId });
+  }
+
+  // An allow or a withdraw: one more row of the allowlist, and the latest row of a host decides.
+  if (path === '/v1/premise-hosts') {
+    const parsed = parse(request, ['host', 'allowed']);
+    if (!parsed.ok) return parsed.reply;
+    const { host, allowed } = parsed.fields;
+    if (typeof host !== 'string' || typeof allowed !== 'boolean') return bad;
+    const name = host.toLowerCase();
+    if (name.length < 1 || name.length > 253 || !HOST.test(name) || NUMERIC_HOST.test(name)) return bad;
+    const row: PremiseHost = { id: fresh(state), host: name, allowed };
+    state.hosts.push(row);
+    return json(201, row);
   }
 
   if (path === '/v1/exports') {
@@ -317,6 +362,10 @@ export function respond(request: FixtureRequest, now: Date = new Date(), state: 
   if (path === '/v1/proposals') return allow(...PAGED) ?? json(200, { proposals: page(proposals(now).filter((p) => !state.answered.has(p.id)), query) });
   if (path === '/v1/agent-proposals') return allow(...PAGED) ?? json(200, { agent_proposals: page(agentProposals(now).filter((p) => !state.answered.has(p.id)), query) });
   if (path === '/v1/check-proposals') return allow(...PAGED) ?? json(200, { check_proposals: page(checkProposals(now).filter((p) => !state.answered.has(p.id)), query) });
+  if (path === '/v1/premise-reasons') {
+    return allow(...PAGED) ?? json(200, { premise_reasons: page(premiseReasons(now).filter((reason) => !state.cleared.has(reason.id)), query) });
+  }
+  if (path === '/v1/premise-hosts') return allow(...PAGED) ?? json(200, { premise_hosts: page(latestHosts([...premiseHostRows, ...state.hosts]), query) });
   if (path === '/v1/verdicts') {
     const refused = allow('repo', 'decision', ...PAGED);
     if (refused) return refused;

@@ -37,6 +37,14 @@ export type GrandfatherPeriod = Schemas['GrandfatherPeriod'];
 export type CheckApprovalRequest = Schemas['CheckApprovalRequest'];
 export type CheckApproval = Schemas['CheckApproval'];
 
+// The premise review reasons and the allowlist (ADR-0109, ADR-0117, ADR-0119). The expected and the observed value are
+// any JSON value, and the observed one came from a public URL: the app only shows them as text.
+export type PremiseReason = Omit<Schemas['PremiseReason'], 'expected' | 'observed'> & { expected: unknown; observed: unknown };
+export type PremiseHost = Schemas['PremiseHost'];
+export type PremiseHostRequest = Schemas['PremiseHostRequest'];
+export type Clearance = Schemas['Clearance'];
+export type ClearanceRequest = Schemas['ClearanceRequest'];
+
 // The export of the tenant (ADR-0111, ADR-0115).
 export type Export = Schemas['Export'];
 export type ExportRequest = Schemas['ExportRequest'];

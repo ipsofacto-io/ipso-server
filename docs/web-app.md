@@ -1,6 +1,6 @@
 # Web app
 
-The web app is the browser view of the control plane: the registry, the review queues, the waivers and the audit questions, and the actions a person takes on them: approve or reject a draft or a drafted check, record a waiver, record a supersession. An admin also starts and downloads the export of the tenant. It is a React, Vite and TypeScript single-page app in [web/](../web), built into the `ipso-server` binary and served by the `api` role ([ADR-0106](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0106-web-app-stack-and-serving.md)). It looks like the rest of ipso because it uses the brand kit as its visual system ([ADR-0107](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0107-brand-kit-visual-system.md)).
+The web app is the browser view of the control plane: the registry, the review queues, the waivers and the audit questions, and the actions a person takes on them: approve or reject a draft or a drafted check, record a waiver, record a supersession, clear a premise review reason. An admin also changes the premise allowlist and starts and downloads the export of the tenant. It is a React, Vite and TypeScript single-page app in [web/](../web), built into the `ipso-server` binary and served by the `api` role ([ADR-0106](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0106-web-app-stack-and-serving.md)). It looks like the rest of ipso because it uses the brand kit as its visual system ([ADR-0107](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0107-brand-kit-visual-system.md)).
 
 ## What it shows
 
@@ -11,23 +11,26 @@ The web app is the browser view of the control plane: the registry, the review q
 | `/scopes` | The scope tree. |
 | `/inbox` | The three review queues: decisions a model found in pull requests, decisions your coding agents proposed, and checks drafted for a decision. A draft of the first two has Approve and Reject, and so has a drafted check, which records the answer only. |
 | `/waivers` | The waivers in force, in words: "Expires in 3 days". |
+| `/premises` | The open review reasons of the premises, each with the fail that opened it (the URL, the pointer, the expected and the observed value, shown as text), and the hosts a premise probe may dial. A reason has Clear, and a host has Withdraw or Allow again, with a field to allow a host. |
 | `/waivers/new` | The form to record a waiver. `?decision=` names the decision. |
 | `/supersessions/new` | The form to record a supersession and the grandfather terms of the new decision. `?from=` names the decision that ends. |
 | `/export` | The export of the tenant, for an admin: a field for one age public key, the state of the export (pending, running, ready, failed) and its expiry, and the download of the archive once it is ready. A person without the role reads the refusal and no form. |
 | `/audit` | The five questions of section 2.3: what applied, what changed, at a merge, supersessions, and waivers ending soon. The fields are in the address, so an answer can be shared. |
 | `/signin` | The sign-in. Any call the server refuses with 401 ends here. |
 
-Importing decisions and compiling them into checks (UC1 and UC2) have no API route, so they stay in the CLI. Uploading a baseline's fingerprints, delivering an accepted check to a repository, and creating a scope or changing the role of a person are not in the app either.
+Importing decisions and compiling them into checks (UC1 and UC2) have no API route, so they stay in the CLI. Uploading a baseline's fingerprints, delivering an accepted check to a repository, running a premise probe on demand, and creating a scope or changing the role of a person are not in the app either.
 
 ## Taking an action
 
-The actions are the write routes of [ADR-0109](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0109-control-plane-write-routes.md), and the app follows [ADR-0110](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0110-web-app-write-actions.md) and, for a drafted check, [ADR-0118](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0118-web-app-check-answer.md).
+The actions are the write routes of [ADR-0109](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0109-control-plane-write-routes.md), and the app follows [ADR-0110](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0110-web-app-write-actions.md) for a drafted check, [ADR-0118](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0118-web-app-check-answer.md), and for the premises page, [ADR-0119](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0119-web-app-premises.md).
 
 | Action | Where | Route | Who |
 | --- | --- | --- | --- |
 | Approve a draft | A card of the inbox | `POST /v1/proposals/{id}/approval` or `POST /v1/agent-proposals/{id}/approval` | Approver or decision owner, over every scope the decision names |
 | Reject a draft | A card of the inbox | the same, with `{"outcome":"rejected"}` | Approver or decision owner over the whole tenant |
 | Approve or reject a drafted check | A card of the inbox | `POST /v1/decisions/{decisionID}/check-proposals/{id}/approval` | Approver or decision owner, over every scope of the decision the check is for, for either outcome |
+| Clear a premise review reason | A card of `/premises` | `POST /v1/decisions/{decisionID}/premises/{premiseID}/clearance` with `{}` | Decision owner, over every scope of the decision |
+| Allow or withdraw a host | `/premises` | `POST /v1/premise-hosts` with `{"host":...,"allowed":...}` | Admin |
 | Record a waiver | `/waivers/new` | `POST /v1/waivers` | Approver or decision owner over the scope of the waiver |
 | Record a supersession | `/supersessions/new` | `POST /v1/supersessions`, then `POST /v1/decisions/{id}/grandfather-period` for the new decision | Decision owner over every scope of both decisions |
 
@@ -36,6 +39,8 @@ A coding agent cannot take any of these: the role policy refuses it before the s
 An approval writes the decision as an EDR with all sixteen keys of draft 0.2, so a verdict, the detail view and the MCP tools read it the way they read any other. The person gives the owner (`team:name`), the slug, the dates, the criticality, a source link and the scopes. The draft's statement and rationale have no key in the EDR and stay with the proposal. A waiver lasts at most 90 days ([ADR-0054](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0054-waivers-with-expiry.md)), and the form says so before it sends. A supersession closes the old decision at the instant given, and no route removes it, so the form says that above the button. The grandfather terms say how long a recorded baseline counts: none, no end, or a deadline. When the supersession is recorded and the terms are refused, the page says so and sends only the terms again.
 
 A drafted check has no form, because the answer is an outcome and writes no decision: each outcome is one confirmation and one request, and the confirmation says that the answer is recorded once. An approved check reaches no repository yet (IPSO-154), and a rejected rule is not drafted again for the same version of the decision ([ADR-0116](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0116-check-proposal-approval.md), ADR-0118).
+
+The premises page reads `GET /v1/premise-reasons` and `GET /v1/premise-hosts` (ADR-0117), which every role may read, so the menu always has the entry. A reason is shown with the fail that opened it as the evaluation stored it, and the observed value came from a public URL, so it is shown as text and never as markup. A clearance is one confirmation and one request, and it records that an owner looked: it does not change the decision, and a later fail opens a new reason. An allow and a withdraw are one request each with no confirmation, because each undoes the other, and a withdrawn host stays listed so it can be allowed again. The field checks a host the way the server does (a DNS name in lowercase ASCII, in punycode when it is not, never an address) before it sends, and the form and the host actions are shown only when the read of the allowlist was not refused (ADR-0119).
 
 Every action sends only the body. The tenant, the principal and the approver come from the session cookie, and a key for any of them is a 400 (ADR-0099, ADR-0109).
 
@@ -83,7 +88,7 @@ npm test
 npm run build        # writes internal/webapp/dist/app, which go build embeds
 ```
 
-`npm run fixtures` serves records from [web/fixtures](../web/fixtures) with the rules of the real API that a client can break (a 401 without a session, a 400 for a query key a route does not list or a body key it does not list, a 90-day limit on a waiver, a draft or a drafted check answered once). A write changes what it serves until it stops, so an answered draft or drafted check leaves its queue. It does not play the role policy: every person may write there. It plays the export routes too: an export asked for there is pending for a few seconds, then running, then ready, and the download is a small stand-in file, so the whole flow can be seen at `/export`. Opening `/auth/login/dex` signs in there, and `POST /auth/logout` signs out. `npm run dev` needs a session on the stack: sign in at `http://localhost:8080/auth/login/dex` once ([local-stack.md](local-stack.md)), and `http://localhost:5173` shares the cookie, because a cookie does not name a port.
+`npm run fixtures` serves records from [web/fixtures](../web/fixtures) with the rules of the real API that a client can break (a 401 without a session, a 400 for a query key a route does not list or a body key it does not list, a 90-day limit on a waiver, a draft or a drafted check answered once, a review reason cleared once, a host that must be a DNS name). A write changes what it serves until it stops, so an answered draft or drafted check leaves its queue and a cleared reason leaves the premises page. It does not play the role policy: every person may write there. It plays the export routes too: an export asked for there is pending for a few seconds, then running, then ready, and the download is a small stand-in file, so the whole flow can be seen at `/export`. Opening `/auth/login/dex` signs in there, and `POST /auth/logout` signs out. `npm run dev` needs a session on the stack: sign in at `http://localhost:8080/auth/login/dex` once ([local-stack.md](local-stack.md)), and `http://localhost:5173` shares the cookie, because a cookie does not name a port.
 
 `npm ci` runs no install script (`web/.npmrc`). The types of the API are generated from [api/openapi.yaml](../api/openapi.yaml) into `web/src/api/schema.d.ts` with `npm run api:types`, and `npm run api:check` fails when the committed file is behind the document.
 

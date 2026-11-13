@@ -117,6 +117,93 @@ describe('the answer to a drafted check in the fixtures server', () => {
   });
 });
 
+describe('the premise routes of the fixtures server', () => {
+  const ADMIN_PORT = ids.adminPort;
+  const clearancePath = (decision: string = ADMIN_PORT, premise = 'bastion-exists') => `/v1/decisions/${decision}/premises/${premise}/clearance`;
+  const get = (path: string, state = newFixtureState(), signedIn = true) => respond({ method: 'GET', url: path, cookie: signedIn ? cookie : '' }, NOW, state);
+  const reasons = (state: ReturnType<typeof newFixtureState>) => (get('/v1/premise-reasons', state).body as { premise_reasons: { id: string; premise_id: string }[] }).premise_reasons;
+  const hosts = (state: ReturnType<typeof newFixtureState>) => (get('/v1/premise-hosts', state).body as { premise_hosts: { id: string; host: string; allowed: boolean }[] }).premise_hosts;
+
+  it('needs a session and no query key but the paging', () => {
+    expect(get('/v1/premise-reasons', newFixtureState(), false).status).toBe(401);
+    expect(get('/v1/premise-hosts', newFixtureState(), false).status).toBe(401);
+    expect(post(clearancePath(), {}, newFixtureState(), { cookie: '' }).reply.status).toBe(401);
+    expect(post('/v1/premise-hosts', { host: 'a.example.com', allowed: true }, newFixtureState(), { cookie: '' }).reply.status).toBe(401);
+    for (const path of ['/v1/premise-reasons', '/v1/premise-hosts']) {
+      expect(get(`${path}?valid=2026-11-07T00:00:00Z`).status, path).toBe(400);
+      expect(get(`${path}?known=2026-11-07T00:00:00Z`).status, path).toBe(400);
+      expect(get(`${path}?limit=1&limit=2`).status, path).toBe(400);
+      expect(get(`${path}?limit=1`).status, path).toBe(200);
+    }
+  });
+
+  it('lists the open reasons from the highest id, and pages by id', () => {
+    const state = newFixtureState();
+    expect(reasons(state).map((reason) => reason.premise_id)).toEqual(['tls-min-version', 'bastion-exists']);
+    const first = (get('/v1/premise-reasons?limit=1').body as { premise_reasons: { id: string }[] }).premise_reasons;
+    expect(first).toHaveLength(1);
+    const next = (get(`/v1/premise-reasons?limit=1&before=${first[0]?.id}`).body as { premise_reasons: { premise_id: string }[] }).premise_reasons;
+    expect(next.map((reason) => reason.premise_id)).toEqual(['bastion-exists']);
+  });
+
+  it('lists the latest row of each host, a withdrawn host included', () => {
+    expect(hosts(newFixtureState()).map(({ host, allowed }) => ({ host, allowed }))).toEqual([
+      { host: 'legacy.example.com', allowed: false },
+      { host: 'status.example.com', allowed: true },
+    ]);
+  });
+
+  it('wants a clearance to be an empty object, under a decision and a premise id that are well formed', () => {
+    expect(post(clearancePath(), { approver: 'someone' }).reply.status).toBe(400);
+    expect(post(clearancePath(), { tenant: 'a' }).reply.status).toBe(400);
+    expect(post(clearancePath(), {}, newFixtureState(), { contentType: 'text/plain' }).reply.status).toBe(415);
+    expect(post(clearancePath('not-a-uuid'), {}).reply.status).toBe(400);
+    expect(post(clearancePath(ADMIN_PORT, 'Not_Kebab'), {}).reply.status).toBe(400);
+  });
+
+  it('answers 404 for a premise with no open reason, and for a premise of another decision', () => {
+    expect(post(clearancePath(ADMIN_PORT, 'tls-min-version'), {}).reply.status).toBe(404);
+    expect(post(clearancePath(ids.useTls, 'bastion-exists'), {}).reply.status).toBe(404);
+    expect(post(clearancePath(ids.useTls, 'unknown-premise'), {}).reply.status).toBe(404);
+  });
+
+  it('clears a reason once and takes it out of the list', () => {
+    const state = newFixtureState();
+    const first = post(clearancePath(), {}, state);
+    expect(first.reply).toMatchObject({ status: 201, body: { decision_id: ADMIN_PORT, premise_id: 'bastion-exists' } });
+    expect(reasons(state).map((reason) => reason.premise_id)).toEqual(['tls-min-version']);
+    expect(post(clearancePath(), {}, state).reply.status).toBe(404);
+  });
+
+  it('wants a host and a flag and nothing else', () => {
+    expect(post('/v1/premise-hosts', { host: 'a.example.com' }).reply.status).toBe(400);
+    expect(post('/v1/premise-hosts', { allowed: true }).reply.status).toBe(400);
+    expect(post('/v1/premise-hosts', { host: 'a.example.com', allowed: 'yes' }).reply.status).toBe(400);
+    expect(post('/v1/premise-hosts', { host: 'a.example.com', allowed: true, approver: 'x' }).reply.status).toBe(400);
+  });
+
+  it('holds a host to a DNS name and never an address', () => {
+    for (const host of ['10.0.0.1', '1.2', 'localhost', 'https://a.example.com', 'a.example.com:443', 'a.example.com/x', 'bücher.example', 'a..example.com', '-a.example.com', '']) {
+      expect(post('/v1/premise-hosts', { host, allowed: true }).reply.status, host).toBe(400);
+    }
+    expect(post('/v1/premise-hosts', { host: `${'a'.repeat(64)}.example.com`, allowed: true }).reply.status).toBe(400);
+    expect(post('/v1/premise-hosts', { host: 'xn--bcher-kva.example', allowed: true }).reply.status).toBe(201);
+  });
+
+  it('lowercases a host, appends a row, and lets the latest row decide', () => {
+    const state = newFixtureState();
+    const withdrawn = post('/v1/premise-hosts', { host: 'Status.Example.COM', allowed: false }, state);
+    expect(withdrawn.reply).toMatchObject({ status: 201, body: { host: 'status.example.com', allowed: false } });
+    expect(hosts(state).map(({ host, allowed }) => ({ host, allowed }))).toEqual([
+      { host: 'status.example.com', allowed: false },
+      { host: 'legacy.example.com', allowed: false },
+    ]);
+    post('/v1/premise-hosts', { host: 'status.example.com', allowed: true }, state);
+    expect(hosts(state)[0]).toMatchObject({ host: 'status.example.com', allowed: true });
+    expect(hosts(state)).toHaveLength(2);
+  });
+});
+
 describe('the export routes of the fixtures server', () => {
   const RECIPIENT = 'age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p';
   const at = (seconds: number) => new Date(NOW.getTime() + seconds * 1000);
