@@ -205,6 +205,73 @@ func (h *registryRoutes) waivers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"valid": validAt, "known": knownAt, "waivers": out})
 }
 
+// listOf checks the tenant and reads the page of a list route that takes no time (ADR-0117).
+func listOf(w http.ResponseWriter, r *http.Request) (uuid.UUID, registry.Page, bool) {
+	tenant, ok := tenantOf(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return uuid.Nil, registry.Page{}, false
+	}
+	page, ok := query{values: r.URL.Query()}.page()
+	if !ok {
+		writeError(w, http.StatusBadRequest, errInvalidQuery)
+		return uuid.Nil, registry.Page{}, false
+	}
+	return tenant, page, true
+}
+
+type premiseReasonJSON struct {
+	ID         uuid.UUID       `json:"id"`
+	DecisionID uuid.UUID       `json:"decision_id"`
+	PremiseID  string          `json:"premise_id"`
+	OpenedAt   time.Time       `json:"opened_at"`
+	URL        string          `json:"url"`
+	Pointer    string          `json:"pointer"`
+	Expected   json.RawMessage `json:"expected"`
+	Observed   json.RawMessage `json:"observed"`
+}
+
+// premiseReasons lists the review reasons no clearance has closed, with the fail that opened each (ADR-0117).
+// It reads the present and takes no time. The answer holds what the evaluation stored and never the body of the
+// probe response.
+func (h *registryRoutes) premiseReasons(w http.ResponseWriter, r *http.Request) {
+	tenant, page, ok := listOf(w, r)
+	if !ok {
+		return
+	}
+	reasons, err := registry.OpenPremiseReasons(r.Context(), h.db, tenant, page)
+	if err != nil {
+		writeRegistryError(w, err)
+		return
+	}
+	out := make([]premiseReasonJSON, 0, len(reasons))
+	for _, reason := range reasons {
+		out = append(out, premiseReasonJSON{
+			ID: reason.ID, DecisionID: reason.DecisionID, PremiseID: reason.PremiseID, OpenedAt: reason.OpenedAt,
+			URL: reason.URL, Pointer: reason.Pointer, Expected: reason.Expected, Observed: reason.Observed,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"premise_reasons": out})
+}
+
+// premiseHosts lists the allowlist as the probe reads it: the latest row of each host (ADR-0117).
+func (h *registryRoutes) premiseHosts(w http.ResponseWriter, r *http.Request) {
+	tenant, page, ok := listOf(w, r)
+	if !ok {
+		return
+	}
+	hosts, err := registry.PremiseHosts(r.Context(), h.db, tenant, page)
+	if err != nil {
+		writeRegistryError(w, err)
+		return
+	}
+	out := make([]hostJSON, 0, len(hosts))
+	for _, host := range hosts {
+		out = append(out, hostJSON{ID: host.ID, Host: host.Host, Allowed: host.Allowed})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"premise_hosts": out})
+}
+
 // read checks the tenant of a GET route and reads its times. A route with no valid time leaves it
 // zero.
 func (h *registryRoutes) read(w http.ResponseWriter, r *http.Request, hasValid bool) (uuid.UUID, query, time.Time, time.Time, bool) {

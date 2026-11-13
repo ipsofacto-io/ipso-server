@@ -535,10 +535,11 @@ func TestLoggedSubjectIsOneBoundedLine(t *testing.T) {
 
 // A worker evaluation is a system action (ADR-0053, ADR-0098). No route runs a probe or writes an
 // evaluation or a review reason, and no route writes a waiver notice, which the hourly sweep records. A person
-// clears a reason and edits the allowlist (ADR-0109), and those two routes are the only ones named for a
-// premise. A route named for another of these is a decision to make, so this test fails first.
+// clears a reason and edits the allowlist (ADR-0109), and a person reads the open reasons and the allowlist
+// (ADR-0117). Those four routes are the only ones named for a premise. A route named for another of these is a
+// decision to make, so this test fails first.
 func TestNoRouteRunsOrRecordsAnEvaluation(t *testing.T) {
-	people := map[string]bool{"clear_premise_reason": true, "allow_premise_host": true}
+	people := map[string]bool{"clear_premise_reason": true, "allow_premise_host": true, "list_premise_reasons": true, "list_premise_hosts": true}
 	for _, rt := range routes(nil, time.Now, nil) {
 		named := strings.ToLower(rt.pattern + " " + rt.op)
 		for _, word := range []string{"probe", "evaluation", "notice"} {

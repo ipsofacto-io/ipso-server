@@ -30,7 +30,7 @@ docker compose exec -e PGPASSWORD="$IPSO_APP_PASSWORD" postgres psql --host=127.
   --command="SELECT id, kind, state, finalized_at FROM river.river_job ORDER BY id DESC LIMIT 5"
 ```
 
-A premise is probed only on a host the tenant has allowed, and the allowlist is empty here, so a premise on a decision is recorded as an `error` until you add its host. There is no route for that yet. Insert a row as the application role, with the tenant set for the transaction. A premise that was recorded as an error is probed again when its `every` days have passed:
+A premise is probed only on a host the tenant has allowed, and the allowlist is empty here, so a premise on a decision is recorded as an `error` until you add its host. The seeded admin allows a host with `POST /v1/premise-hosts` and reads the list back with `GET /v1/premise-hosts`, and a person finds the open review reasons with `GET /v1/premise-reasons` ([ADR-0117](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0117-premise-reads.md)). Without a token, insert a row as the application role, with the tenant set for the transaction. A premise that was recorded as an error is probed again when its `every` days have passed:
 
 ```sh
 set -a; . ./.env; set +a

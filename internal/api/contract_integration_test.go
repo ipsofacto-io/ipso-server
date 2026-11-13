@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -97,6 +99,7 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 	handler := f.handler(t, Limits{})
 	token := f.token(t, personA)
 	valid, known := at(f.valid), at(f.known)
+	premises := f.seedPremises(t)
 	subject := "repo=acme%2Fapi&path=docs%2Fa.md&env=prod"
 	resolve, err := json.Marshal(map[string]any{
 		"repo": "acme/api", "env": "prod", "paths": []string{"docs/a.md", "main.go"}, "valid": f.valid, "known": f.known,
@@ -158,6 +161,16 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 		{"list_waivers", http.MethodGet, "/v1/waivers?valid=" + valid + "&known=" + known, nil, func(t *testing.T, a map[string]any) {
 			if w := list(a, "waivers"); len(w) != 1 || w[0].(map[string]any)["id"] != f.waiver.String() {
 				t.Errorf("%v", a)
+			}
+		}},
+		{"list_premise_reasons", http.MethodGet, "/v1/premise-reasons?limit=10", nil, func(t *testing.T, a map[string]any) {
+			if got, want := idsOf(list(a, "premise_reasons")), descending(premises.open...); !slices.Equal(got, want) {
+				t.Errorf("%v, want %v", a, want)
+			}
+		}},
+		{"list_premise_hosts", http.MethodGet, "/v1/premise-hosts?limit=10", nil, func(t *testing.T, a map[string]any) {
+			if got, want := idsOf(list(a, "premise_hosts")), descending(slices.Collect(maps.Values(premises.hosts))...); !slices.Equal(got, want) {
+				t.Errorf("%v, want %v", a, want)
 			}
 		}},
 		{"list_proposals", http.MethodGet, "/v1/proposals?limit=10", nil, func(t *testing.T, a map[string]any) {
@@ -222,9 +235,9 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 		return
 	}
 	t.Run("every operation is covered", func(t *testing.T) {
-		// 14 are called above as a person, the writes in writes_integration_test.go, and the two reads of the export
+		// 16 are called above as a person, the writes in writes_integration_test.go, and the two reads of the export
 		// in exports_integration_test.go. upload_verdicts is called as a CI job in upload_integration_test.go.
-		if got, want := 14+len(writeOps)+len(exportOps)+1, len(operations(t, loadDocument(t))); got != want {
+		if got, want := 16+len(writeOps)+len(exportOps)+1, len(operations(t, loadDocument(t))); got != want {
 			t.Fatalf("%d operations covered, the document has %d", got, want)
 		}
 	})
