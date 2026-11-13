@@ -3,16 +3,18 @@ import { Link } from 'react-router';
 
 import { calls } from '../api/calls';
 import { useResource, useWrite } from '../api/hooks';
-import type { ApprovalRequest } from '../api/types';
+import type { ApprovalRequest, CheckApprovalRequest } from '../api/types';
 import { Button, TextField } from '../brand';
 import { ErrorNotice } from '../components/ErrorNotice';
 import { Loading } from '../components/Loading';
+import { useFocusOnMount } from '../components/useFocusOnMount';
 import { ScopePicker } from '../components/ScopePicker';
 import { SelectField } from '../components/SelectField';
 import type { Json } from '../lib/json';
 import { aYearAfter, approvalRequest, checkApproval, CRITICALITIES, rejection, slugFrom, today, type ApprovalForm, type Criticality } from '../state/edr';
 import { decisionPath } from '../state/decision';
 import { draftDefaults, proposalTitle } from '../state/draft';
+import { checkAnswer } from '../state/writes';
 import { scopesForLabels } from './Scopes';
 
 export type Queue = 'proposals' | 'agent-proposals';
@@ -57,14 +59,18 @@ export function ReviewActions({
 }) {
   const [mode, setMode] = useState<Mode>('idle');
   const title = proposalTitle(payload);
-  const close = () => setMode('idle');
+  const { actions, cancel } = useActionsFocus(mode === 'idle');
+  const close = () => {
+    cancel();
+    setMode('idle');
+  };
 
   if (mode === 'approve') {
     return <ApproveForm queue={queue} id={id} title={title} payload={payload} sourceUrl={sourceUrl} report={report} onCancel={close} />;
   }
   if (mode === 'reject') return <RejectConfirm queue={queue} id={id} title={title} report={report} onCancel={close} />;
   return (
-    <div className="actions">
+    <div className="actions" ref={actions}>
       <Button variant="primary" size="sm" aria-label={`Approve ${title}`} onClick={() => setMode('approve')}>
         Approve
       </Button>
@@ -76,21 +82,63 @@ export function ReviewActions({
 }
 
 function RejectConfirm({ queue, id, title, report, onCancel }: { queue: Queue; id: string; title: string; report(report: Report): void; onCancel(): void }) {
-  const write = useWrite((request: ApprovalRequest) => decide(queue, id, request));
+  return (
+    <Confirm
+      label={`Reject ${title}`}
+      question="Reject this draft? It leaves the queue and cannot be reopened. Only a person with a role over the whole tenant may reject."
+      button="Reject the draft"
+      busy="Rejecting"
+      variant="danger"
+      send={() => decide(queue, id, rejection)}
+      success={{ tone: 'info', title: `Rejected "${title}".`, body: 'It left the queue.' }}
+      report={report}
+      onCancel={onCancel}
+    />
+  );
+}
 
-  async function reject() {
-    const outcome = await write.run(rejection);
-    if (outcome.status === 'done') report({ tone: 'info', title: `Rejected "${title}".`, body: 'It left the queue.' });
+/**
+ * One confirmation and one request, for an answer that cannot be undone. A 409 or a 404 means that the draft was
+ * answered or removed under the person, so the queue reads again. Any other refusal stays here, in words. The group
+ * takes the focus, because the button that opened it is gone.
+ */
+function Confirm({
+  label,
+  question,
+  button,
+  busy,
+  variant,
+  send,
+  success,
+  report,
+  onCancel,
+}: {
+  label: string;
+  question: string;
+  button: string;
+  busy: string;
+  variant: 'primary' | 'danger';
+  send(): Promise<unknown>;
+  success: Report;
+  report(report: Report): void;
+  onCancel(): void;
+}) {
+  const write = useWrite(send);
+  const group = useFocusOnMount<HTMLDivElement>();
+
+  async function answer() {
+    const outcome = await write.run();
+    if (outcome.status === 'done') report(success);
     else if (outcome.status === 'failed' && (outcome.error.status === 409 || outcome.error.status === 404)) report(STALE);
   }
 
   return (
-    <div className="review" role="group" aria-label={`Reject ${title}`}>
-      <p>Reject this draft? It leaves the queue and cannot be reopened. Only a person with a role over the whole tenant may reject.</p>
+    <div ref={group} tabIndex={-1} className="review" role="group" aria-label={label}>
+      <p>{question}</p>
       {write.status === 'failed' ? <ErrorNotice error={write.error} /> : null}
       <div className="actions">
-        <Button variant="danger" size="sm" onClick={reject} disabled={write.status === 'sending'}>
-          {write.status === 'sending' ? 'Rejecting' : 'Reject the draft'}
+        <Button variant={variant} size="sm" onClick={answer} disabled={write.status === 'sending'}>
+          {write.status === 'sending' ? busy : button}
         </Button>
         <Button variant="quiet" size="sm" onClick={onCancel} disabled={write.status === 'sending'}>
           Cancel
@@ -98,6 +146,24 @@ function RejectConfirm({ queue, id, title, report, onCancel }: { queue: Queue; i
       </div>
     </div>
   );
+}
+
+/** Where the focus goes after a Cancel: the confirmation that held it is gone, so it returns to the buttons. */
+function useActionsFocus(idle: boolean) {
+  const actions = useRef<HTMLDivElement>(null);
+  const cancelled = useRef(false);
+  useEffect(() => {
+    if (idle && cancelled.current) {
+      cancelled.current = false;
+      actions.current?.querySelector('button')?.focus();
+    }
+  }, [idle]);
+  return {
+    actions,
+    cancel: () => {
+      cancelled.current = true;
+    },
+  };
 }
 
 function ApproveForm({
@@ -263,5 +329,62 @@ function ApproveForm({
         </Button>
       </div>
     </form>
+  );
+}
+
+/**
+ * Answer one drafted check (ADR-0118). The answer is an outcome and writes no decision, so there is no form: each
+ * outcome is one confirmation and one request. Both are final, because a drafted check is answered once, so neither
+ * is a single click. Every person sees both buttons and the server decides, as for a draft (ADR-0110 decision 4).
+ * `title` names the check as a phrase, such as "the check for decision 0194f2a0, version 2, captured 2026-11-07 11:10 UTC".
+ */
+export function CheckActions({ decisionId, id, title, report }: { decisionId: string; id: string; title: string; report(report: Report): void }) {
+  const [outcome, setOutcome] = useState<CheckApprovalRequest['outcome'] | null>(null);
+  const { actions, cancel } = useActionsFocus(outcome === null);
+  const close = () => {
+    cancel();
+    setOutcome(null);
+  };
+  const send = (answer: CheckApprovalRequest['outcome']) => () => calls.approveCheckProposal(decisionId, id, checkAnswer(answer));
+
+  if (outcome === 'approved') {
+    return (
+      <Confirm
+        label={`Approve ${title}`}
+        question="Approve this check? The answer is recorded once and cannot be changed. It writes no decision, and the check reaches no repository yet. Only a person whose role covers every scope of the decision may answer."
+        button="Approve the check"
+        busy="Approving"
+        variant="primary"
+        send={send('approved')}
+        success={{ tone: 'info', title: `Approved ${title}.`, body: 'It left the queue. The answer is recorded, and the check reaches no repository yet.' }}
+        report={report}
+        onCancel={close}
+      />
+    );
+  }
+  if (outcome === 'rejected') {
+    return (
+      <Confirm
+        label={`Reject ${title}`}
+        question="Reject this check? It leaves the queue and cannot be reopened, and the same rule is not drafted again for this version of the decision. Only a person whose role covers every scope of the decision may answer."
+        button="Reject the check"
+        busy="Rejecting"
+        variant="danger"
+        send={send('rejected')}
+        success={{ tone: 'info', title: `Rejected ${title}.`, body: 'It left the queue.' }}
+        report={report}
+        onCancel={close}
+      />
+    );
+  }
+  return (
+    <div className="actions" ref={actions}>
+      <Button variant="primary" size="sm" aria-label={`Approve ${title}`} onClick={() => setOutcome('approved')}>
+        Approve
+      </Button>
+      <Button variant="secondary" size="sm" aria-label={`Reject ${title}`} onClick={() => setOutcome('rejected')}>
+        Reject
+      </Button>
+    </div>
   );
 }

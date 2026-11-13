@@ -176,7 +176,7 @@ describe('the inbox', () => {
     expect(await screen.findByText('Public endpoints need rate limits')).toBeInTheDocument();
     expect(await screen.findByText('Check for decision 0194f2a0, version 2')).toBeInTheDocument();
     expect(screen.getAllByText('Pending approval')).toHaveLength(4);
-    expect(screen.getByText(/A drafted check cannot be approved here yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Approving a drafted check records the answer only/)).toBeInTheDocument();
     expect(stub.requests.every((request) => request.startsWith('GET '))).toBe(true);
   });
 

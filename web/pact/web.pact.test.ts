@@ -16,6 +16,7 @@ import { exportArchivePath, makeCalls } from '../src/api/calls.ts';
 import type { Scope } from '../src/api/types.ts';
 import { approvalRequest, rejection, type ApprovalForm } from '../src/state/edr.ts';
 import {
+  checkAnswer,
   grandfatherRequest,
   supersessionRequest,
   waiverRequest,
@@ -38,6 +39,10 @@ const VIEWER = 'the session belongs to a viewer of tenant A';
 const UNANSWERED = 'tenant A holds drafts that nobody answered, and the session belongs to an approver';
 const ANSWERED = 'tenant A holds a draft that was answered, and the session belongs to an approver';
 const TO_WAIVE = 'tenant A holds a decision in force and a repository scope, and the session belongs to an approver';
+// The states of the answer to a drafted check (ADR-0118). Each seeds a decision and a check drafted for it, and the
+// path names both. The session is an approver over the whole tenant, so it covers every scope of the decision.
+const CHECK_UNANSWERED = 'tenant A holds a drafted check that nobody answered, and the session belongs to an approver';
+const CHECK_ANSWERED = 'tenant A holds a drafted check that was answered, and the session belongs to an approver';
 const TO_SUPERSEDE = 'tenant A holds two decisions that nobody superseded, and the session belongs to a decision owner';
 
 // The states of the export (ADR-0115). Each one resets the exports of tenant A and seeds what it names, and the
@@ -495,10 +500,14 @@ const AGENT_PROPOSAL = '9b1d4a7c-0e3f-4a5b-8c2d-6e7f8a9b0c1d';
 const DECISION = '7a8b9c0d-1e2f-4a3b-9c4d-5e6f7a8b9c0d';
 const FROM = '2b3c4d5e-6f70-4812-93a4-b5c6d7e8f9a0';
 const TO = '8c9d0e1f-2a3b-4c4d-8e5f-6a7b8c9d0e1f';
+const CHECK_DECISION = '4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8';
+const CHECK = '6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c';
 const ULID = '01JD8Q3M7K2W9X4Y5Z6A7B8C9D';
 const WRITE_FROM = '2026-06-01T00:00:00Z';
 
 const scopeRef = fromProviderState('${scopeId}', SCOPE);
+/** The route of the answer to a drafted check, under the decision the check was drafted for. */
+const checkPath = fromProviderState('/v1/decisions/${decisionId}/check-proposals/${checkProposalId}/approval', `/v1/decisions/${CHECK_DECISION}/check-proposals/${CHECK}/approval`);
 const date = (example: string) => regex('^\\d{4}-\\d{2}-\\d{2}$', example);
 
 const draft: ApprovalForm = {
@@ -546,6 +555,8 @@ const approval = (outcome: 'approved' | 'rejected') => ({
   outcome,
   decision_id: outcome === 'approved' ? uuid() : nullValue(),
 });
+
+const checkApproval = (outcome: 'approved' | 'rejected') => ({ id: uuid(), proposal_id: uuid(), outcome });
 
 const waiverForm: WaiverForm = {
   decisionId: DECISION,
@@ -625,6 +636,57 @@ describe('the writes of the web app', () => {
       },
       async (calls) => {
         await expect(calls.approveProposal(PROPOSAL, rejection)).rejects.toMatchObject({ status: 409, code: 'conflict' });
+      },
+    );
+  });
+
+  it('approves a drafted check with the outcome and nothing else', async () => {
+    await interact(
+      {
+        description: 'a request to approve a drafted check',
+        state: CHECK_UNANSWERED,
+        method: 'POST',
+        path: checkPath,
+        requestBody: { outcome: 'approved' },
+        status: 201,
+        body: checkApproval('approved'),
+      },
+      async (calls) => {
+        expect(await calls.approveCheckProposal(CHECK_DECISION, CHECK, checkAnswer('approved'))).toMatchObject({ outcome: 'approved' });
+      },
+    );
+  });
+
+  it('rejects a drafted check with the outcome and nothing else', async () => {
+    await interact(
+      {
+        description: 'a request to reject a drafted check',
+        state: CHECK_UNANSWERED,
+        method: 'POST',
+        path: checkPath,
+        requestBody: { outcome: 'rejected' },
+        status: 201,
+        body: checkApproval('rejected'),
+      },
+      async (calls) => {
+        expect(await calls.approveCheckProposal(CHECK_DECISION, CHECK, checkAnswer('rejected'))).toMatchObject({ outcome: 'rejected' });
+      },
+    );
+  });
+
+  it('is refused a second answer to a drafted check', async () => {
+    await interact(
+      {
+        description: 'a second answer to a drafted check',
+        state: CHECK_ANSWERED,
+        method: 'POST',
+        path: checkPath,
+        requestBody: { outcome: 'rejected' },
+        status: 409,
+        body: { error: 'conflict' },
+      },
+      async (calls) => {
+        await expect(calls.approveCheckProposal(CHECK_DECISION, CHECK, checkAnswer('rejected'))).rejects.toMatchObject({ status: 409, code: 'conflict' });
       },
     );
   });

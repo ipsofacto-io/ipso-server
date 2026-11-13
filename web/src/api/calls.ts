@@ -7,6 +7,8 @@ import type {
   AuditChain,
   AuditDecisions,
   AuditWaivers,
+  CheckApproval,
+  CheckApprovalRequest,
   CheckProposal,
   DecisionPage,
   Export,
@@ -68,6 +70,9 @@ export function makeCalls(api: Api) {
       api.postJSON<Approval>(`/v1/proposals/${encodeURIComponent(id)}/approval`, request, signal),
     approveAgentProposal: (id: string, request: ApprovalRequest, signal?: AbortSignal) =>
       api.postJSON<Approval>(`/v1/agent-proposals/${encodeURIComponent(id)}/approval`, request, signal),
+    /** The answer to a drafted check. The path names the decision the check was drafted for (ADR-0116, ADR-0118). */
+    approveCheckProposal: (decisionID: string, id: string, request: CheckApprovalRequest, signal?: AbortSignal) =>
+      api.postJSON<CheckApproval>(`/v1/decisions/${encodeURIComponent(decisionID)}/check-proposals/${encodeURIComponent(id)}/approval`, request, signal),
     recordWaiver: (request: WaiverRequest, signal?: AbortSignal) => api.postJSON<Waiver>('/v1/waivers', request, signal),
     recordSupersession: (request: SupersessionRequest, signal?: AbortSignal) =>
       api.postJSON<Supersession>('/v1/supersessions', request, signal),

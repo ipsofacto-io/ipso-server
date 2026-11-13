@@ -51,6 +51,14 @@ const (
 	stateToSupersede = "tenant A holds two decisions that nobody superseded, and the session belongs to a decision owner"
 )
 
+// The states of the answer to a drafted check (IPSO-153, ADR-0118). Each seeds a decision and a check drafted for
+// it, because a drafted check is decided once and the path names both. The session is an approver over the whole
+// tenant, so it covers every scope of the decision.
+const (
+	stateCheckUnanswered = "tenant A holds a drafted check that nobody answered, and the session belongs to an approver"
+	stateCheckAnswered   = "tenant A holds a drafted check that was answered, and the session belongs to an approver"
+)
+
 // The states of the export (IPSO-152, ADR-0115). Each one clears the exports of tenant A first, because the
 // cooldown and the one-at-a-time rule of the API read them, and then seeds what it names. The session is the
 // admin's: only an admin who is a person takes the export routes (ADR-0108, ADR-0111).
@@ -131,6 +139,25 @@ func (f *fixture) seedDecision(ctx context.Context, slug string) (uuid.UUID, err
 		return uuid.Nil, fmt.Errorf("seed the decision %s: %w", slug, err)
 	}
 	return id, nil
+}
+
+// seedCheckProposal adds a decision in force and a pending check drafted for it, and returns both ids. n makes the
+// rule, and so the check, unique (the check_proposal_once constraint of migration 00012).
+func (f *fixture) seedCheckProposal(ctx context.Context, n int64) (decision, check uuid.UUID, err error) {
+	decision, err = f.seedDecision(ctx, "synthetic-checked-"+strconv.FormatInt(n, 10))
+	if err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	err = pgtest.Scan(ctx, f.db, tenantA.String(), `
+		INSERT INTO proposals.check_proposal
+			(tenant_id, decision_id, decision_version, spec, rego, rego_sha256, fixtures, fixtures_total, fixtures_passed, repaired, model_id, prompt_version)
+		VALUES ($1, $2, 1, '{"rules":[]}', $3::text, sha256(convert_to($3::text, 'UTF8')), '[{}, {}]', 2, 2, false, 'm', 'p')
+		RETURNING id`,
+		[]any{tenantA, decision, "package p" + strconv.FormatInt(n, 10)}, &check)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("seed a drafted check: %w", err)
+	}
+	return decision, check, nil
 }
 
 // TestPactProviderIpsoServer verifies the ipso-web pact against the real handler, its guard included, on
@@ -225,6 +252,26 @@ func TestPactProviderIpsoServer(t *testing.T) {
 		return models.ProviderStateResponse{"fromDecisionId": from.String(), "toDecisionId": to.String()}, nil
 	}
 
+	unansweredCheck := func(ctx context.Context, n int64) (models.ProviderStateResponse, error) {
+		decision, check, err := f.seedCheckProposal(ctx, n)
+		if err != nil {
+			return nil, err
+		}
+		return models.ProviderStateResponse{"decisionId": decision.String(), "checkProposalId": check.String()}, nil
+	}
+	answeredCheck := func(ctx context.Context, n int64) (models.ProviderStateResponse, error) {
+		decision, check, err := f.seedCheckProposal(ctx, n)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := pgtest.Exec(ctx, f.db, tenantA.String(),
+			`INSERT INTO proposals.check_approval (tenant_id, proposal_id, approver_id, outcome) VALUES ($1, $2, $3, 'rejected')`,
+			tenantA, check, f.callers[approverA].Principal); err != nil {
+			return nil, fmt.Errorf("answer a drafted check: %w", err)
+		}
+		return models.ProviderStateResponse{"decisionId": decision.String(), "checkProposalId": check.String()}, nil
+	}
+
 	noExport := func(ctx context.Context, _ int64) (models.ProviderStateResponse, error) {
 		return nil, f.resetExports(ctx)
 	}
@@ -251,6 +298,9 @@ func TestPactProviderIpsoServer(t *testing.T) {
 			stateAnswered:    seeds(approverA, answered),
 			stateToWaive:     seeds(approverA, toWaive),
 			stateToSupersede: seeds(ownerA, toSupersede),
+
+			stateCheckUnanswered: seeds(approverA, unansweredCheck),
+			stateCheckAnswered:   seeds(approverA, answeredCheck),
 
 			stateNoExport:      seeds(personA, noExport),
 			statePendingExport: seeds(personA, exportOf(false)),

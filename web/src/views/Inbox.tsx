@@ -16,7 +16,7 @@ import { formatTime, shortId } from '../lib/format';
 import { preview } from '../lib/json';
 import { decisionPath } from '../state/decision';
 import { proposalTitle } from '../state/draft';
-import { ReviewActions, type Report } from './ReviewActions';
+import { CheckActions, ReviewActions, type Report } from './ReviewActions';
 
 const PAGE = 25;
 const RAW_LIMIT = 8_000;
@@ -148,13 +148,14 @@ function FromAgent({ proposal, report }: { proposal: AgentProposal; report: (rep
   );
 }
 
-function DraftedCheck({ proposal }: { proposal: CheckProposal }) {
+function DraftedCheck({ proposal, report }: { proposal: CheckProposal; report: (report: Report) => void }) {
+  const name = `decision ${shortId(proposal.decision_id)}, version ${proposal.decision_version}`;
   const fixtures = proposal.fixtures.length;
   const rego = proposal.rego.length > RAW_LIMIT ? `${proposal.rego.slice(0, RAW_LIMIT)}\n# ... cut` : proposal.rego;
   return (
     <>
       <header className="card-head">
-        <h3 className="card-title">{`Check for decision ${shortId(proposal.decision_id)}, version ${proposal.decision_version}`}</h3>
+        <h3 className="card-title">{`Check for ${name}`}</h3>
         <DecisionStatus status="proposed" />
       </header>
       <dl className="meta">
@@ -189,6 +190,7 @@ function DraftedCheck({ proposal }: { proposal: CheckProposal }) {
         <summary>Policy</summary>
         <Code lang="rego">{rego}</Code>
       </details>
+      <CheckActions decisionId={proposal.decision_id} id={proposal.id} title={`the check for ${name}, captured ${formatTime(proposal.captured_at)}`} report={report} />
     </>
   );
 }
@@ -197,7 +199,7 @@ export function InboxView() {
   return (
     <Page
       title="Inbox"
-      intro="Drafts that wait for a person. Approve a draft to record it as a decision, or reject it. A drafted check cannot be approved here yet: a person with the role answers it through the API."
+      intro="Drafts that wait for a person. Approve a draft to record it as a decision, or reject it. Approving a drafted check records the answer only: it writes no decision, and the check reaches no repository yet."
     >
       <Queue
         title="Pull requests"
@@ -217,11 +219,11 @@ export function InboxView() {
       </Queue>
       <Queue
         title="Drafted checks"
-        intro="Checks drafted for a decision that passed every fixture."
+        intro="Checks drafted for a decision that passed every fixture. A check is answered once, and a rejected rule is not drafted again for the same version of the decision."
         empty="No drafted check waits for review."
         load={async (before, signal) => (await calls.listCheckProposals({ limit: PAGE, before }, signal)).check_proposals}
       >
-        {(proposal) => <DraftedCheck proposal={proposal} />}
+        {(proposal, report) => <DraftedCheck proposal={proposal} report={report} />}
       </Queue>
     </Page>
   );

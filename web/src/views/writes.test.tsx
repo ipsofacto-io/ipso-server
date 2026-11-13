@@ -10,6 +10,11 @@ const PROPOSAL = '0194f2a0-0000-7000-8000-000000000302';
 const AGENT = '0194f2a0-0000-7000-8000-000000000401';
 const VAULT = 'Services read secrets from the vault, not from environment files';
 const RATE = 'Public endpoints need rate limits';
+// A drafted check is answered under the decision it was drafted for (ADR-0116, ADR-0118).
+const CHECK = 'the check for decision 0194f2a0, version 2, captured 2026-11-07 11:10 UTC';
+const CHECK_ID = '0194f2a0-0000-7000-8000-000000000501';
+const CHECK_PATH = `/v1/decisions/${ids.useTls}/check-proposals/${CHECK_ID}/approval`;
+const CHECK_QUEUE = 'GET /v1/check-proposals?limit=25';
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -28,15 +33,16 @@ const posts = (stub: ReturnType<typeof stubFetch>) => stub.sent.filter((sent) =>
 const change = (label: string | RegExp, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
 
 describe('the inbox actions', () => {
-  it('offers approve and reject on a pull request draft and an agent draft, and not on a drafted check', async () => {
+  it('offers approve and reject on a pull request draft, an agent draft and a drafted check', async () => {
     stubFetch();
     renderApp('/inbox');
     await screen.findByText('Check for decision 0194f2a0, version 2');
-    expect(screen.getAllByRole('button', { name: /^Approve / })).toHaveLength(3);
-    expect(screen.getAllByRole('button', { name: /^Reject / })).toHaveLength(3);
-    expect(screen.getByText(/A drafted check cannot be approved here yet/)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^Approve / })).toHaveLength(4);
+    expect(screen.getAllByRole('button', { name: /^Reject / })).toHaveLength(4);
+    expect(screen.queryByText(/cannot be approved here yet/)).not.toBeInTheDocument();
     const check = screen.getByText('Check for decision 0194f2a0, version 2').closest('li') as HTMLElement;
-    expect(within(check).queryByRole('button', { name: /approve|reject/i })).not.toBeInTheDocument();
+    expect(within(check).getByRole('button', { name: `Approve ${CHECK}` })).toBeInTheDocument();
+    expect(within(check).getByRole('button', { name: `Reject ${CHECK}` })).toBeInTheDocument();
   });
 
   it('sends nothing until the person has filled the form in and pressed the button', async () => {
@@ -187,6 +193,130 @@ describe('the inbox actions', () => {
     await u.dblClick(button);
     await screen.findByText(`Rejected "${RATE}".`);
     expect(posts(stub)).toHaveLength(1);
+  });
+});
+
+describe('answering a drafted check', () => {
+  it('approves only after a confirmation, with a body that holds the outcome and nothing else, and the check leaves the queue', async () => {
+    const stub = stubFetch();
+    const u = user();
+    renderApp('/inbox');
+    await u.click(await screen.findByRole('button', { name: `Approve ${CHECK}` }));
+    const group = await screen.findByRole('group', { name: `Approve ${CHECK}` });
+    expect(within(group).getByText(/writes no decision/)).toBeInTheDocument();
+    expect(within(group).getByText(/reaches no repository yet/)).toBeInTheDocument();
+    expect(posts(stub)).toHaveLength(0);
+    await u.click(within(group).getByRole('button', { name: 'Approve the check' }));
+    expect(await screen.findByText(`Approved ${CHECK}.`)).toBeInTheDocument();
+    expect(posts(stub)).toHaveLength(1);
+    expect(posts(stub)[0]).toMatchObject({ url: CHECK_PATH, body: '{"outcome":"approved"}', contentType: 'application/json' });
+    await waitFor(() => expect(screen.queryByText('Check for decision 0194f2a0, version 2')).not.toBeInTheDocument());
+    expect(screen.getByText('No drafted check waits for review.')).toBeInTheDocument();
+    expect(stub.requests.filter((request) => request === CHECK_QUEUE)).toHaveLength(2);
+  });
+
+  it('rejects after a confirmation that says the rule is not drafted again', async () => {
+    const stub = stubFetch();
+    const u = user();
+    renderApp('/inbox');
+    await u.click(await screen.findByRole('button', { name: `Reject ${CHECK}` }));
+    const group = await screen.findByRole('group', { name: `Reject ${CHECK}` });
+    expect(within(group).getByText(/not drafted again/)).toBeInTheDocument();
+    expect(posts(stub)).toHaveLength(0);
+    await u.click(within(group).getByRole('button', { name: 'Reject the check' }));
+    expect(await screen.findByText(`Rejected ${CHECK}.`)).toBeInTheDocument();
+    expect(posts(stub)[0]).toMatchObject({ url: CHECK_PATH, body: '{"outcome":"rejected"}' });
+    await waitFor(() => expect(screen.queryByText('Check for decision 0194f2a0, version 2')).not.toBeInTheDocument());
+  });
+
+  it('closes the confirmation with Cancel and sends nothing', async () => {
+    const stub = stubFetch();
+    const u = user();
+    renderApp('/inbox');
+    await u.click(await screen.findByRole('button', { name: `Approve ${CHECK}` }));
+    const group = await screen.findByRole('group', { name: `Approve ${CHECK}` });
+    await u.click(within(group).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('group', { name: `Approve ${CHECK}` })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: `Approve ${CHECK}` })).toBeInTheDocument();
+    expect(posts(stub)).toHaveLength(0);
+  });
+
+  it('moves the focus into the confirmation, and back to the buttons after Cancel', async () => {
+    stubFetch();
+    const u = user();
+    renderApp('/inbox');
+    await u.click(await screen.findByRole('button', { name: `Reject ${CHECK}` }));
+    const group = await screen.findByRole('group', { name: `Reject ${CHECK}` });
+    expect(group).toHaveFocus();
+    await u.click(within(group).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: `Approve ${CHECK}` })).toHaveFocus());
+  });
+
+  it('answers the check, and not a draft, through the route under its decision', async () => {
+    const stub = stubFetch();
+    const u = user();
+    renderApp('/inbox');
+    await u.click(await screen.findByRole('button', { name: `Reject ${CHECK}` }));
+    await u.click(await screen.findByRole('button', { name: 'Reject the check' }));
+    await screen.findByText(`Rejected ${CHECK}.`);
+    expect(posts(stub).map((sent) => sent.url)).toEqual([CHECK_PATH]);
+    expect(screen.getByRole('button', { name: `Reject ${RATE}` })).toBeInTheDocument();
+  });
+
+  it('says in words that no role allows it, keeps the confirmation, and does not sign the person out', async () => {
+    const stub = stubFetch({ override: ({ method }) => (method === 'POST' ? reply(403, 'forbidden') : undefined) });
+    const u = user();
+    renderApp('/inbox');
+    await u.click(await screen.findByRole('button', { name: `Approve ${CHECK}` }));
+    await u.click(await screen.findByRole('button', { name: 'Approve the check' }));
+    expect(await screen.findByText('You do not have a role that allows this.')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: `Approve ${CHECK}` })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Sign in to ipso' })).not.toBeInTheDocument();
+    expect(posts(stub)).toHaveLength(1);
+    expect(stub.requests.filter((request) => request === CHECK_QUEUE)).toHaveLength(1);
+  });
+
+  it.each([
+    [409, 'conflict'],
+    [404, 'not found'],
+  ])('reads the queue again and says so when the answer is a %i', async (status, code) => {
+    const stub = stubFetch({ override: ({ method }) => (method === 'POST' ? reply(status, code) : undefined) });
+    const u = user();
+    renderApp('/inbox');
+    await u.click(await screen.findByRole('button', { name: `Reject ${CHECK}` }));
+    await u.click(await screen.findByRole('button', { name: 'Reject the check' }));
+    expect(await screen.findByText('This draft was already answered.')).toBeInTheDocument();
+    await waitFor(() => expect(stub.requests.filter((request) => request === CHECK_QUEUE)).toHaveLength(2));
+    expect(screen.queryByRole('heading', { name: 'Sign in to ipso' })).not.toBeInTheDocument();
+  });
+
+  it('says to try again for a 429 and does not sign the person out', async () => {
+    stubFetch({ override: ({ method }) => (method === 'POST' ? { status: 429, headers: { 'Retry-After': '30' }, body: { error: 'rate limited' } } : undefined) });
+    const u = user();
+    renderApp('/inbox');
+    await u.click(await screen.findByRole('button', { name: `Approve ${CHECK}` }));
+    await u.click(await screen.findByRole('button', { name: 'Approve the check' }));
+    expect(await screen.findByText('Too many requests.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Sign in to ipso' })).not.toBeInTheDocument();
+  });
+
+  it('sends one request for a double click', async () => {
+    const stub = stubFetch();
+    const u = user();
+    renderApp('/inbox');
+    await u.click(await screen.findByRole('button', { name: `Approve ${CHECK}` }));
+    await u.dblClick(await screen.findByRole('button', { name: 'Approve the check' }));
+    await screen.findByText(`Approved ${CHECK}.`);
+    expect(posts(stub)).toHaveLength(1);
+  });
+
+  it('is sent to sign in by a 401', async () => {
+    stubFetch({ override: ({ method }) => (method === 'POST' ? reply(401, 'unauthorized') : undefined) });
+    const u = user();
+    renderApp('/inbox');
+    await u.click(await screen.findByRole('button', { name: `Approve ${CHECK}` }));
+    await u.click(await screen.findByRole('button', { name: 'Approve the check' }));
+    expect(await screen.findByRole('heading', { name: 'Sign in to ipso' })).toBeInTheDocument();
   });
 });
 
