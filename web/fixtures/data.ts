@@ -5,6 +5,8 @@ import type {
   AgentProposal,
   CheckProposal,
   Decision,
+  PremiseHost,
+  PremiseReason,
   Proposal,
   Scope,
   StoredVerdict,
@@ -141,6 +143,7 @@ export const decisions: Decision[] = [
         { type: 'note', url: 'javascript:alert(1)' },
       ],
       tags: ['network', 'tls'],
+      premises: [{ id: 'tls-min-version', statement: 'The status page reports TLS 1.2 as the lowest version served.', every: 7, probe: { type: 'http' } }],
     }),
   },
 ];
@@ -227,6 +230,39 @@ export function checkProposals(now: Date): CheckProposal[] {
     },
   ];
 }
+
+/** The open review reasons (ADR-0117). The observed value of the first is markup, to show that the app renders it as text. */
+export function premiseReasons(now: Date): PremiseReason[] {
+  return [
+    {
+      id: uuid(802),
+      decision_id: ids.useTls,
+      premise_id: 'tls-min-version',
+      opened_at: iso(new Date(now.getTime() - 3 * 60 * 60 * 1000)),
+      url: 'http://status.example.com/tls.json',
+      pointer: '/tls/minimum',
+      expected: '1.2',
+      observed: '<img src=x onerror="alert(1)">',
+    },
+    {
+      id: uuid(801),
+      decision_id: ids.adminPort,
+      premise_id: 'bastion-exists',
+      opened_at: iso(new Date(now.getTime() - 30 * 60 * 60 * 1000)),
+      url: 'https://status.example.com/bastion.json',
+      pointer: '/reachable',
+      expected: true,
+      observed: false,
+    },
+  ];
+}
+
+/** The rows of the allowlist, oldest first. The latest row of a host decides, so status.example.com is allowed again. */
+export const premiseHostRows: PremiseHost[] = [
+  { id: uuid(811), host: 'status.example.com', allowed: false },
+  { id: uuid(812), host: 'status.example.com', allowed: true },
+  { id: uuid(813), host: 'legacy.example.com', allowed: false },
+];
 
 export function verdicts(now: Date): StoredVerdict[] {
   const base = {

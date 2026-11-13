@@ -10,11 +10,16 @@ import type {
   CheckApproval,
   CheckApprovalRequest,
   CheckProposal,
+  Clearance,
+  ClearanceRequest,
   DecisionPage,
   Export,
   ExportRequest,
   GrandfatherPeriod,
   GrandfatherRequest,
+  PremiseHost,
+  PremiseHostRequest,
+  PremiseReason,
   Proposal,
   ProviderInfo,
   ScopePage,
@@ -78,6 +83,16 @@ export function makeCalls(api: Api) {
       api.postJSON<Supersession>('/v1/supersessions', request, signal),
     recordGrandfatherPeriod: (decisionID: string, request: GrandfatherRequest, signal?: AbortSignal) =>
       api.postJSON<GrandfatherPeriod>(`/v1/decisions/${encodeURIComponent(decisionID)}/grandfather-period`, request, signal),
+    /** The review reasons no clearance names, each with the fail that opened it (ADR-0117). */
+    listPremiseReasons: (q: Paging = {}, signal?: AbortSignal) =>
+      api.getJSON<{ premise_reasons: PremiseReason[] }>('/v1/premise-reasons', q, signal),
+    /** The latest row of each host of the allowlist, a withdrawn host included (ADR-0117). */
+    listPremiseHosts: (q: Paging = {}, signal?: AbortSignal) => api.getJSON<{ premise_hosts: PremiseHost[] }>('/v1/premise-hosts', q, signal),
+    /** Closes the open review reason of a premise. The path names the decision the reason is on (ADR-0109, ADR-0119). */
+    clearPremiseReason: (decisionID: string, premiseID: string, request: ClearanceRequest, signal?: AbortSignal) =>
+      api.postJSON<Clearance>(`/v1/decisions/${encodeURIComponent(decisionID)}/premises/${encodeURIComponent(premiseID)}/clearance`, request, signal),
+    /** Appends a row to the allowlist: allowed true allows a host, false withdraws it. Only an admin may (ADR-0109). */
+    allowPremiseHost: (request: PremiseHostRequest, signal?: AbortSignal) => api.postJSON<PremiseHost>('/v1/premise-hosts', request, signal),
     /** The export the tenant holds, 404 when there is none. Only an admin who is a person may ask (ADR-0115). */
     currentExport: (signal?: AbortSignal) => api.getJSON<Export>('/v1/exports/current', {}, signal),
     startExport: (request: ExportRequest, signal?: AbortSignal) => api.postJSON<Export>('/v1/exports', request, signal),

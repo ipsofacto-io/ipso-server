@@ -15,6 +15,7 @@ import { createApi } from '../src/api/client.ts';
 import { exportArchivePath, makeCalls } from '../src/api/calls.ts';
 import type { Scope } from '../src/api/types.ts';
 import { approvalRequest, rejection, type ApprovalForm } from '../src/state/edr.ts';
+import { clearance, hostRequest } from '../src/state/premises.ts';
 import {
   checkAnswer,
   grandfatherRequest,
@@ -44,6 +45,14 @@ const TO_WAIVE = 'tenant A holds a decision in force and a repository scope, and
 const CHECK_UNANSWERED = 'tenant A holds a drafted check that nobody answered, and the session belongs to an approver';
 const CHECK_ANSWERED = 'tenant A holds a drafted check that was answered, and the session belongs to an approver';
 const TO_SUPERSEDE = 'tenant A holds two decisions that nobody superseded, and the session belongs to a decision owner';
+
+// The states of the premises page (ADR-0119). A reason state seeds a decision that names a premise and a fail recorded the
+// way the worker records it, and the cleared one clears it too. The session is a decision owner over the whole tenant, so
+// it covers every scope of the decision. The host state seeds a row of the allowlist and the session is an admin's, because
+// only an admin may change the allowlist (ADR-0108).
+const OPEN_REASON = 'tenant A holds an open review reason, and the session belongs to a decision owner';
+const CLEARED_REASON = 'tenant A holds a review reason that was cleared, and the session belongs to a decision owner';
+const ALLOWED_HOST = 'tenant A holds an allowed host, and the session belongs to an admin';
 
 // The states of the export (ADR-0115). Each one resets the exports of tenant A and seeds what it names, and the
 // session is the admin's: only an admin who is a person takes the export routes (ADR-0108, ADR-0111).
@@ -929,4 +938,125 @@ describe('the writes of the web app', () => {
       });
   });
 
+});
+
+// The premises page (IPSO-155, ADR-0119). Each interaction plays the app's own call with the request its own helpers build.
+// A reason state seeds a decision and a premise, so the clearance path names both with one fromProviderState expression.
+const PREMISE_DECISION = '1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f';
+const PREMISE = 'tls-version';
+const HOST = 'status.example.com';
+const clearancePath = fromProviderState('/v1/decisions/${decisionId}/premises/${premiseId}/clearance', `/v1/decisions/${PREMISE_DECISION}/premises/${PREMISE}/clearance`);
+
+describe('the premises page of the web app', () => {
+  it('lists the open review reasons with the fail that opened each', async () => {
+    await interact(
+      {
+        description: 'a request for the open review reasons',
+        state: OPEN_REASON,
+        path: '/v1/premise-reasons',
+        query: { limit: '25' },
+        status: 200,
+        body: {
+          premise_reasons: eachLike({
+            id: uuid(),
+            decision_id: uuid(),
+            premise_id: like(PREMISE),
+            opened_at: timestamp(KNOWN),
+            url: like('https://status.example.com/tls.json'),
+            pointer: like('/min'),
+            expected: like('1.3'),
+            observed: like('1.2'),
+          }),
+        },
+      },
+      async (calls) => {
+        const page = await calls.listPremiseReasons({ limit: 25 });
+        expect(page.premise_reasons[0]).toMatchObject({ premise_id: PREMISE, pointer: '/min' });
+      },
+    );
+  });
+
+  it('lists the latest row of each host of the allowlist', async () => {
+    await interact(
+      {
+        description: 'a request for the allowlist',
+        state: ALLOWED_HOST,
+        path: '/v1/premise-hosts',
+        query: { limit: '25' },
+        status: 200,
+        body: { premise_hosts: eachLike({ id: uuid(), host: like(HOST), allowed: like(true) }) },
+      },
+      async (calls) => {
+        expect((await calls.listPremiseHosts({ limit: 25 })).premise_hosts[0]).toMatchObject({ host: HOST });
+      },
+    );
+  });
+
+  it('clears a review reason with an empty body', async () => {
+    await interact(
+      {
+        description: 'a request to clear a review reason',
+        state: OPEN_REASON,
+        method: 'POST',
+        path: clearancePath,
+        requestBody: {},
+        status: 201,
+        body: { id: uuid(), decision_id: uuid(), premise_id: like(PREMISE) },
+      },
+      async (calls) => {
+        expect(await calls.clearPremiseReason(PREMISE_DECISION, PREMISE, clearance())).toMatchObject({ premise_id: PREMISE });
+      },
+    );
+  });
+
+  it('is refused a second clearance, because the reason is no longer open', async () => {
+    await interact(
+      {
+        description: 'a request to clear a review reason that was cleared',
+        state: CLEARED_REASON,
+        method: 'POST',
+        path: clearancePath,
+        requestBody: {},
+        status: 404,
+        body: { error: 'not found' },
+      },
+      async (calls) => {
+        await expect(calls.clearPremiseReason(PREMISE_DECISION, PREMISE, clearance())).rejects.toMatchObject({ status: 404, code: 'not found' });
+      },
+    );
+  });
+
+  it('allows a host', async () => {
+    await interact(
+      {
+        description: 'a request to allow a host',
+        state: ALLOWED_HOST,
+        method: 'POST',
+        path: '/v1/premise-hosts',
+        requestBody: { host: HOST, allowed: true },
+        status: 201,
+        body: { id: uuid(), host: like(HOST), allowed: true },
+      },
+      async (calls) => {
+        expect(await calls.allowPremiseHost(hostRequest(HOST, true))).toMatchObject({ host: HOST, allowed: true });
+      },
+    );
+  });
+
+  it('withdraws a host', async () => {
+    await interact(
+      {
+        description: 'a request to withdraw a host',
+        state: ALLOWED_HOST,
+        method: 'POST',
+        path: '/v1/premise-hosts',
+        requestBody: { host: HOST, allowed: false },
+        status: 201,
+        body: { id: uuid(), host: like(HOST), allowed: false },
+      },
+      async (calls) => {
+        expect(await calls.allowPremiseHost(hostRequest(HOST, false))).toMatchObject({ host: HOST, allowed: false });
+      },
+    );
+  });
 });

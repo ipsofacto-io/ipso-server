@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
+	"github.com/ipsofacto-io/ipso-server/internal/registry"
 )
 
 // pactFile is the contract of the web app (consumer ipso-web, IPSO-62) with this API. The web app's own
@@ -66,6 +68,23 @@ const (
 	stateNoExport      = "tenant A holds no export, and the session belongs to an admin"
 	statePendingExport = "tenant A holds a pending export, and the session belongs to an admin"
 	stateReadyExport   = "tenant A holds a ready export, and the session belongs to an admin"
+)
+
+// The states of the premises page (IPSO-155, ADR-0119). A reason state seeds a decision and a fail on one of its premises,
+// recorded the way the worker records it, and the cleared state clears that reason too. The session is a decision owner
+// over the whole tenant, so it covers every scope of the decision. The host state seeds a row of the allowlist, and the
+// session is the admin's, because only an admin changes the allowlist (ADR-0108).
+const (
+	statePremiseOpen    = "tenant A holds an open review reason, and the session belongs to a decision owner"
+	statePremiseCleared = "tenant A holds a review reason that was cleared, and the session belongs to a decision owner"
+	stateHostAllowed    = "tenant A holds an allowed host, and the session belongs to an admin"
+)
+
+// pactPremise is the premise every reason state names, and pactHost the host the allowlist states hold. A reason state
+// seeds a fresh decision, so its reason is the only one open for that premise.
+const (
+	pactPremise = "tls-version"
+	pactHost    = "status.example.com"
 )
 
 // pactRecipient is the age public key of the age documentation, the one the pact asks for an export with.
@@ -126,16 +145,30 @@ func (f *fixture) seedProposal(ctx context.Context, n int64) (uuid.UUID, error) 
 	return id, nil
 }
 
-// seedDecision adds version 1 of a decision in force from 2026-01-01 at the org scope, and returns its id.
-func (f *fixture) seedDecision(ctx context.Context, slug string) (uuid.UUID, error) {
+// seedDecision adds version 1 of a decision in force from 2026-01-01 at the org scope, and returns its id. The body
+// names the premises given, which a review reason needs, because a fail is recorded only for a premise on a current
+// version.
+func (f *fixture) seedDecision(ctx context.Context, slug string, premises ...string) (uuid.UUID, error) {
 	id, err := uuid.NewV7()
+	if err != nil {
+		return uuid.Nil, err
+	}
+	body := map[string]any{"slug": slug, "title": slug}
+	if len(premises) > 0 {
+		list := make([]map[string]any, 0, len(premises))
+		for _, premise := range premises {
+			list = append(list, map[string]any{"id": premise})
+		}
+		body["premises"] = list
+	}
+	raw, err := json.Marshal(body)
 	if err != nil {
 		return uuid.Nil, err
 	}
 	if _, err := pgtest.Exec(ctx, f.db, tenantA.String(), `
 		INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
-		VALUES ($1, 1, $2, jsonb_build_object('slug', $3::text, 'title', $3::text), ARRAY[$4::uuid], $5::text::tstzrange)`,
-		id, tenantA, slug, f.org, "[2026-01-01,)"); err != nil {
+		VALUES ($1, 1, $2, $3::jsonb, ARRAY[$4::uuid], $5::text::tstzrange)`,
+		id, tenantA, string(raw), f.org, "[2026-01-01,)"); err != nil {
 		return uuid.Nil, fmt.Errorf("seed the decision %s: %w", slug, err)
 	}
 	return id, nil
@@ -158,6 +191,45 @@ func (f *fixture) seedCheckProposal(ctx context.Context, n int64) (decision, che
 		return uuid.Nil, uuid.Nil, fmt.Errorf("seed a drafted check: %w", err)
 	}
 	return decision, check, nil
+}
+
+// seedPremiseReason adds a decision in force and a fail on its premise tls-version, which opens a review reason as the
+// worker does, and clears the reason with a human clearance when cleared is true. It returns the decision. n makes the
+// decision, and so the reason, unique.
+func (f *fixture) seedPremiseReason(ctx context.Context, n int64, cleared bool) (uuid.UUID, error) {
+	decision, err := f.seedDecision(ctx, "synthetic-premised-"+strconv.FormatInt(n, 10), pactPremise)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	opened, err := registry.RecordEvaluation(ctx, f.db, tenantA, registry.Evaluation{
+		Ref: registry.PremiseRef{Decision: decision, ID: pactPremise}, Result: "fail",
+		URL: "https://status.example.com/tls.json", Pointer: "/min", Expected: []byte(`"1.3"`), Observed: []byte(`"1.2"`),
+		BodySHA256: bytes.Repeat([]byte{0xab}, 32),
+	})
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("record a fail of a premise: %w", err)
+	}
+	if !opened {
+		return uuid.Nil, fmt.Errorf("a fail of the premise %s opened no reason", pactPremise)
+	}
+	if cleared {
+		if _, err := pgtest.Exec(ctx, f.db, tenantA.String(), `
+			INSERT INTO registry.premise_clearance (tenant_id, reason_id, kind)
+			SELECT tenant_id, id, 'human' FROM registry.premise_reason
+			WHERE tenant_id = $1 AND decision_id = $2 AND premise_id = $3`, tenantA, decision, pactPremise); err != nil {
+			return uuid.Nil, fmt.Errorf("clear a review reason: %w", err)
+		}
+	}
+	return decision, nil
+}
+
+// seedAllowedHost appends a row that allows pactHost to the allowlist of tenant A.
+func (f *fixture) seedAllowedHost(ctx context.Context) error {
+	if _, err := pgtest.Exec(ctx, f.db, tenantA.String(),
+		`INSERT INTO registry.premise_host_allow (tenant_id, host, allowed) VALUES ($1, $2, true)`, tenantA, pactHost); err != nil {
+		return fmt.Errorf("allow a host: %w", err)
+	}
+	return nil
 }
 
 // TestPactProviderIpsoServer verifies the ipso-web pact against the real handler, its guard included, on
@@ -272,6 +344,19 @@ func TestPactProviderIpsoServer(t *testing.T) {
 		return models.ProviderStateResponse{"decisionId": decision.String(), "checkProposalId": check.String()}, nil
 	}
 
+	premiseReason := func(cleared bool) func(context.Context, int64) (models.ProviderStateResponse, error) {
+		return func(ctx context.Context, n int64) (models.ProviderStateResponse, error) {
+			decision, err := f.seedPremiseReason(ctx, n, cleared)
+			if err != nil {
+				return nil, err
+			}
+			return models.ProviderStateResponse{"decisionId": decision.String(), "premiseId": pactPremise}, nil
+		}
+	}
+	allowedHost := func(ctx context.Context, _ int64) (models.ProviderStateResponse, error) {
+		return nil, f.seedAllowedHost(ctx)
+	}
+
 	noExport := func(ctx context.Context, _ int64) (models.ProviderStateResponse, error) {
 		return nil, f.resetExports(ctx)
 	}
@@ -301,6 +386,10 @@ func TestPactProviderIpsoServer(t *testing.T) {
 
 			stateCheckUnanswered: seeds(approverA, unansweredCheck),
 			stateCheckAnswered:   seeds(approverA, answeredCheck),
+
+			statePremiseOpen:    seeds(ownerA, premiseReason(false)),
+			statePremiseCleared: seeds(ownerA, premiseReason(true)),
+			stateHostAllowed:    seeds(personA, allowedHost),
 
 			stateNoExport:      seeds(personA, noExport),
 			statePendingExport: seeds(personA, exportOf(false)),

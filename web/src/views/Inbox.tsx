@@ -1,86 +1,20 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 
 import { calls } from '../api/calls';
-import { usePages } from '../api/hooks';
 import type { AgentProposal, CheckProposal, Proposal } from '../api/types';
 import { Code } from '../brand';
+import type { Report } from '../components/Confirm';
 import { DecisionStatus } from '../components/DecisionStatus';
-import { ErrorNotice } from '../components/ErrorNotice';
-import { LoadMore } from '../components/LoadMore';
-import { Loading } from '../components/Loading';
-import { Notice } from '../components/Notice';
 import { Page } from '../components/Page';
+import { Queue, QUEUE_PAGE } from '../components/Queue';
 import { ExternalLink } from '../components/Safe';
 import { formatTime, shortId } from '../lib/format';
 import { preview } from '../lib/json';
 import { decisionPath } from '../state/decision';
 import { proposalTitle } from '../state/draft';
-import { CheckActions, ReviewActions, type Report } from './ReviewActions';
+import { CheckActions, ReviewActions } from './ReviewActions';
 
-const PAGE = 25;
 const RAW_LIMIT = 8_000;
-
-function Queue<T extends { id: string }>({
-  title,
-  intro,
-  empty,
-  load,
-  children,
-}: {
-  title: string;
-  intro: string;
-  empty: string;
-  load: (before: string | undefined, signal: AbortSignal) => Promise<T[]>;
-  children: (item: T, report: (report: Report) => void) => ReactNode;
-}) {
-  const pages = usePages(load, PAGE, []);
-  const { reload } = pages;
-  const [notice, setNotice] = useState<Report | null>(null);
-  const noticeRef = useRef<HTMLDivElement>(null);
-  // A write says what happened above the cards and reads the queue again: the card that was answered is gone
-  // from the new page, and its button with it, so the focus moves to the notice.
-  const report = useCallback(
-    (next: Report) => {
-      setNotice(next);
-      reload();
-    },
-    [reload],
-  );
-  useEffect(() => {
-    if (notice) noticeRef.current?.focus();
-  }, [notice]);
-  const headingId = `queue-${title.toLowerCase().replace(/[^a-z]+/g, '-')}`;
-  return (
-    <section className="queue" aria-labelledby={headingId}>
-      <h2 id={headingId} className="queue-title">
-        {title}
-      </h2>
-      <p className="muted">{intro}</p>
-      {notice ? (
-        <div ref={noticeRef} tabIndex={-1} className="queue-notice">
-          <Notice tone={notice.tone} title={notice.title}>
-            {notice.body}
-          </Notice>
-        </div>
-      ) : null}
-      {pages.status === 'loading' ? <Loading what={title.toLowerCase()} /> : null}
-      {pages.status === 'error' && pages.error ? <ErrorNotice error={pages.error} /> : null}
-      {pages.status === 'ready' && pages.items.length === 0 ? <p className="queue-empty">{empty}</p> : null}
-      {pages.items.length > 0 ? (
-        <ul className="cards">
-          {pages.items.map((item) => (
-            <li key={item.id} className="card">
-              {children(item, report)}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {pages.status === 'ready' && pages.error ? <ErrorNotice error={pages.error} /> : null}
-      <LoadMore hasMore={pages.hasMore} loading={pages.loadingMore} onClick={pages.loadMore} />
-    </section>
-  );
-}
 
 function Raw({ value, title }: { value: unknown; title: string }) {
   return (
@@ -205,7 +139,7 @@ export function InboxView() {
         title="Pull requests"
         intro="Decisions a model found in merged pull requests."
         empty="No pull request waits for review."
-        load={async (before, signal) => (await calls.listProposals({ limit: PAGE, before }, signal)).proposals}
+        load={async (before, signal) => (await calls.listProposals({ limit: QUEUE_PAGE, before }, signal)).proposals}
       >
         {(proposal, report) => <PullRequest proposal={proposal} report={report} />}
       </Queue>
@@ -213,7 +147,7 @@ export function InboxView() {
         title="Coding agents"
         intro="Decisions your coding agents proposed."
         empty="No agent has proposed a decision."
-        load={async (before, signal) => (await calls.listAgentProposals({ limit: PAGE, before }, signal)).agent_proposals}
+        load={async (before, signal) => (await calls.listAgentProposals({ limit: QUEUE_PAGE, before }, signal)).agent_proposals}
       >
         {(proposal, report) => <FromAgent proposal={proposal} report={report} />}
       </Queue>
@@ -221,7 +155,7 @@ export function InboxView() {
         title="Drafted checks"
         intro="Checks drafted for a decision that passed every fixture. A check is answered once, and a rejected rule is not drafted again for the same version of the decision."
         empty="No drafted check waits for review."
-        load={async (before, signal) => (await calls.listCheckProposals({ limit: PAGE, before }, signal)).check_proposals}
+        load={async (before, signal) => (await calls.listCheckProposals({ limit: QUEUE_PAGE, before }, signal)).check_proposals}
       >
         {(proposal, report) => <DraftedCheck proposal={proposal} report={report} />}
       </Queue>

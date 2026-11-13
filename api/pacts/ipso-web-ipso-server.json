@@ -185,6 +185,112 @@
       "type": "Synchronous/HTTP"
     },
     {
+      "description": "a request for the allowlist",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds an allowed host, and the session belongs to an admin"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/premise-hosts",
+        "query": {
+          "limit": [
+            "25"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "premise_hosts": [
+              {
+                "allowed": true,
+                "host": "status.example.com",
+                "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.premise_hosts[*].id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.premise_hosts": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.premise_hosts[*].allowed": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.premise_hosts[*].host": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.premise_hosts[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
       "description": "a request for the current export from a viewer",
       "pending": false,
       "providerStates": [
@@ -1326,6 +1432,162 @@
               ]
             },
             "$.check_proposals[*].spec": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the open review reasons",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds an open review reason, and the session belongs to a decision owner"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/premise-reasons",
+        "query": {
+          "limit": [
+            "25"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "premise_reasons": [
+              {
+                "decision_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "expected": "1.3",
+                "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "observed": "1.2",
+                "opened_at": "2026-11-01T00:00:00Z",
+                "pointer": "/min",
+                "premise_id": "tls-version",
+                "url": "https://status.example.com/tls.json"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.premise_reasons[*].decision_id": {
+              "type": "Uuid"
+            },
+            "$.premise_reasons[*].id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.premise_reasons": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.premise_reasons[*].decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.premise_reasons[*].expected": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.premise_reasons[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.premise_reasons[*].observed": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.premise_reasons[*].opened_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.premise_reasons[*].pointer": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.premise_reasons[*].premise_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.premise_reasons[*].url": {
               "combine": "AND",
               "matchers": [
                 {
@@ -2652,6 +2914,97 @@
       "type": "Synchronous/HTTP"
     },
     {
+      "description": "a request to allow a host",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds an allowed host, and the session belongs to an admin"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "allowed": true,
+            "host": "status.example.com"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/v1/premise-hosts"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "allowed": true,
+            "host": "status.example.com",
+            "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.host": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
       "description": "a request to approve a drafted check",
       "pending": false,
       "providerStates": [
@@ -3286,6 +3639,192 @@
           }
         },
         "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to clear a review reason",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds an open review reason, and the session belongs to a decision owner"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {},
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "path": {
+            "expression": "/v1/decisions/${decisionId}/premises/${premiseId}/clearance",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          },
+          "path": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          }
+        },
+        "method": "POST",
+        "path": "/v1/decisions/1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f/premises/tls-version/clearance"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "decision_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "premise_id": "tls-version"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.decision_id": {
+              "type": "Uuid"
+            },
+            "$.id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.premise_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to clear a review reason that was cleared",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds a review reason that was cleared, and the session belongs to a decision owner"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {},
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "path": {
+            "expression": "/v1/decisions/${decisionId}/premises/${premiseId}/clearance",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          },
+          "path": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          }
+        },
+        "method": "POST",
+        "path": "/v1/decisions/1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f/premises/tls-version/clearance"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "error": "not found"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": 404
       },
       "type": "Synchronous/HTTP"
     },
@@ -4434,6 +4973,97 @@
           ]
         },
         "status": 409
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to withdraw a host",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds an allowed host, and the session belongs to an admin"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "allowed": false,
+            "host": "status.example.com"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/v1/premise-hosts"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "allowed": false,
+            "host": "status.example.com",
+            "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.host": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
       },
       "type": "Synchronous/HTTP"
     },
