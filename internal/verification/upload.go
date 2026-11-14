@@ -30,15 +30,20 @@ const (
 	// MaxVerdicts bounds the verdicts of one upload. A repository has far fewer decision checks, and the
 	// body cap of the API bounds the bytes.
 	MaxVerdicts = 5000
-	// reportVersion is the only ADR-0030 report version.
-	reportVersion = 1
-	maxPaths      = 100
-	maxPathBytes  = 512
-	maxTextBytes  = 64
-	maxEnvBytes   = 256
-	maxSlugBytes  = 128
-	maxCheckIndex = 1 << 20
-	maxViolations = 1<<31 - 1
+	// A report is ADR-0030 version 1, or version 2 when each verdict also carries the digests of its
+	// violations (ADR-0122).
+	reportVersionFirst = 1
+	reportVersionLast  = 2
+	// maxFingerprints bounds the digests of one verdict. It is the bound of a baseline (ADR-0052), and the
+	// body cap of the API allows far fewer in all.
+	maxFingerprints = 100000
+	maxPaths        = 100
+	maxPathBytes    = 512
+	maxTextBytes    = 64
+	maxEnvBytes     = 256
+	maxSlugBytes    = 128
+	maxCheckIndex   = 1 << 20
+	maxViolations   = 1<<31 - 1
 	// maxEvidenceBytes bounds the JSON of the fields only some reports have. The table caps it at 64 KiB, and
 	// this is half of that, because the JSON of a path doubles when every character needs an escape.
 	maxEvidenceBytes = 32 << 10
@@ -96,6 +101,19 @@ type Verdict struct {
 	Mode       string `json:"mode"`
 	Result     string `json:"result"`
 	Violations int    `json:"violations"`
+	// Fingerprints are the digests of the violations of the check in a version 2 report, as lowercase hex,
+	// sorted and distinct. A waived verdict holds all of its violations and a failed one holds every violation
+	// of the check, covered by the baseline of the runner or not. None means the runner sent none (ADR-0122).
+	// The key is left out of the canonical form when there are none, so a verdict without digests keeps the
+	// digest it had before the field existed.
+	Fingerprints []string `json:"fingerprints,omitempty"`
+}
+
+// verdictWire is a verdict as a report writes it. The digests stay raw, so that a version 1 verdict that has
+// the key, a version 2 verdict that lacks it, and a null in place of a list can each be refused.
+type verdictWire struct {
+	Verdict
+	Fingerprints json.RawMessage `json:"fingerprints"`
 }
 
 // Upload is a validated upload. Parse is the only way to make one, so every field has met its rule.
@@ -152,8 +170,8 @@ func Parse(body []byte) (Upload, error) {
 
 	up := Upload{Check: env.Check}
 	var version int
-	if err := decodeStrict(report["report_version"], &version); err != nil || version != reportVersion {
-		return Upload{}, invalid("report_version is not 1")
+	if err := decodeStrict(report["report_version"], &version); err != nil || version < reportVersionFirst || version > reportVersionLast {
+		return Upload{}, invalid("report_version is not 1 or 2")
 	}
 	var evaluated string
 	if err := decodeStrict(report["evaluated_at"], &evaluated); err != nil {
@@ -182,7 +200,7 @@ func Parse(body []byte) (Upload, error) {
 	if up.Evidence, err = readEvidence(env.Check, fields, report); err != nil {
 		return Upload{}, err
 	}
-	if up.Verdicts, err = readVerdicts(report["verdicts"]); err != nil {
+	if up.Verdicts, err = readVerdicts(report["verdicts"], version); err != nil {
 		return Upload{}, err
 	}
 	up.Digest = digest(up)
@@ -238,20 +256,22 @@ func readEvidence(check string, fields []field, report map[string]json.RawMessag
 	return encoded, nil
 }
 
-func readVerdicts(raw json.RawMessage) ([]Verdict, error) {
-	var verdicts []Verdict
-	if err := decodeStrict(raw, &verdicts); err != nil || verdicts == nil {
+func readVerdicts(raw json.RawMessage, version int) ([]Verdict, error) {
+	var wires []verdictWire
+	if err := decodeStrict(raw, &wires); err != nil || wires == nil {
 		return nil, invalid("verdicts is not a list of verdicts")
 	}
-	if len(verdicts) > MaxVerdicts {
+	if len(wires) > MaxVerdicts {
 		return nil, invalid("verdicts has more than the allowed number")
 	}
 	type key struct {
 		decision string
 		index    int
 	}
-	seen := make(map[key]bool, len(verdicts))
-	for _, v := range verdicts {
+	verdicts := make([]Verdict, len(wires))
+	seen := make(map[key]bool, len(wires))
+	for i, wire := range wires {
+		v := wire.Verdict
 		switch {
 		case !decisionID.MatchString(v.DecisionID):
 			return nil, invalid("a verdict has a decision_id that is not an EDR id")
@@ -273,6 +293,12 @@ func readVerdicts(raw json.RawMessage) ([]Verdict, error) {
 			return nil, invalid("two verdicts have the same decision_id and check_index")
 		}
 		seen[k] = true
+		fingerprints, err := readFingerprints(wire.Fingerprints, version, v)
+		if err != nil {
+			return nil, err
+		}
+		v.Fingerprints = fingerprints
+		verdicts[i] = v
 	}
 	slices.SortFunc(verdicts, func(a, b Verdict) int {
 		if c := strings.Compare(a.DecisionID, b.DecisionID); c != 0 {
@@ -281,6 +307,49 @@ func readVerdicts(raw json.RawMessage) ([]Verdict, error) {
 		return a.CheckIndex - b.CheckIndex
 	})
 	return verdicts, nil
+}
+
+// readFingerprints reads the digests of one verdict, whose other fields have passed their rules. A version 1
+// verdict has no such key. A version 2 verdict has the key with a list: sorted, distinct, lowercase sha256
+// digests, and none for a verdict with no denial. A waived verdict has none or one for each of its violations,
+// and a failed one has none or at least one for each, because it counts only the violations that no baseline of
+// the runner covers. A list with no digest is the same as no list.
+func readFingerprints(raw json.RawMessage, version int, v Verdict) ([]string, error) {
+	if version == reportVersionFirst {
+		if raw != nil {
+			return nil, invalid("a version 1 verdict has fingerprints")
+		}
+		return nil, nil
+	}
+	if raw == nil {
+		return nil, invalid("a version 2 verdict has no fingerprints")
+	}
+	var list []string
+	if err := decodeStrict(raw, &list); err != nil || list == nil {
+		return nil, invalid("fingerprints is not a list")
+	}
+	if len(list) > maxFingerprints {
+		return nil, invalid("a verdict has more fingerprints than the allowed number")
+	}
+	for i, digest := range list {
+		if !hexDigits.MatchString(digest) {
+			return nil, invalid("a verdict has a fingerprint that is not a lowercase sha256")
+		}
+		if i > 0 && list[i-1] >= digest {
+			return nil, invalid("the fingerprints of a verdict are not sorted and distinct")
+		}
+	}
+	switch {
+	case len(list) == 0:
+		return nil, nil
+	case v.Result == "pass" || v.Result == "error":
+		return nil, invalid("a verdict with no denial has fingerprints")
+	case v.Result == "waived" && len(list) != v.Violations:
+		return nil, invalid("a waived verdict has fingerprints that are not one for each violation")
+	case v.Result == "fail" && len(list) < v.Violations:
+		return nil, invalid("a failed verdict has fewer fingerprints than violations")
+	}
+	return list, nil
 }
 
 // digest is the sha256 of the upload as the server would write it again: fixed key order, the verdicts

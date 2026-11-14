@@ -495,7 +495,7 @@ export interface paths {
         };
         /**
          * List the stored verdicts, newest first, for a repository or a decision or all.
-         * @description Each item is one decision check of one uploaded run, with the run it came from. The run, the commit, the workflow and the repository are the ones the signed CI token named when it was uploaded, and `run_url` is built from them.
+         * @description Each item is one decision check of one uploaded run, with the run it came from. The run, the commit, the workflow and the repository are the ones the signed CI token named when it was uploaded, and `run_url` is built from them. `known` is the transaction time: only the uploads stored by then are listed, and absent means now. A verdict whose report carried the digests of its violations is read against the recorded baseline of its decision and repository as known at that time, and `baseline` says the result (ADR-0122). `result` stays what the run reported.
          */
         get: operations["list_verdicts"];
         put?: never;
@@ -612,11 +612,13 @@ export interface components {
             result: "pass" | "fail" | "waived" | "error";
             /** @description The number of denials. 0 for pass and error, at least 1 for fail and waived. */
             violations: number;
+            /** @description The digests of the violations of the check, sorted and distinct (ADR-0059). Version 2 reports have the key on every verdict and version 1 reports on none, and the server enforces both. A pass and an error have none. A waived verdict has none or one for each violation. A failed verdict has none or every digest of the check, covered by the baseline of the runner or not, so at least as many as its violations. It is empty when the runner sent none: no baseline, a waiver, an error, or a violation that has no identity. */
+            fingerprints?: components["schemas"]["Sha256"][];
         };
-        /** @description The report of ADR-0030, version 1, exactly as the command wrote it. Beyond the six keys every report has, each check has its own keys, and the server refuses a report with any other set. plan has plan_sha256. ci has commit_sha and evidence_sha256. checkov has evidence_sha256. pulumi, cloudformation and arm have adapter, equal to the check, and input_sha256. depcruise, semgrep, archunit, importlinter, kyverno, gatekeeper and eslint have paths and their engine's version key (depcruise_version, semgrep_version, archunit_version, importlinter_version, kyverno_version, gator_version, eslint_version), which is empty when the engine did not run. */
+        /** @description The report of ADR-0030, version 1 or 2, exactly as the command wrote it. Version 2 adds the digests of the violations to each verdict (ADR-0122). Beyond the six keys every report has, each check has its own keys, and the server refuses a report with any other set. plan has plan_sha256. ci has commit_sha and evidence_sha256. checkov has evidence_sha256. pulumi, cloudformation and arm have adapter, equal to the check, and input_sha256. depcruise, semgrep, archunit, importlinter, kyverno, gatekeeper and eslint have paths and their engine's version key (depcruise_version, semgrep_version, archunit_version, importlinter_version, kyverno_version, gator_version, eslint_version), which is empty when the engine did not run. */
         VerdictReport: {
             /** @enum {integer} */
-            report_version: 1;
+            report_version: 1 | 2;
             ipso_version: string;
             /** Format: date-time */
             evaluated_at: string;
@@ -694,6 +696,20 @@ export interface components {
             sarif_sha256: components["schemas"]["Sha256"] | null;
             /** @description The hashes, paths and engine version only that check's report has. */
             evidence: Record<string, never>;
+            /** @description The verdict read against the recorded baseline, or null when the run sent no digest for it. The `result` above stays what the run reported. */
+            baseline: components["schemas"]["VerdictBaseline"] | null;
+        };
+        /** @description The reading of a verdict against the baseline recorded for its decision and repository, as known at the time of the read (ADR-0122). The valid time is the time the server stored the upload. */
+        VerdictBaseline: {
+            /**
+             * @description waived(baseline) when the baseline holds every digest the run sent, and fail otherwise, which includes no recorded baseline, no decision or more than one for the EDR id, and a grandfather period that does not cover the time the upload was stored.
+             * @enum {string}
+             */
+            result: "waived(baseline)" | "fail";
+            /** @description The number of digests the run sent. */
+            fingerprints: number;
+            /** @description The number of those digests the baseline holds. */
+            waived: number;
         };
         Error: {
             /** @enum {string} */
@@ -2181,6 +2197,8 @@ export interface operations {
                 repo?: components["parameters"]["VerdictRepo"];
                 /** @description An EDR id or a slug. Absent matches every decision. */
                 decision?: components["parameters"]["VerdictDecision"];
+                /** @description The transaction time. Absent means now, and the answer echoes the time used. */
+                known?: components["parameters"]["Known"];
                 limit?: components["parameters"]["Limit"];
                 /** @description The last id of the previous page. */
                 before?: components["parameters"]["Before"];
@@ -2198,6 +2216,11 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        /**
+                         * Format: date-time
+                         * @description The transaction time the page was read at.
+                         */
+                        known: string;
                         verdicts: components["schemas"]["StoredVerdict"][];
                     };
                 };

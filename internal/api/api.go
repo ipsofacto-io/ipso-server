@@ -260,7 +260,7 @@ func routes(db *sql.DB, now func() time.Time, log *slog.Logger) []route {
 	reg := &registryRoutes{db: db, now: now}
 	audits := audit.Handler(db, tenantOf)
 	reviews := proposals.Handler(db, tenantOf)
-	verdicts := &verdictRoutes{db: db}
+	verdicts := &verdictRoutes{db: db, now: now}
 	reads := []route{
 		{"POST /v1/resolve", "resolve", authz.RegistryRead, nil, nil, http.HandlerFunc(reg.resolve)},
 		{"GET /v1/decisions", "list_decisions", authz.RegistryRead, []string{"valid", "known", "limit", "before"}, nil, http.HandlerFunc(reg.decisions)},
@@ -278,7 +278,7 @@ func routes(db *sql.DB, now func() time.Time, log *slog.Logger) []route {
 		{"GET /v1/audit/merges", "audit_merges", authz.AuditRead, []string{"repo", "path", "env", "at", "known"}, nil, audits},
 		{"GET /v1/audit/supersessions/{decisionID}", "audit_supersessions", authz.AuditRead, []string{"known"}, nil, audits},
 		{"GET /v1/audit/waivers", "audit_waivers", authz.AuditRead, []string{"known", "now"}, nil, audits},
-		{"GET /v1/verdicts", "list_verdicts", authz.VerdictsRead, []string{"repo", "decision", "limit", "before"}, nil, http.HandlerFunc(verdicts.list)},
+		{"GET /v1/verdicts", "list_verdicts", authz.VerdictsRead, []string{"repo", "decision", "known", "limit", "before"}, nil, http.HandlerFunc(verdicts.list)},
 	}
 	return slices.Concat(reads, writeRoutes(db, log), exportRoutes(db, log))
 }

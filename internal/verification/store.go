@@ -3,6 +3,7 @@ package verification
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -79,17 +80,31 @@ func Store(ctx context.Context, db *sql.DB, tenant uuid.UUID, run Run, up Upload
 		n := len(up.Verdicts)
 		decisions, slugs, indexes := make([]string, n), make([]string, n), make([]int32, n)
 		modes, results, violations := make([]string, n), make([]string, n), make([]int32, n)
+		fingerprints := make([][]string, n)
 		for i, v := range up.Verdicts {
 			decisions[i], slugs[i], indexes[i] = v.DecisionID, v.Slug, int32(v.CheckIndex)
 			modes[i], results[i], violations[i] = v.Mode, v.Result, int32(v.Violations)
+			// An empty list and not null, because the statement takes the elements of each entry.
+			fingerprints[i] = []string{}
+			if v.Fingerprints != nil {
+				fingerprints[i] = v.Fingerprints
+			}
 		}
+		digests, err := json.Marshal(fingerprints)
+		if err != nil {
+			return Stored{}, reduce("store: encode the fingerprints", err)
+		}
+		// The digests of the verdicts are one JSON list of lists, in the order of the other arrays. A verdict
+		// with none gets null and not an empty array, as the table's constraint requires.
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO verification.verdict (tenant_id, upload_id, decision_id, slug, check_index, mode, result, violations)
-			SELECT $1::uuid, $2::uuid, t.decision_id, t.slug, t.check_index, t.mode, t.result, t.violations
+			INSERT INTO verification.verdict (tenant_id, upload_id, decision_id, slug, check_index, mode, result, violations, fingerprints)
+			SELECT $1::uuid, $2::uuid, t.decision_id, t.slug, t.check_index, t.mode, t.result, t.violations,
+			       (SELECT array_agg(decode(f.digest, 'hex') ORDER BY f.ord)
+			        FROM jsonb_array_elements_text($9::jsonb -> (t.ord - 1)::int) WITH ORDINALITY AS f(digest, ord))
 			FROM unnest($3::text[], $4::text[], $5::int4[], $6::text[], $7::text[], $8::int4[])
 			     WITH ORDINALITY AS t(decision_id, slug, check_index, mode, result, violations, ord)
 			ORDER BY t.ord`,
-			tenant, id, decisions, slugs, indexes, modes, results, violations); err != nil {
+			tenant, id, decisions, slugs, indexes, modes, results, violations, string(digests)); err != nil {
 			return Stored{}, reduce("store: insert the verdicts", err)
 		}
 	}

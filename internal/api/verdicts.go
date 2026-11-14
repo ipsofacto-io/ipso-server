@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -16,6 +17,8 @@ import (
 // verdictRoutes serves the stored verdicts of CI runs (ADR-0102).
 type verdictRoutes struct {
 	db *sql.DB
+	// now is the transaction time of a list that names none (ADR-0122).
+	now func() time.Time
 	// log receives the reason an upload could not be stored. Store reduces a database error to a state code
 	// and a constraint, so it holds no content from the runner.
 	log *slog.Logger
@@ -84,8 +87,14 @@ func (h *verdictRoutes) list(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errInvalidQuery)
 		return
 	}
+	now := h.now()
+	known, ok := q.time("known", now)
+	if !ok {
+		writeError(w, http.StatusBadRequest, errInvalidQuery)
+		return
+	}
 	items, err := verification.List(r.Context(), h.db, tenant,
-		verification.Filter{Repo: q.values.Get("repo"), Decision: q.values.Get("decision")}, page.Limit, page.Before)
+		verification.Filter{Repo: q.values.Get("repo"), Decision: q.values.Get("decision")}, page.Limit, page.Before, known)
 	if errors.Is(err, verification.ErrInvalid) {
 		writeError(w, http.StatusBadRequest, errInvalidQuery)
 		return
@@ -94,5 +103,5 @@ func (h *verdictRoutes) list(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, errInternal)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"verdicts": items})
+	writeJSON(w, http.StatusOK, map[string]any{"known": known, "verdicts": items})
 }

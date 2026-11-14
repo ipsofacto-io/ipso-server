@@ -317,3 +317,20 @@ describe('the export routes of the fixtures server', () => {
     expect(get('/v1/exports/current', state, at(8 + 24 * 60 * 60)).status).toBe(404);
   });
 });
+
+describe('the verdict list of the fixtures server', () => {
+  const get = (path: string) => respond({ method: 'GET', url: path, cookie }, NOW, newFixtureState());
+  const reading = (path: string) => (get(path).body as { known: string; verdicts: { id: string; baseline: { result: string } | null }[] });
+
+  it('takes the transaction time and answers the time it used, as the registry reads do', () => {
+    expect(reading('/v1/verdicts').known).toBe(NOW.toISOString());
+    expect(reading('/v1/verdicts?known=2026-11-01T00:00:00Z').known).toBe('2026-11-01T00:00:00Z');
+    expect(get('/v1/verdicts?valid=2026-11-01T00:00:00Z').status).toBe(400);
+  });
+
+  it('gives each verdict a reading or null, and a reading follows the shape of the document', () => {
+    const verdicts = reading('/v1/verdicts').verdicts;
+    expect(verdicts.some((verdict) => verdict.baseline === null)).toBe(true);
+    expect(verdicts.filter((verdict) => verdict.baseline !== null).map((verdict) => verdict.baseline?.result).sort()).toEqual(['fail', 'waived(baseline)']);
+  });
+});

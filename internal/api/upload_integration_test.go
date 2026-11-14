@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -65,11 +66,23 @@ func (f *fixture) uploadHandler(t *testing.T, limits Limits) (http.Handler, *ci)
 			return Mapping{}, runs.status
 		}},
 		Limits: limits,
+		// A read that names no transaction time is read at the time of the database that stamps the rows.
+		Now: f.databaseNow,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return handler, runs
+}
+
+// databaseNow is the clock of the database, which sets the transaction time of every row. The test database
+// runs in a virtual machine whose clock need not equal this process's.
+func (f *fixture) databaseNow() time.Time {
+	var now time.Time
+	if err := f.admin.QueryRowContext(context.Background(), `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		panic(err)
+	}
+	return now
 }
 
 // token is the token of a job in repo, with run and attempt, as GitHub would sign it.

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -66,4 +67,33 @@ func (s *store) count(t *testing.T, query string, args ...any) int {
 		t.Fatalf("%s: %v", query, err)
 	}
 	return n
+}
+
+// soon is a transaction time after everything a test has stored. It is read from the database, whose clock
+// sets the transaction time of a row.
+func (s *store) soon(t *testing.T) time.Time {
+	t.Helper()
+	var ts time.Time
+	if err := s.admin.QueryRowContext(t.Context(), `SELECT clock_timestamp() + interval '1 minute'`).Scan(&ts); err != nil {
+		t.Fatal(err)
+	}
+	return ts
+}
+
+// mark reads the database clock with a pause on each side, so that no row written before it shares its
+// microsecond and none written after it can be read as known before it.
+func (s *store) mark(t *testing.T) time.Time {
+	t.Helper()
+	pause := func() {
+		if _, err := s.admin.ExecContext(t.Context(), `SELECT pg_sleep(0.02)`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pause()
+	var now time.Time
+	if err := s.admin.QueryRowContext(t.Context(), `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		t.Fatal(err)
+	}
+	pause()
+	return now
 }

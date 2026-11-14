@@ -278,10 +278,16 @@ export function verdicts(now: Date): StoredVerdict[] {
     build_sha256: 'a'.repeat(64),
     sarif_sha256: null,
     evidence: {},
+    // No digest came with the run, so there is no reading against a recorded baseline.
+    baseline: null as StoredVerdict['baseline'],
   };
   return [
     { ...base, id: uuid(603), decision_id: ulid(1), slug: 'use-tls', check_index: 0, mode: 'block', result: 'pass', violations: 0, run_id: 9912345, run_attempt: 1, run_url: 'https://github.com/acme/payments/actions/runs/9912345', evaluated_at: iso(new Date(now.getTime() - 2 * 60 * 60 * 1000)), recorded_at: iso(new Date(now.getTime() - 2 * 60 * 60 * 1000 + 4000)) },
     { ...base, id: uuid(602), decision_id: ulid(1), slug: 'use-tls', check_index: 1, mode: 'block', result: 'fail', violations: 2, run_id: 9911876, run_attempt: 2, run_url: 'https://github.com/acme/payments/actions/runs/9911876', evaluated_at: iso(new Date(now.getTime() - 27 * 60 * 60 * 1000)), recorded_at: iso(new Date(now.getTime() - 27 * 60 * 60 * 1000 + 4000)) },
     { ...base, id: uuid(601), decision_id: ulid(1), slug: 'use-tls', check_index: 0, mode: 'warn', result: 'waived', violations: 1, run_id: 9910001, run_attempt: 1, run_url: 'https://github.com/acme/payments/actions/runs/9910001', evaluated_at: iso(new Date(now.getTime() - 80 * 60 * 60 * 1000)), recorded_at: iso(new Date(now.getTime() - 80 * 60 * 60 * 1000 + 4000)) },
+    // The run reported a failure and every digest it sent is in the recorded baseline (ADR-0122).
+    { ...base, id: uuid(600), decision_id: ulid(1), slug: 'use-tls', check_index: 2, mode: 'block', result: 'fail', violations: 3, baseline: { result: 'waived(baseline)', fingerprints: 3, waived: 3 }, run_id: 9909002, run_attempt: 1, run_url: 'https://github.com/acme/payments/actions/runs/9909002', evaluated_at: iso(new Date(now.getTime() - 100 * 60 * 60 * 1000)), recorded_at: iso(new Date(now.getTime() - 100 * 60 * 60 * 1000 + 4000)) },
+    // The run waived its violations with its local baseline, which nobody recorded on the server.
+    { ...base, id: uuid(599), decision_id: ulid(1), slug: 'use-tls', check_index: 3, mode: 'block', result: 'waived', violations: 2, baseline: { result: 'fail', fingerprints: 2, waived: 0 }, run_id: 9909001, run_attempt: 1, run_url: 'https://github.com/acme/payments/actions/runs/9909001', evaluated_at: iso(new Date(now.getTime() - 120 * 60 * 60 * 1000)), recorded_at: iso(new Date(now.getTime() - 120 * 60 * 60 * 1000 + 4000)) },
   ];
 }

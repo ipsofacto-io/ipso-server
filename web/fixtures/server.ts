@@ -393,12 +393,12 @@ export function respond(request: FixtureRequest, now: Date = new Date(), state: 
   }
   if (path === '/v1/premise-hosts') return allow(...PAGED) ?? json(200, { premise_hosts: page(latestHosts([...premiseHostRows, ...state.hosts]), query) });
   if (path === '/v1/verdicts') {
-    const refused = allow('repo', 'decision', ...PAGED);
+    const refused = allow('repo', 'decision', 'known', ...PAGED);
     if (refused) return refused;
     const decision = query.get('decision');
     const repo = query.get('repo');
     const rows = verdicts(now).filter((v) => (decision === null || v.decision_id === decision || v.slug === decision) && (repo === null || v.repo === repo.toLowerCase()));
-    return json(200, { verdicts: page(rows, query) });
+    return json(200, { known: echo.known, verdicts: page(rows, query) });
   }
 
   if (path === '/v1/audit/decisions') {
