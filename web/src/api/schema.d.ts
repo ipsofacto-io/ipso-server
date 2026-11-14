@@ -173,7 +173,7 @@ export interface paths {
         put?: never;
         /**
          * Record the baseline of a decision in one repository.
-         * @description Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). The role must cover every scope of the decision. A baseline holds the fingerprints of the violations that already exist, as digests and never paths or messages (ADR-0052, ADR-0059). The decision needs its grandfather period first, and there is one baseline for each decision and repository, so a missing period and a second baseline are 409.
+         * @description Only a person takes it, so an agent receives 403, and the role policy must cover every scope the request names (ADR-0108, ADR-0109). The role must cover every scope of the decision. A baseline holds the fingerprints of the violations that already exist, as digests and never paths or messages (ADR-0052, ADR-0059). The decision needs its grandfather period first, and there is one baseline for each decision and repository, so a missing period and a second baseline are 409. The web app sends the digests of the file that `ipso baseline export` writes, which holds no salt (ADR-0121). The body is at most 1 MiB, which is about 15,600 fingerprints, and a larger one is 413 with nothing stored.
          */
         post: operations["record_baseline"];
         delete?: never;
@@ -832,6 +832,7 @@ export interface components {
         BaselineRequest: {
             /** @description A lowercase owner/name. */
             repo: string;
+            /** @description The registry holds up to 100,000, and the 1 MiB request body takes about 15,600 of them. */
             fingerprints: components["schemas"]["Sha256"][];
         };
         Baseline: {

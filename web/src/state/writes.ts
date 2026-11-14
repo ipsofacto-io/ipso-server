@@ -8,7 +8,7 @@ export const REASON_MAX = 2000;
 export const TICKET_MAX = 200;
 const DAY = 24 * 60 * 60 * 1000;
 const FIELD_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** A datetime-local value, read as UTC, in milliseconds. NaN when it is not a time. */
 function fieldMillis(value: string): number {

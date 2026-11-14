@@ -53,6 +53,11 @@ const (
 	stateToSupersede = "tenant A holds two decisions that nobody superseded, and the session belongs to a decision owner"
 )
 
+// The state of a baseline (IPSO-150, ADR-0121). A baseline needs the grandfather terms of its decision first, and it is
+// recorded once for a decision and a repository, so the state seeds a decision with its terms and no baseline, and hands
+// the id back. The session is a decision owner over the whole tenant, so it covers every scope of the decision.
+const stateToBaseline = "tenant A holds a decision with grandfather terms and no baseline, and the session belongs to a decision owner"
+
 // The states of the answer to a drafted check (IPSO-153, ADR-0118). Each seeds a decision and a check drafted for
 // it, because a drafted check is decided once and the path names both. The session is an approver over the whole
 // tenant, so it covers every scope of the decision.
@@ -324,6 +329,18 @@ func TestPactProviderIpsoServer(t *testing.T) {
 		return models.ProviderStateResponse{"fromDecisionId": from.String(), "toDecisionId": to.String()}, nil
 	}
 
+	toBaseline := func(ctx context.Context, n int64) (models.ProviderStateResponse, error) {
+		decision, err := f.seedDecision(ctx, "synthetic-baselined-"+strconv.FormatInt(n, 10))
+		if err != nil {
+			return nil, err
+		}
+		if _, err := pgtest.Exec(ctx, f.db, tenantA.String(), `
+			INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period)
+			VALUES ($1, $2, tstzrange('2026-03-01T00:00:00Z'::timestamptz, NULL, '[)'))`, tenantA, decision); err != nil {
+			return nil, fmt.Errorf("seed the grandfather terms: %w", err)
+		}
+		return models.ProviderStateResponse{"decisionId": decision.String()}, nil
+	}
 	unansweredCheck := func(ctx context.Context, n int64) (models.ProviderStateResponse, error) {
 		decision, check, err := f.seedCheckProposal(ctx, n)
 		if err != nil {
@@ -383,6 +400,7 @@ func TestPactProviderIpsoServer(t *testing.T) {
 			stateAnswered:    seeds(approverA, answered),
 			stateToWaive:     seeds(approverA, toWaive),
 			stateToSupersede: seeds(ownerA, toSupersede),
+			stateToBaseline:  seeds(ownerA, toBaseline),
 
 			stateCheckUnanswered: seeds(approverA, unansweredCheck),
 			stateCheckAnswered:   seeds(approverA, answeredCheck),

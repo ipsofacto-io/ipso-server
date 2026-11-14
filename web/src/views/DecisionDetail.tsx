@@ -183,6 +183,9 @@ function DecisionCard({ decision }: { decision: Decision }) {
         <LinkButton to={`/supersessions/new?from=${encodeURIComponent(d.id)}`} size="sm">
           Supersede this decision
         </LinkButton>
+        <LinkButton to={`/baselines/new?decision=${encodeURIComponent(d.id)}`} size="sm">
+          Record a baseline
+        </LinkButton>
       </div>
     </article>
   );

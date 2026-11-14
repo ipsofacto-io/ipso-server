@@ -80,6 +80,58 @@ describe('the write routes of the fixtures server', () => {
   });
 });
 
+describe('the baseline of a repository in the fixtures server', () => {
+  const path = (decision: string = ids.useTls) => `/v1/decisions/${decision}/baselines`;
+  const digest = (n: number) => n.toString(16).padStart(64, '0');
+  const baseline = { repo: 'acme/api', fingerprints: [digest(1), digest(2)] };
+  const withTerms = () => {
+    const state = newFixtureState();
+    post(`/v1/decisions/${ids.useTls}/grandfather-period`, { valid_from: '2026-11-07T12:00:00Z' }, state);
+    return state;
+  };
+
+  it('needs the grandfather terms of the decision first', () => {
+    expect(post(path(), baseline).reply.status).toBe(409);
+    expect(post(path(), baseline, withTerms()).reply).toMatchObject({ status: 201, body: { decision_id: ids.useTls, repo: 'acme/api', fingerprint_count: 2 } });
+  });
+
+  it('records one baseline for each repository and answers a repeat with 409', () => {
+    const state = withTerms();
+    expect(post(path(), baseline, state).reply.status).toBe(201);
+    expect(post(path(), baseline, state).reply.status).toBe(409);
+    expect(post(path(), { ...baseline, repo: 'acme/web' }, state).reply.status).toBe(201);
+  });
+
+  it('refuses what the registry would refuse, and a key the route does not list', () => {
+    const state = withTerms();
+    for (const body of [
+      { ...baseline, repo: 'Acme/api' },
+      { ...baseline, repo: 'acme' },
+      { ...baseline, repo: 'acme/../api' },
+      { ...baseline, repo: 'acme/api/' },
+      { ...baseline, fingerprints: [] },
+      { ...baseline, fingerprints: [digest(1), digest(1)] },
+      { ...baseline, fingerprints: [digest(10).toUpperCase()] },
+      { ...baseline, fingerprints: [digest(1).slice(1)] },
+      { ...baseline, fingerprints: [7] },
+      { ...baseline, tenant: 'a' },
+      { repo: baseline.repo },
+    ]) {
+      expect(post(path(), body, state).reply.status, JSON.stringify(body).slice(0, 80)).toBe(400);
+    }
+    expect(post(path('not-a-uuid'), baseline, state).reply.status).toBe(400);
+  });
+
+  it('answers 404 for a decision that does not exist, and stores nothing over 1 MiB', () => {
+    const state = withTerms();
+    expect(post(path('0194f2a0-0000-7000-8000-0000000009ff'), baseline, state).reply.status).toBe(404);
+    const large = { repo: 'acme/api', fingerprints: Array.from({ length: 15700 }, (_, i) => digest(i)) };
+    expect(JSON.stringify(large).length).toBeGreaterThan(1 << 20);
+    expect(post(path(), large, state).reply.status).toBe(413);
+    expect(post(path(), baseline, state).reply.status).toBe(201);
+  });
+});
+
 describe('the answer to a drafted check in the fixtures server', () => {
   const CHECK = '0194f2a0-0000-7000-8000-000000000501';
   const path = (decision: string = ids.useTls, check: string = CHECK) => `/v1/decisions/${decision}/check-proposals/${check}/approval`;

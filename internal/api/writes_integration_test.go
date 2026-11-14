@@ -5,6 +5,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -546,6 +547,83 @@ func TestSupersessionPeriodAndBaselineRefuseWhatTheRegistryRefuses(t *testing.T)
 	// Three successes were logged, and no refusal.
 	if got := len(s.logged()); got != 3 {
 		t.Fatalf("%d log entries, want 3", got)
+	}
+}
+
+// A baseline recorded through the route is the one Grandfather reads (ADR-0052 decision 6, ADR-0121): a recorded
+// digest is waived while the grandfather period covers the valid time, any other digest fails, and an answer as known
+// before the upload does not change. A body one digest over the 1 MiB cap is a 413 that stores nothing, and the largest
+// body that fits is recorded, which is the number the web app measures against (web/src/state/baseline.ts).
+func TestAnUploadedBaselineIsTheOneGrandfatherReads(t *testing.T) {
+	s := newScribe(t)
+	f := s.f
+	baseline := "/v1/decisions/" + f.tls.String() + "/baselines"
+	s.expect(http.StatusCreated, ownerA, http.MethodPost, "/v1/decisions/"+f.tls.String()+"/grandfather-period", map[string]any{"valid_from": "2026-03-01T00:00:00Z"})
+
+	digest := func(i int) string { return fmt.Sprintf("%064x", i) }
+	fingerprint := func(i int) registry.Fingerprint {
+		raw, err := hex.DecodeString(digest(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out registry.Fingerprint
+		copy(out[:], raw)
+		return out
+	}
+	body := func(repo string, n int) string {
+		quoted := make([]string, n)
+		for i := range quoted {
+			quoted[i] = `"` + digest(i) + `"`
+		}
+		return `{"repo":"` + repo + `","fingerprints":[` + strings.Join(quoted, ",") + `]}`
+	}
+
+	// Each digest takes 64 characters, two quotes and a comma, as the app counts them.
+	fit := (1<<20 - len(body("acme/api", 0)) + 1) / 67
+	if fit < 15500 || fit > 15700 {
+		t.Fatalf("%d digests fit, the documents say about 15,600", fit)
+	}
+	if over := body("acme/api", fit+1); len(over) <= 1<<20 {
+		t.Fatalf("the body of %d digests is %d bytes, not over the cap", fit+1, len(over))
+	}
+	if w := s.raw(ownerA, http.MethodPost, baseline, "application/json", body("acme/api", fit+1)); w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("one digest over the cap: status %d", w.Code)
+	}
+	if n := s.count(tenantA, `SELECT count(*) FROM registry.baseline WHERE tenant_id = $1`); n != 0 {
+		t.Fatalf("a refused body stored %d baselines", n)
+	}
+
+	before := clock(t, f.db)
+	if w := s.raw(ownerA, http.MethodPost, baseline, "application/json", body("acme/api", fit)); w.Code != http.StatusCreated {
+		t.Fatalf("the largest body that fits: status %d %s", w.Code, w.Body)
+	}
+	after := clock(t, f.db)
+
+	grandfather := func(repo string, validAt, knownAt time.Time, indexes ...int) []registry.Result {
+		t.Helper()
+		violations := make([]registry.Fingerprint, 0, len(indexes))
+		for _, i := range indexes {
+			violations = append(violations, fingerprint(i))
+		}
+		got, err := registry.Grandfather(t.Context(), f.db, tenantA, f.tls, repo, violations, validAt, knownAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	during := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	want := func(name string, got []registry.Result, results ...registry.Result) {
+		t.Helper()
+		if !slices.Equal(got, results) {
+			t.Errorf("%s: %v, want %v", name, got, results)
+		}
+	}
+	want("a recorded digest and one that was never uploaded", grandfather("acme/api", during, after, 0, fit-1, fit), registry.WaivedBaseline, registry.WaivedBaseline, registry.Fail)
+	want("another repository", grandfather("acme/web", during, after, 0), registry.Fail)
+	want("before the grandfather period starts", grandfather("acme/api", time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), after, 0), registry.Fail)
+	want("as known before the upload", grandfather("acme/api", during, before, 0), registry.Fail)
+	if n := s.count(tenantA, `SELECT count(*) FROM registry.baseline WHERE tenant_id = $1`); n != 1 {
+		t.Fatalf("%d baselines, want the one that fit", n)
 	}
 }
 

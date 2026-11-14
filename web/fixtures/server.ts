@@ -27,6 +27,8 @@ export interface FixtureState {
   superseded: Set<string>;
   /** The decisions that have grandfather terms: a decision has one set. */
   terms: Set<string>;
+  /** The decision and repository of each baseline a person recorded: there is one for each pair. */
+  baselined: Set<string>;
   sequence: number;
   /** The one export the tenant holds, as the stand-in makes it. */
   held: FixtureExport | null;
@@ -45,7 +47,7 @@ export interface FixtureExport {
 }
 
 export function newFixtureState(): FixtureState {
-  return { answered: new Set(), decisions: [], waivers: [], superseded: new Set([ids.legacyFtp]), terms: new Set(), sequence: 1000, held: null, cleared: new Set(), hosts: [] };
+  return { answered: new Set(), decisions: [], waivers: [], superseded: new Set([ids.legacyFtp]), terms: new Set(), baselined: new Set(), sequence: 1000, held: null, cleared: new Set(), hosts: [] };
 }
 
 export interface FixtureReply {
@@ -82,6 +84,13 @@ const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const HOST = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const NUMERIC_HOST = /^[0-9.]+$/;
 const MAX_BODY = 1 << 20;
+// A baseline is 1 to 100,000 digests of 64 lowercase hexadecimal characters, for a repository the registry can store
+// (ADR-0051, ADR-0052). The rule of the server, written out again on purpose: the app's own check (src/state/baseline.ts)
+// is tested against it.
+const DIGEST = /^[0-9a-f]{64}$/;
+const REPO = /^[a-z0-9][a-z0-9._-]{0,62}(\/[a-z0-9._-]{1,100}){1,10}$/;
+const DOT_SEGMENT = /(^|\/)\.{1,2}(\/|$)/;
+const MAX_FINGERPRINTS = 100000;
 const WAIVER_MAX = 90 * 24 * 60 * 60 * 1000;
 
 // The export of the stand-in (ADR-0111, ADR-0115): pending for a few seconds, running for a few more, then
@@ -287,6 +296,23 @@ function write(request: FixtureRequest, path: string, now: Date, state: FixtureS
     if (state.terms.has(id)) return error(409, 'conflict');
     state.terms.add(id);
     return json(201, { decision_id: id, valid_from: from, valid_until: until });
+  }
+
+  // The fingerprints of one repository (ADR-0121): after the grandfather terms of the decision, once for each
+  // repository, and in a body of at most 1 MiB, which `parse` refuses with a 413 and stores nothing.
+  const baseline = /^\/v1\/decisions\/([^/]+)\/baselines$/.exec(path);
+  if (baseline) {
+    const id = decodeURIComponent(baseline[1] ?? '');
+    const parsed = parse(request, ['repo', 'fingerprints']);
+    if (!parsed.ok) return parsed.reply;
+    const { repo, fingerprints } = parsed.fields;
+    if (!isUuid(id) || typeof repo !== 'string' || repo.length > 255 || !REPO.test(repo) || DOT_SEGMENT.test(repo)) return bad;
+    if (!Array.isArray(fingerprints) || fingerprints.length < 1 || fingerprints.length > MAX_FINGERPRINTS) return bad;
+    if (!fingerprints.every((digest) => typeof digest === 'string' && DIGEST.test(digest)) || new Set(fingerprints).size !== fingerprints.length) return bad;
+    if (!known(id)) return error(404, 'not found');
+    if (!state.terms.has(id) || state.baselined.has(`${id}|${repo}`)) return error(409, 'conflict');
+    state.baselined.add(`${id}|${repo}`);
+    return json(201, { id: fresh(state), decision_id: id, repo, fingerprint_count: fingerprints.length });
   }
   return error(404, 'not found');
 }
