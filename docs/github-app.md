@@ -32,7 +32,7 @@ IPSO_GITHUB_APP_PRIVATE_KEY="$(cat app.pem)" \
 ipso-server tenant bind-installation --tenant <tenant id> --installation <id> --account <login>
 ```
 
-The command asks GitHub, as the App, which account the installation is on, and binds nothing unless it belongs to this App and its account is the `--account` you gave. An installation belongs to one tenant: a second tenant's bind is refused, and binding the same pair again changes nothing. A tenant may hold several installations. Only `ipso-server tenant offboard` removes a binding today. A delivery that GitHub refused before the bind can be redelivered from the App's advanced settings. The same binding decides which tenant the verdicts of a CI job are stored under ([docs/verdicts.md](verdicts.md)).
+The command asks GitHub, as the App, which account the installation is on, and binds nothing unless it belongs to this App and its account is the `--account` you gave. An installation belongs to one tenant: a second tenant's bind is refused, and binding the same pair again changes nothing. A tenant may hold several installations. `ipso-server tenant offboard` removes a tenant's bindings, and the service removes the binding of an installation that its account uninstalls ([ADR-0125](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0125-installation-unbind-on-uninstall.md)). A delivery that GitHub refused before the bind can be redelivered from the App's advanced settings. The same binding decides which tenant the verdicts of a CI job are stored under ([docs/verdicts.md](verdicts.md)).
 
 ## Run the service
 
@@ -91,8 +91,11 @@ The job runs on two workers of its own, so a slow model never delays a check run
 | `pull_request` opened, synchronize, reopened | One check run on the head commit, over the files of the pull request |
 | `push` to the default branch | One check run on the new commit, over the files since the previous commit |
 | `pull_request` closed and merged, with `IPSO_GATEWAY_CONFIG` set | The discussion is read and turned into pending proposals for the tenant of the installation |
+| `installation` deleted | The service asks GitHub, as the App, whether the installation is gone, and if it is, removes its binding before it answers |
 | Anything else | Answered with 202, no work |
 
 A delivery that would start work is answered 403 when its installation has no tenant, and 503 when the database cannot be asked, so GitHub records a failed delivery that can be redelivered. Neither is remembered, so the redelivery after a bind is worked.
+
+GitHub sends `installation` events to every App, and an App cannot subscribe to them, so registering the App needs no setting for them. An uninstall is answered 202 when the binding is removed and when the installation had none. It is answered 503, and nothing is removed, when GitHub or the database cannot answer, or when GitHub still has the installation, so a failed removal can be redelivered. A suspended installation keeps its binding.
 
 A run that cannot finish concludes as a failure with fixed text, and the service log names the reason. A delivery that repeats within the last 4096 does no work, and a job that failed can be retried with a redelivery.

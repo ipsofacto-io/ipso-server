@@ -113,11 +113,12 @@ type deps struct {
 	restoreTenant    func(ctx context.Context, db *sql.DB, o tenancy.RestoreOptions) (tenancy.RestoreReport, error)
 	offboardTenant   func(ctx context.Context, db *sql.DB, o tenancy.OffboardOptions) (tenancy.OffboardReport, error)
 	// The installation to tenant mapping (ADR-0101). installationAccount asks GitHub which account an
-	// installation is on, bindInstallation writes the mapping, and installationTenant and
-	// requireInstallations serve the webhooks command. Tests inject all of them.
+	// installation is on, bindInstallation writes the mapping, and installationTenant, unbindInstallation
+	// (ADR-0125) and requireInstallations serve the webhooks command. Tests inject all of them.
 	installationAccount  func(ctx context.Context, appID string, privateKey []byte, installation int64) (string, error)
 	bindInstallation     func(ctx context.Context, db *sql.DB, o tenancy.BindOptions) (tenancy.BindReport, error)
 	installationTenant   func(ctx context.Context, db *sql.DB, installation int64) (uuid.UUID, bool, error)
+	unbindInstallation   func(ctx context.Context, db *sql.DB, installation int64) (uuid.UUID, bool, error)
 	requireInstallations func(ctx context.Context, db *sql.DB) error
 }
 
@@ -153,6 +154,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		},
 		bindInstallation:     tenancy.BindInstallation,
 		installationTenant:   tenancy.InstallationTenant,
+		unbindInstallation:   tenancy.UnbindInstallation,
 		requireInstallations: tenancy.RequireInstallationLookup,
 		loadBundle: func(layout, digest, publicKey string) (integrations.PlanEvaluator, error) {
 			return plancheck.Load(layout, digest, publicKey)
@@ -236,7 +238,8 @@ webhooks serves the GitHub App webhook on ` + listenAddrEnv + ` (default ` + def
 ` + appIDEnv + `, ` + appPrivateKeyEnv + `, and ` + webhookSecretEnv + `, and opens ` + databaseEnv + `
 as the application role to ask which tenant owns the installation of a delivery. A delivery from an
 installation that no tenant owns starts nothing. Bind an installation first with
-ipso-server tenant bind-installation. When ` + gatewayConfigEnv + ` names the configuration file of the LLM
+ipso-server tenant bind-installation. When an account uninstalls the App and GitHub confirms that the
+installation is gone, the binding is removed. When ` + gatewayConfigEnv + ` names the configuration file of the LLM
 gateway, a merged pull request also has its discussion read and turned into pending decision proposals for the
 tenant of the installation, through the gateway: each route reads its key from the IPSO_LLM_ variable it
 names, and the service stops at start when the file or a key is wrong. Without it no discussion is read and
@@ -447,6 +450,9 @@ func webhooksCmd(ctx context.Context, stderr io.Writer, d deps) int {
 		Logger:        logger,
 		Tenants: func(ctx context.Context, installation int64) (uuid.UUID, bool, error) {
 			return d.installationTenant(ctx, db, installation)
+		},
+		Unbind: func(ctx context.Context, installation int64) (uuid.UUID, bool, error) {
+			return d.unbindInstallation(ctx, db, installation)
 		},
 	}
 	if path := d.getenv(gatewayConfigEnv); path != "" {
