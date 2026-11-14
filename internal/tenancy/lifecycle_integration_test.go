@@ -637,6 +637,52 @@ func TestRestoreTakesRowsAsDataAndPinsThemToTheTarget(t *testing.T) {
 	}
 }
 
+// An archive written before verification.verdict had its digests has no key for them, and a restore reads that as
+// no digest and not as an error (ADR-0122).
+func TestRestoreReadsAnArchiveThatPredatesTheDigestsOfAVerdict(t *testing.T) {
+	l := newLifecycle(t)
+	pgtest.SeedEveryTable(t, l.app, tenantA)
+	l.provision(t, tenantC, "restored", nil)
+	id := identity(t)
+	archive, _ := l.export(t, tenantA, id)
+
+	p := open(t, archive, id)
+	stripped := 0
+	for i, r := range p.rows {
+		if r.Table != "verification.verdict" {
+			continue
+		}
+		var row map[string]json.RawMessage
+		if err := json.Unmarshal(r.Row, &row); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := row["fingerprints"]; !ok {
+			t.Fatalf("the export of a verdict has no fingerprints key: %s", r.Row)
+		}
+		delete(row, "fingerprints")
+		raw, err := json.Marshal(row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.rows[i].Row = raw
+		stripped++
+	}
+	if stripped == 0 {
+		t.Fatal("the seed holds no verdict")
+	}
+	if _, err := l.restore(seal(t, p, id), tenantC, id, t); err != nil {
+		t.Fatalf("restore of an older archive: %v", err)
+	}
+	var withDigests, total int
+	if err := l.admin.QueryRowContext(t.Context(),
+		`SELECT count(*) FILTER (WHERE fingerprints IS NOT NULL), count(*) FROM verification.verdict WHERE tenant_id = $1::uuid`, tenantC).Scan(&withDigests, &total); err != nil {
+		t.Fatal(err)
+	}
+	if total != stripped || withDigests != 0 {
+		t.Errorf("restored %d verdicts, %d with digests; want %d and none", total, withDigests, stripped)
+	}
+}
+
 func TestOffboardDeletesEverythingAndVerifiesIt(t *testing.T) {
 	l := newLifecycle(t)
 	pgtest.SeedEveryTable(t, l.app, tenantA)

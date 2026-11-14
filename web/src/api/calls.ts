@@ -62,8 +62,8 @@ export function makeCalls(api: Api) {
       api.getJSON<{ agent_proposals: AgentProposal[] }>('/v1/agent-proposals', q, signal),
     listCheckProposals: (q: Paging = {}, signal?: AbortSignal) =>
       api.getJSON<{ check_proposals: CheckProposal[] }>('/v1/check-proposals', q, signal),
-    listVerdicts: (q: { repo?: string; decision?: string } & Paging = {}, signal?: AbortSignal) =>
-      api.getJSON<{ verdicts: StoredVerdict[] }>('/v1/verdicts', q, signal),
+    listVerdicts: (q: { repo?: string; decision?: string; known?: string } & Paging = {}, signal?: AbortSignal) =>
+      api.getJSON<{ known: string; verdicts: StoredVerdict[] }>('/v1/verdicts', q, signal),
     auditDecisions: (q: Subject & { valid: string; known: string }, signal?: AbortSignal) =>
       api.getJSON<AuditDecisions>('/v1/audit/decisions', q, signal),
     auditBeliefs: (q: Subject & { valid: string; then: string; now: string }, signal?: AbortSignal) =>

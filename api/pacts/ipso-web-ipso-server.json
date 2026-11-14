@@ -2110,8 +2110,10 @@
       "response": {
         "body": {
           "content": {
+            "known": "2026-11-01T00:00:00Z",
             "verdicts": [
               {
+                "baseline": null,
                 "build_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                 "check": "plan",
                 "check_index": 0,
@@ -2161,12 +2163,368 @@
         },
         "matchingRules": {
           "body": {
+            "$.known": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
             "$.verdicts": {
               "combine": "AND",
               "matchers": [
                 {
                   "match": "type",
                   "min": 1
+                }
+              ]
+            },
+            "$.verdicts[*].baseline": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "null"
+                }
+              ]
+            },
+            "$.verdicts[*].build_sha256": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^[0-9a-f]{64}$"
+                }
+              ]
+            },
+            "$.verdicts[*].check": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.verdicts[*].check_index": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.verdicts[*].decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.verdicts[*].env": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.verdicts[*].evaluated_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.verdicts[*].event": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.verdicts[*].evidence": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.verdicts[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.verdicts[*].ipso_version": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.verdicts[*].mode": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.verdicts[*].recorded_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.verdicts[*].ref": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.verdicts[*].repo": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.verdicts[*].result": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.verdicts[*].run_attempt": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.verdicts[*].run_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.verdicts[*].run_url": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.verdicts[*].sarif_sha256": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^[0-9a-f]{64}$"
+                }
+              ]
+            },
+            "$.verdicts[*].sha": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.verdicts[*].slug": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.verdicts[*].upload_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.verdicts[*].violations": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.verdicts[*].workflow_ref": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the stored verdicts of a decision that has a recorded baseline",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds a verdict whose digests are all in the recorded baseline of its decision"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/verdicts",
+        "query": {
+          "decision": [
+            "01M7PACT000000000000000000"
+          ],
+          "limit": [
+            "20"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "known": "2026-11-01T00:00:00Z",
+            "verdicts": [
+              {
+                "baseline": {
+                  "fingerprints": 2,
+                  "result": "waived(baseline)",
+                  "waived": 2
+                },
+                "build_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "check": "plan",
+                "check_index": 0,
+                "decision_id": "01M5QJ0V9EVXKR4C89XNBNT5GG",
+                "env": "prod",
+                "evaluated_at": "2026-06-01T00:00:00Z",
+                "event": "push",
+                "evidence": {
+                  "plan_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                },
+                "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "ipso_version": "0.5.0",
+                "mode": "block",
+                "recorded_at": "2026-11-01T00:00:00Z",
+                "ref": "refs/heads/main",
+                "repo": "acme/api",
+                "result": "fail",
+                "run_attempt": 1,
+                "run_id": 1001,
+                "run_url": "https://github.com/acme/api/actions/runs/1001",
+                "sarif_sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+                "sha": "abababababababababababababababababababab",
+                "slug": "use-tls",
+                "upload_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "violations": 2,
+                "workflow_ref": "acme/api/.github/workflows/ci.yml@refs/heads/main"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.verdicts[*].id": {
+              "type": "Uuid"
+            },
+            "$.verdicts[*].upload_id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.known": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.verdicts": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.verdicts[*].baseline.fingerprints": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.verdicts[*].baseline.waived": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
                 }
               ]
             },

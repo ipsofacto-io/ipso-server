@@ -248,3 +248,84 @@ func TestResolveFollowsASupersession(t *testing.T) {
 		t.Errorf("March as known after = %v, want %v", got, want)
 	}
 }
+
+// GrandfatherEach answers each read as Grandfather answers it alone, reads a baseline once for the same
+// decision, repository and valid time, and reads every one as known at the same time (ADR-0122).
+func TestGrandfatherEachAnswersEachReadAsGrandfatherDoes(t *testing.T) {
+	r := newRegistryDB(t)
+	one := uuid.MustParse("00000000-0000-4000-8000-0000000000e1")
+	two := uuid.MustParse("00000000-0000-4000-8000-0000000000e2")
+	a, aHex := fillDigest(11)
+	b, bHex := fillDigest(12)
+	c, cHex := fillDigest(13)
+	other, _ := fillDigest(14)
+	may := at(t, r, "2026-05-01")
+	june := at(t, r, "2026-06-01")
+
+	before := mark(t, r.admin)
+	r.period(t, tenantA, one, "[2026-01-01,)")
+	r.baseline(t, tenantA, one, "acme/payments", []string{aHex, bHex})
+	r.period(t, tenantA, two, "[2026-01-01,2026-06-01)")
+	r.baseline(t, tenantA, two, "acme/payments", []string{cHex})
+	r.baseline(t, tenantA, two, "acme/web", []string{cHex})
+	after := mark(t, r.admin)
+
+	reads := []BaselineRead{
+		{Decision: one, Repo: "acme/payments", Violations: []Fingerprint{a, other}, ValidAt: may},
+		{Decision: two, Repo: "acme/payments", Violations: []Fingerprint{c}, ValidAt: may},
+		{Decision: two, Repo: "acme/payments", Violations: []Fingerprint{c}, ValidAt: june},
+		{Decision: two, Repo: "Acme/Web", Violations: []Fingerprint{c}, ValidAt: may},
+		{Decision: one, Repo: "acme/payments", ValidAt: may},
+		{Decision: one, Repo: "acme/payments", Violations: []Fingerprint{b, a}, ValidAt: may},
+		{Decision: one, Repo: "acme/unknown", Violations: []Fingerprint{a}, ValidAt: may},
+	}
+	got, err := GrandfatherEach(t.Context(), r.app, tenantA, reads, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]Result{
+		{WaivedBaseline, Fail},
+		{WaivedBaseline},
+		{Fail},
+		{WaivedBaseline},
+		nil,
+		{WaivedBaseline, WaivedBaseline},
+		{Fail},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%d answers, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if !slices.Equal(got[i], want[i]) {
+			t.Errorf("read %d = %v, want %v", i, got[i], want[i])
+		}
+		alone, err := Grandfather(t.Context(), r.app, tenantA, reads[i].Decision, reads[i].Repo, reads[i].Violations, reads[i].ValidAt, after)
+		if err != nil || !slices.Equal(alone, got[i]) {
+			t.Errorf("read %d alone = %v, %v, want %v", i, alone, err, got[i])
+		}
+	}
+
+	// As known before the baselines were recorded, every read is fail.
+	earlier, err := GrandfatherEach(t.Context(), r.app, tenantA, reads, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, answer := range earlier {
+		for _, result := range answer {
+			if result != Fail {
+				t.Errorf("read %d as known before = %v, want fail", i, answer)
+			}
+		}
+	}
+
+	// Another tenant reads none of it.
+	elsewhere, err := GrandfatherEach(t.Context(), r.app, tenantB, reads[:2], after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, answer := range elsewhere {
+		if !slices.Equal(answer, make([]Result, len(reads[i].Violations))) {
+			t.Errorf("tenant B read %d = %v, want fail", i, answer)
+		}
+	}
+}

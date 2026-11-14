@@ -2,7 +2,7 @@ import { Link, useParams } from 'react-router';
 
 import { calls } from '../api/calls';
 import { useResource } from '../api/hooks';
-import type { Decision } from '../api/types';
+import type { Decision, StoredVerdict } from '../api/types';
 import { DecisionStatus } from '../components/DecisionStatus';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorNotice } from '../components/ErrorNotice';
@@ -206,6 +206,27 @@ function Successor({ id }: { id: string }) {
 
 const SHOWN = 20;
 
+/**
+ * The result of one verdict. A run that sent the digests of its violations is read against the baseline that was
+ * recorded for its decision and repository, and the registry's reading is the result shown (ADR-0122). What the run
+ * reported stays next to it when the two differ, so a local file that disagrees with the registry is seen.
+ */
+function Reading({ verdict }: { verdict: StoredVerdict }) {
+  const baseline = verdict.baseline;
+  const shown = baseline ? baseline.result : verdict.result;
+  const agrees = !baseline || baseline.result === verdict.result || (baseline.result === 'waived(baseline)' && verdict.result === 'waived');
+  return (
+    <>
+      <span className={shown === 'fail' || shown === 'error' ? 'result result-bad' : 'result'}>{shown}</span>
+      {baseline ? (
+        <div className="muted">
+          {`${baseline.waived} of ${baseline.fingerprints} in the recorded baseline${agrees ? '' : `, the run reported ${verdict.result}`}`}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function Verdicts({ decision }: { decision: string }) {
   const verdicts = useResource((signal) => calls.listVerdicts({ decision, limit: SHOWN }, signal), [decision]);
   return (
@@ -234,7 +255,7 @@ function Verdicts({ decision }: { decision: string }) {
               {verdicts.data.verdicts.map((verdict) => (
                 <tr key={verdict.id}>
                   <td>
-                    <span className={verdict.result === 'fail' || verdict.result === 'error' ? 'result result-bad' : 'result'}>{verdict.result}</span>
+                    <Reading verdict={verdict} />
                   </td>
                   <td>{verdict.mode}</td>
                   <td className="mono">{verdict.violations}</td>

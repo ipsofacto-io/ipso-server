@@ -6,6 +6,8 @@ A CI job uploads the verdicts of an `ipso check` run, and the control plane stor
 
 The body is the verdict report that `ipso check <command> --report <file>` writes ([ADR-0030](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0030-verdict-report-contract.md)), the name of the command, and optionally the SHA-256 of the SARIF file the same command wrote with `--sarif`. The report holds hashes, counts and the result of each decision check. It holds no plan value, no resource address and no violation message, and the SARIF file itself is never sent, so no source code or plan leaves the runner ([ADR-0006](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0006-local-first-evaluation.md)).
 
+A version 2 report also holds, for each decision check, the sorted digests of its violations ([ADR-0122](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0122-baseline-on-verdict-reads.md)). A digest is the HMAC-SHA-256 that `ipso baseline` computes under the salt that stays in the repository ([ADR-0059](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0059-baseline-fingerprint-contract.md)), so the server holds digests and never a path, an address or a message. A check that a waiver covers, that failed to evaluate, that has no baseline on the runner, or that has a violation with no identity sends none. The server accepts reports of version 1 and 2, and refuses a list that is not sorted, repeats a digest, is on a pass or an error, or is shorter than the violations it counts.
+
 ```json
 {"check": "plan", "report": { "...": "the report file as written" }, "sarif_sha256": "<64 lowercase hex>"}
 ```
@@ -82,6 +84,10 @@ The answer is 201 with the id of the upload, or 200 with the id of the first one
 ## Read the results
 
 `GET /v1/verdicts` lists the stored verdicts of the tenant, newest first, as a person with a bearer token or a session. It takes `repo` (owner/name, in any case), `decision` (an EDR id or a slug), `limit` and `before`, as the other lists do. Each item is one decision check with the run it came from: the repository, commit, ref, event, workflow, run and its link, the check, the environment, the times, the report and SARIF digests, and the hashes, paths and engine version that only that check's report has. Any role of the tenant can read it ([docs/roles.md](roles.md)).
+
+The list is read as known at a time. `known` is the transaction time, absent means now, and the answer echoes the time it used: only the uploads the server had stored by then are listed. A verdict whose report carried digests is read against the baseline that a person recorded for its decision and repository ([docs/web-app.md](web-app.md)), and `baseline` on the item says the result: `waived(baseline)` when the baseline holds every digest the run sent, and `fail` otherwise, with the number sent and the number held. `baseline` is null when the run sent no digest. `result` stays what the run reported, so a reader sees both, and a local file that disagrees with the registry shows as a `waived` run that reads `fail`.
+
+The reading is made when the verdict is read and is never stored. The decision is the one whose body holds the EDR id of the verdict, as known at `known`, and an id that no decision holds or that two hold reads `fail`. The grandfather period has to cover the time the server stored the upload, not the `evaluated_at` that the runner states, so a deadline is read by the server's clock. A baseline recorded after an answer was read as known before it does not change that answer. Waivers are not applied to a stored verdict yet, and audit question Q3 still has no verdicts.
 
 ## Failures
 

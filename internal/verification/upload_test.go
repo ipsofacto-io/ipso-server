@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -151,7 +152,8 @@ func TestParseRefusesWhatBreaksTheContract(t *testing.T) {
 		"a report that is a list":   func(upload, _ map[string]any) { upload["report"] = []any{} },
 		"an extra report key":       func(_, report map[string]any) { report["tenant_id"] = "x" },
 		"a missing report key":      func(_, report map[string]any) { delete(report, "env") },
-		"another report version":    func(_, report map[string]any) { report["report_version"] = 2 },
+		"another report version":    func(_, report map[string]any) { report["report_version"] = 3 },
+		"version 2 with no digests": func(_, report map[string]any) { report["report_version"] = 2 },
 		"a report version as text":  func(_, report map[string]any) { report["report_version"] = "1" },
 		"a time that is not one":    func(_, report map[string]any) { report["evaluated_at"] = "yesterday" },
 		"an empty tool version":     func(_, report map[string]any) { report["ipso_version"] = "" },
@@ -321,5 +323,144 @@ func TestParseAcceptsTheReportsTheCLIWrote(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{"check": "cloudformation", "report": json.RawMessage(report)})
 	if _, err := Parse(body); !errors.Is(err, ErrInvalid) {
 		t.Errorf("a plan report as a cloudformation report: %v, want ErrInvalid", err)
+	}
+}
+
+// digestN is the nth digest in order: 64 lowercase hexadecimal characters that sort as n does.
+func digestN(n int) string { return fmt.Sprintf("%064x", n) }
+
+func digestsFrom(from, count int) []any {
+	out := make([]any, count)
+	for i := range out {
+		out[i] = digestN(from + i)
+	}
+	return out
+}
+
+// version2 makes the report a version 2 report. The first verdict is the pass and the second the fail with 3
+// violations, as reportOf writes them, and each gets the list the caller gives.
+func version2(pass, fail []any) func(upload, report map[string]any) {
+	return func(_, report map[string]any) {
+		report["report_version"] = 2
+		verdictOf(report, 0)["fingerprints"] = pass
+		verdictOf(report, 1)["fingerprints"] = fail
+	}
+}
+
+func TestParseAcceptsAVersion2ReportAndKeepsItsDigests(t *testing.T) {
+	for name, fail := range map[string][]any{
+		"none":            {},
+		"one for each":    digestsFrom(1, 3),
+		"more than count": digestsFrom(1, 5),
+	} {
+		t.Run(name, func(t *testing.T) {
+			up, err := Parse(bodyOf(t, "plan", version2([]any{}, fail)))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			// The verdicts are sorted by decision id, so the fail comes first.
+			failed, passed := up.Verdicts[0], up.Verdicts[1]
+			if len(up.Verdicts) != 2 || failed.Result != "fail" || len(passed.Fingerprints) != 0 || len(failed.Fingerprints) != len(fail) {
+				t.Fatalf("verdicts = %+v", up.Verdicts)
+			}
+			if len(fail) == 0 && failed.Fingerprints != nil {
+				t.Errorf("an empty list is kept as %v, want none", failed.Fingerprints)
+			}
+			for i, got := range failed.Fingerprints {
+				if got != fail[i] {
+					t.Errorf("digest %d = %s, want %s", i, got, fail[i])
+				}
+			}
+		})
+	}
+	// A waived verdict holds one digest for each violation.
+	waived := func(violations int, list []any) func(upload, report map[string]any) {
+		return func(upload, report map[string]any) {
+			version2([]any{}, list)(upload, report)
+			verdictOf(report, 1)["result"], verdictOf(report, 1)["violations"] = "waived", violations
+		}
+	}
+	if _, err := Parse(bodyOf(t, "plan", waived(3, digestsFrom(1, 3)))); err != nil {
+		t.Errorf("a waived verdict with a digest for each violation: %v", err)
+	}
+	if _, err := Parse(bodyOf(t, "plan", waived(3, []any{}))); err != nil {
+		t.Errorf("a waived verdict with none: %v", err)
+	}
+}
+
+func TestParseRefusesWhatBreaksTheDigestsOfAVersion2Report(t *testing.T) {
+	waived := func(violations int, list []any) func(upload, report map[string]any) {
+		return func(upload, report map[string]any) {
+			version2([]any{}, list)(upload, report)
+			verdictOf(report, 1)["result"], verdictOf(report, 1)["violations"] = "waived", violations
+		}
+	}
+	cases := map[string]func(upload, report map[string]any){
+		"a version 1 verdict with a list": func(_, report map[string]any) { verdictOf(report, 1)["fingerprints"] = digestsFrom(1, 3) },
+		"a version 2 verdict with no key": func(_, report map[string]any) {
+			report["report_version"] = 2
+			verdictOf(report, 0)["fingerprints"] = []any{}
+		},
+		"a null list":              func(u, r map[string]any) { version2([]any{}, nil)(u, r) },
+		"a list that is text":      func(u, r map[string]any) { version2([]any{}, nil)(u, r); verdictOf(r, 1)["fingerprints"] = "abc" },
+		"an uppercase digest":      func(u, r map[string]any) { version2([]any{}, []any{strings.ToUpper(hashA)})(u, r) },
+		"a short digest":           func(u, r map[string]any) { version2([]any{}, []any{"abc"})(u, r) },
+		"a prefixed digest":        func(u, r map[string]any) { version2([]any{}, []any{"sha256:" + hashA})(u, r) },
+		"a digest that is a count": func(u, r map[string]any) { version2([]any{}, []any{3})(u, r) },
+		"an unsorted list": func(u, r map[string]any) {
+			version2([]any{}, []any{digestN(2), digestN(1), digestN(3)})(u, r)
+		},
+		"a repeated digest": func(u, r map[string]any) {
+			version2([]any{}, []any{digestN(1), digestN(1), digestN(2)})(u, r)
+		},
+		"digests on a pass": func(u, r map[string]any) { version2(digestsFrom(1, 1), []any{})(u, r) },
+		"digests on an error": func(u, r map[string]any) {
+			version2(digestsFrom(1, 1), []any{})(u, r)
+			verdictOf(r, 0)["result"] = "error"
+		},
+		"fewer digests than violations on a fail":      func(u, r map[string]any) { version2([]any{}, digestsFrom(1, 2))(u, r) },
+		"fewer digests than violations on a waived":    waived(3, digestsFrom(1, 2)),
+		"more digests than violations on a waived":     waived(3, digestsFrom(1, 4)),
+		"more digests than a baseline can hold":        func(u, r map[string]any) { version2([]any{}, digestsFrom(1, maxFingerprints+1))(u, r) },
+		"a digest key on a version 1 verdict of a run": func(_, report map[string]any) { verdictOf(report, 0)["fingerprints"] = []any{} },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse(bodyOf(t, "plan", mutate)); !errors.Is(err, ErrInvalid) {
+				t.Errorf("Parse = %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
+func TestTheDigestOfAReportCoversItsFingerprintsAndKeepsTheOldFormForNone(t *testing.T) {
+	v1, err := Parse(bodyOf(t, "plan", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := Parse(bodyOf(t, "plan", version2([]any{}, []any{})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(v1.Digest, empty.Digest) {
+		t.Error("a version 2 report with no digest is another upload than the version 1 report with the same content")
+	}
+	first, err := Parse(bodyOf(t, "plan", version2([]any{}, digestsFrom(1, 3))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := Parse(bodyOf(t, "plan", version2([]any{}, digestsFrom(2, 3))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(first.Digest, empty.Digest) || bytes.Equal(first.Digest, other.Digest) {
+		t.Error("another list of digests is the same upload")
+	}
+}
+
+func TestAnErrorAboutADigestNeverQuotesIt(t *testing.T) {
+	_, err := Parse(bodyOf(t, "plan", version2([]any{}, []any{"SECRET-" + hashA})))
+	if !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), "SECRET") || strings.Contains(err.Error(), hashA) {
+		t.Errorf("err = %v", err)
 	}
 }

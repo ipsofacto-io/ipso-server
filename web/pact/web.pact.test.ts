@@ -34,6 +34,8 @@ const PACT_FILE = resolve(PACT_DIR, 'ipso-web-ipso-server.json');
 // The provider states. Every row they describe is synthetic (internal/api/main_integration_test.go).
 const REGISTRY = 'tenant A holds decisions, scopes, a waiver, and proposals';
 const VERDICTS = 'tenant A holds a stored verdict';
+// A verdict whose digests are all in the baseline recorded for its decision and repository (ADR-0122).
+const VERDICT_IN_BASELINE = 'tenant A holds a verdict whose digests are all in the recorded baseline of its decision';
 const VIEWER = 'the session belongs to a viewer of tenant A';
 // The states of the writes (ADR-0110). A write changes what the provider holds, so each of these states seeds
 // its own rows when it is set up and hands their ids back, and the interaction names them with
@@ -361,6 +363,35 @@ describe('the web app and the control plane API', () => {
     );
   });
 
+  // One stored verdict as the list answers it. The reading is null when the run sent no digest (ADR-0122).
+  const storedVerdict = (reading: unknown) => ({
+    id: uuid(),
+    upload_id: uuid(),
+    decision_id: like('01M5QJ0V9EVXKR4C89XNBNT5GG'),
+    slug: like('use-tls'),
+    check_index: integer(0),
+    mode: like('block'),
+    result: like('fail'),
+    violations: integer(2),
+    baseline: reading,
+    repo: like('acme/api'),
+    sha: like('abababababababababababababababababababab'),
+    ref: like('refs/heads/main'),
+    event: like('push'),
+    workflow_ref: like('acme/api/.github/workflows/ci.yml@refs/heads/main'),
+    run_id: integer(1001),
+    run_attempt: integer(1),
+    run_url: like('https://github.com/acme/api/actions/runs/1001'),
+    check: like('plan'),
+    env: like('prod'),
+    ipso_version: like('0.5.0'),
+    evaluated_at: timestamp(VALID),
+    recorded_at: timestamp(KNOWN),
+    build_sha256: sha256('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'),
+    sarif_sha256: sha256('fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210'),
+    evidence: like({ plan_sha256: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' }),
+  });
+
   it('lists the stored verdicts of a decision', async () => {
     await interact(
       {
@@ -369,37 +400,34 @@ describe('the web app and the control plane API', () => {
         path: '/v1/verdicts',
         query: { decision: '01M5QJ0V9EVXKR4C89XNBNT5GG', limit: '20' },
         status: 200,
+        body: { known: timestamp(KNOWN), verdicts: eachLike(storedVerdict(nullValue())) },
+      },
+      async (calls) => {
+        const answer = await calls.listVerdicts({ decision: '01M5QJ0V9EVXKR4C89XNBNT5GG', limit: 20 });
+        expect(answer.verdicts[0]?.result).toBe('fail');
+        expect(answer.verdicts[0]?.baseline).toBeNull();
+      },
+    );
+  });
+
+  it('reads the verdicts of a decision against its recorded baseline', async () => {
+    await interact(
+      {
+        description: 'a request for the stored verdicts of a decision that has a recorded baseline',
+        state: VERDICT_IN_BASELINE,
+        path: '/v1/verdicts',
+        query: { decision: '01M7PACT000000000000000000', limit: '20' },
+        status: 200,
         body: {
-          verdicts: eachLike({
-            id: uuid(),
-            upload_id: uuid(),
-            decision_id: like('01M5QJ0V9EVXKR4C89XNBNT5GG'),
-            slug: like('use-tls'),
-            check_index: integer(0),
-            mode: like('block'),
-            result: like('fail'),
-            violations: integer(2),
-            repo: like('acme/api'),
-            sha: like('abababababababababababababababababababab'),
-            ref: like('refs/heads/main'),
-            event: like('push'),
-            workflow_ref: like('acme/api/.github/workflows/ci.yml@refs/heads/main'),
-            run_id: integer(1001),
-            run_attempt: integer(1),
-            run_url: like('https://github.com/acme/api/actions/runs/1001'),
-            check: like('plan'),
-            env: like('prod'),
-            ipso_version: like('0.5.0'),
-            evaluated_at: timestamp(VALID),
-            recorded_at: timestamp(KNOWN),
-            build_sha256: sha256('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'),
-            sarif_sha256: sha256('fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210'),
-            evidence: like({ plan_sha256: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' }),
-          }),
+          known: timestamp(KNOWN),
+          verdicts: eachLike(
+            storedVerdict({ result: 'waived(baseline)', fingerprints: integer(2), waived: integer(2) }),
+          ),
         },
       },
       async (calls) => {
-        expect((await calls.listVerdicts({ decision: '01M5QJ0V9EVXKR4C89XNBNT5GG', limit: 20 })).verdicts[0]?.result).toBe('fail');
+        const reading = (await calls.listVerdicts({ decision: '01M7PACT000000000000000000', limit: 20 })).verdicts[0]?.baseline;
+        expect(reading).toEqual({ result: 'waived(baseline)', fingerprints: 2, waived: 2 });
       },
     );
   });

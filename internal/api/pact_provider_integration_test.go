@@ -37,6 +37,10 @@ const stateRegistry = "tenant A holds decisions, scopes, a waiver, and proposals
 // stateVerdicts is the provider state of the verdict list: tenant A holds one stored verdict.
 const stateVerdicts = "tenant A holds a stored verdict"
 
+// stateVerdictInBaseline is the provider state of a verdict read against a recorded baseline (IPSO-156, ADR-0122). It seeds
+// a decision with its grandfather terms and a baseline, and one upload whose digests are all in that baseline.
+const stateVerdictInBaseline = "tenant A holds a verdict whose digests are all in the recorded baseline of its decision"
+
 // stateViewer is the provider state of a refusal by the role policy: the session is a viewer's, and a
 // viewer may not read the audit routes (ADR-0108).
 const stateViewer = "the session belongs to a viewer of tenant A"
@@ -329,6 +333,9 @@ func TestPactProviderIpsoServer(t *testing.T) {
 		return models.ProviderStateResponse{"fromDecisionId": from.String(), "toDecisionId": to.String()}, nil
 	}
 
+	verdictInBaseline := func(_ context.Context, n int64) (models.ProviderStateResponse, error) {
+		return nil, f.seedVerdictInBaseline(t, n)
+	}
 	toBaseline := func(ctx context.Context, n int64) (models.ProviderStateResponse, error) {
 		decision, err := f.seedDecision(ctx, "synthetic-baselined-"+strconv.FormatInt(n, 10))
 		if err != nil {
@@ -393,14 +400,15 @@ func TestPactProviderIpsoServer(t *testing.T) {
 		PactFiles:          []string{pact},
 		FailIfNoPactsFound: true,
 		StateHandlers: models.StateHandlers{
-			stateRegistry:    as(personA),
-			stateVerdicts:    as(personA),
-			stateViewer:      as(viewerA),
-			stateUnanswered:  seeds(approverA, unanswered),
-			stateAnswered:    seeds(approverA, answered),
-			stateToWaive:     seeds(approverA, toWaive),
-			stateToSupersede: seeds(ownerA, toSupersede),
-			stateToBaseline:  seeds(ownerA, toBaseline),
+			stateRegistry:          as(personA),
+			stateVerdicts:          as(personA),
+			stateVerdictInBaseline: seeds(personA, verdictInBaseline),
+			stateViewer:            as(viewerA),
+			stateUnanswered:        seeds(approverA, unanswered),
+			stateAnswered:          seeds(approverA, answered),
+			stateToWaive:           seeds(approverA, toWaive),
+			stateToSupersede:       seeds(ownerA, toSupersede),
+			stateToBaseline:        seeds(ownerA, toBaseline),
 
 			stateCheckUnanswered: seeds(approverA, unansweredCheck),
 			stateCheckAnswered:   seeds(approverA, answeredCheck),

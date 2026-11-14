@@ -152,8 +152,9 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 		        sha256('build'), sha256('sarif'), jsonb_build_object('plan_sha256', encode(sha256('plan'), 'hex')), sha256('upload'))
 		RETURNING id`, []any{tenant}, &upload)
 	mustExec(`
-		INSERT INTO verification.verdict (tenant_id, upload_id, decision_id, slug, check_index, mode, result, violations)
-		VALUES ($1::uuid, $2::uuid, '01M5QJ0V9EVXKR4C89XNBNT5GG', 'use-tls', 0, 'block', 'fail', 2)`, tenant, upload)
+		INSERT INTO verification.verdict (tenant_id, upload_id, decision_id, slug, check_index, mode, result, violations, fingerprints)
+		VALUES ($1::uuid, $2::uuid, '01M5QJ0V9EVXKR4C89XNBNT5GG', 'use-tls', 0, 'block', 'fail', 2,
+		        ARRAY[sha256('violation a'), sha256('violation b')])`, tenant, upload)
 
 	// A finished export an admin asked for, with its one part (ADR-0111). It finished an hour ago, so a new
 	// request is past the cooldown and replaces it.

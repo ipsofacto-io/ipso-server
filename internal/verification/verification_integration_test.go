@@ -46,7 +46,7 @@ func TestStoreWritesAnUploadAndItsVerdictsAndListReadsThemBack(t *testing.T) {
 		t.Errorf("%d verdict rows, want 2", n)
 	}
 
-	items, err := List(t.Context(), s.app, tenantA, Filter{}, 10, uuid.Nil)
+	items, err := List(t.Context(), s.app, tenantA, Filter{}, 10, uuid.Nil, s.soon(t))
 	if err != nil || len(items) != 2 {
 		t.Fatalf("List = %d items, %v", len(items), err)
 	}
@@ -62,7 +62,7 @@ func TestStoreWritesAnUploadAndItsVerdictsAndListReadsThemBack(t *testing.T) {
 	if items[0].ID.String() <= items[1].ID.String() {
 		t.Errorf("not newest first: %s then %s", items[0].ID, items[1].ID)
 	}
-	next, err := List(t.Context(), s.app, tenantA, Filter{}, 10, items[0].ID)
+	next, err := List(t.Context(), s.app, tenantA, Filter{}, 10, items[0].ID, s.soon(t))
 	if err != nil || len(next) != 1 || next[0].ID != items[1].ID {
 		t.Errorf("the page after the first = %d items, %v", len(next), err)
 	}
@@ -88,7 +88,7 @@ func TestListFiltersByRepositoryAndDecision(t *testing.T) {
 		"no such decision":   {Filter{Decision: "other"}, 0},
 		"both":               {Filter{Repo: "acme/api", Decision: "no-public-buckets"}, 1},
 	} {
-		items, err := List(t.Context(), s.app, tenantA, tc.filter, 50, uuid.Nil)
+		items, err := List(t.Context(), s.app, tenantA, tc.filter, 50, uuid.Nil, s.soon(t))
 		if err != nil || len(items) != tc.want {
 			t.Errorf("%s: %d items, %v; want %d", name, len(items), err, tc.want)
 		}
@@ -102,7 +102,7 @@ func TestListFiltersByRepositoryAndDecision(t *testing.T) {
 		"no limit":         {Filter{}, 0},
 		"too big a limit":  {Filter{}, MaxPage + 1},
 	} {
-		if _, err := List(t.Context(), s.app, tenantA, tc.filter, tc.limit, uuid.Nil); !errors.Is(err, ErrInvalid) {
+		if _, err := List(t.Context(), s.app, tenantA, tc.filter, tc.limit, uuid.Nil, s.soon(t)); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v, want ErrInvalid", name, err)
 		}
 	}
@@ -191,11 +191,11 @@ func TestATenantReadsOnlyItsOwnUploads(t *testing.T) {
 	if _, err := Store(t.Context(), s.app, tenantA, run("acme/api", 1, 1), parsed(t, "plan", nil)); err != nil {
 		t.Fatal(err)
 	}
-	items, err := List(t.Context(), s.app, tenantB, Filter{}, 10, uuid.Nil)
+	items, err := List(t.Context(), s.app, tenantB, Filter{}, 10, uuid.Nil, s.soon(t))
 	if err != nil || len(items) != 0 {
 		t.Errorf("tenant B read %d of tenant A's verdicts (%v)", len(items), err)
 	}
-	items, err = List(t.Context(), s.app, tenantB, Filter{Repo: "acme/api"}, 10, uuid.Nil)
+	items, err = List(t.Context(), s.app, tenantB, Filter{Repo: "acme/api"}, 10, uuid.Nil, s.soon(t))
 	if err != nil || len(items) != 0 {
 		t.Errorf("tenant B read %d of tenant A's verdicts by repository (%v)", len(items), err)
 	}
@@ -262,6 +262,7 @@ func TestTheApplicationRoleCannotChangeOrRemoveAVerdict(t *testing.T) {
 		"update an upload":   `UPDATE verification.upload SET env = 'x'`,
 		"delete an upload":   `DELETE FROM verification.upload`,
 		"update a verdict":   `UPDATE verification.verdict SET result = 'pass'`,
+		"update the digests": `UPDATE verification.verdict SET fingerprints = NULL`,
 		"delete a verdict":   `DELETE FROM verification.verdict`,
 		"truncate a verdict": `TRUNCATE verification.verdict`,
 	} {

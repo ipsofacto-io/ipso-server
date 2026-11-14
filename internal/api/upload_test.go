@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 )
@@ -260,7 +261,7 @@ func TestTheListRefusesAQueryItCannotReadBeforeTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	h := &verdictRoutes{db: db}
+	h := &verdictRoutes{db: db, now: func() time.Time { return time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC) }}
 	list := func(target string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodGet, target, nil)
 		r = r.WithContext(context.WithValue(r.Context(), callerKey{}, Caller{Tenant: tenantA, Principal: someone}))
@@ -277,13 +278,15 @@ func TestTheListRefusesAQueryItCannotReadBeforeTheStore(t *testing.T) {
 		"/v1/verdicts?repo=not%20a%20repo",
 		"/v1/verdicts?repo=a/b/c",
 		"/v1/verdicts?decision=Not%20A%20Slug",
+		"/v1/verdicts?known=yesterday",
+		"/v1/verdicts?known=",
 	} {
 		if w := list(target); w.Code != http.StatusBadRequest || errorOf(t, w) != errInvalidQuery {
 			t.Errorf("%s: status %d, want 400", target, w.Code)
 		}
 	}
 	// A good query reaches the store, which fails here, and the answer does not say why.
-	for _, target := range []string{"/v1/verdicts", "/v1/verdicts?repo=Acme/API&decision=use-tls&limit=5", "/v1/verdicts?decision=01M5QJ0V9EVXKR4C89XNBNT5GG"} {
+	for _, target := range []string{"/v1/verdicts", "/v1/verdicts?repo=Acme/API&decision=use-tls&limit=5", "/v1/verdicts?decision=01M5QJ0V9EVXKR4C89XNBNT5GG", "/v1/verdicts?known=2026-11-01T00:00:00Z"} {
 		if w := list(target); w.Code != http.StatusInternalServerError || errorOf(t, w) != errInternal {
 			t.Errorf("%s: status %d, want 500", target, w.Code)
 		}
