@@ -36,6 +36,8 @@ const REGISTRY = 'tenant A holds decisions, scopes, a waiver, and proposals';
 const VERDICTS = 'tenant A holds a stored verdict';
 // A verdict whose digests are all in the baseline recorded for its decision and repository (ADR-0122).
 const VERDICT_IN_BASELINE = 'tenant A holds a verdict whose digests are all in the recorded baseline of its decision';
+// A verdict that a waiver recorded for its decision covers (ADR-0123).
+const VERDICT_WAIVED = 'tenant A holds a verdict that a recorded waiver covers';
 const VIEWER = 'the session belongs to a viewer of tenant A';
 // The states of the writes (ADR-0110). A write changes what the provider holds, so each of these states seeds
 // its own rows when it is set up and hands their ids back, and the interaction names them with
@@ -363,8 +365,9 @@ describe('the web app and the control plane API', () => {
     );
   });
 
-  // One stored verdict as the list answers it. The reading is null when the run sent no digest (ADR-0122).
-  const storedVerdict = (reading: unknown) => ({
+  // One stored verdict as the list answers it. The baseline reading is null when the run sent no digest (ADR-0122), and
+  // the waiver reading is null for a pass and an error (ADR-0123).
+  const storedVerdict = (reading: unknown, waiver: unknown) => ({
     id: uuid(),
     upload_id: uuid(),
     decision_id: like('01M5QJ0V9EVXKR4C89XNBNT5GG'),
@@ -374,6 +377,7 @@ describe('the web app and the control plane API', () => {
     result: like('fail'),
     violations: integer(2),
     baseline: reading,
+    waiver,
     repo: like('acme/api'),
     sha: like('abababababababababababababababababababab'),
     ref: like('refs/heads/main'),
@@ -400,12 +404,13 @@ describe('the web app and the control plane API', () => {
         path: '/v1/verdicts',
         query: { decision: '01M5QJ0V9EVXKR4C89XNBNT5GG', limit: '20' },
         status: 200,
-        body: { known: timestamp(KNOWN), verdicts: eachLike(storedVerdict(nullValue())) },
+        body: { known: timestamp(KNOWN), verdicts: eachLike(storedVerdict(nullValue(), { result: 'fail', expires_at: nullValue() })) },
       },
       async (calls) => {
         const answer = await calls.listVerdicts({ decision: '01M5QJ0V9EVXKR4C89XNBNT5GG', limit: 20 });
         expect(answer.verdicts[0]?.result).toBe('fail');
         expect(answer.verdicts[0]?.baseline).toBeNull();
+        expect(answer.verdicts[0]?.waiver).toEqual({ result: 'fail', expires_at: null });
       },
     );
   });
@@ -421,13 +426,34 @@ describe('the web app and the control plane API', () => {
         body: {
           known: timestamp(KNOWN),
           verdicts: eachLike(
-            storedVerdict({ result: 'waived(baseline)', fingerprints: integer(2), waived: integer(2) }),
+            storedVerdict({ result: 'waived(baseline)', fingerprints: integer(2), waived: integer(2) }, { result: 'fail', expires_at: nullValue() }),
           ),
         },
       },
       async (calls) => {
         const reading = (await calls.listVerdicts({ decision: '01M7PACT000000000000000000', limit: 20 })).verdicts[0]?.baseline;
         expect(reading).toEqual({ result: 'waived(baseline)', fingerprints: 2, waived: 2 });
+      },
+    );
+  });
+
+  it('reads the verdicts of a decision against its recorded waivers', async () => {
+    await interact(
+      {
+        description: 'a request for the stored verdicts of a decision that a recorded waiver covers',
+        state: VERDICT_WAIVED,
+        path: '/v1/verdicts',
+        query: { decision: '01M7PACT000000000000000001', limit: '20' },
+        status: 200,
+        body: {
+          known: timestamp(KNOWN),
+          verdicts: eachLike(storedVerdict(nullValue(), { result: 'waived', expires_at: timestamp(KNOWN) })),
+        },
+      },
+      async (calls) => {
+        const reading = (await calls.listVerdicts({ decision: '01M7PACT000000000000000001', limit: 20 })).verdicts[0]?.waiver;
+        expect(reading?.result).toBe('waived');
+        expect(typeof reading?.expires_at).toBe('string');
       },
     );
   });

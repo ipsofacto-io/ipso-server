@@ -320,7 +320,7 @@ describe('the export routes of the fixtures server', () => {
 
 describe('the verdict list of the fixtures server', () => {
   const get = (path: string) => respond({ method: 'GET', url: path, cookie }, NOW, newFixtureState());
-  const reading = (path: string) => (get(path).body as { known: string; verdicts: { id: string; baseline: { result: string } | null }[] });
+  const reading = (path: string) => (get(path).body as { known: string; verdicts: { id: string; result: string; baseline: { result: string } | null; waiver: { result: string; expires_at: string | null } | null }[] });
 
   it('takes the transaction time and answers the time it used, as the registry reads do', () => {
     expect(reading('/v1/verdicts').known).toBe(NOW.toISOString());
@@ -332,5 +332,20 @@ describe('the verdict list of the fixtures server', () => {
     const verdicts = reading('/v1/verdicts').verdicts;
     expect(verdicts.some((verdict) => verdict.baseline === null)).toBe(true);
     expect(verdicts.filter((verdict) => verdict.baseline !== null).map((verdict) => verdict.baseline?.result).sort()).toEqual(['fail', 'waived(baseline)']);
+  });
+
+  it('gives a pass no waiver reading and any other verdict one, with the end of the waiver only when it covers', () => {
+    const verdicts = reading('/v1/verdicts').verdicts;
+    for (const verdict of verdicts) {
+      if (verdict.result === 'pass' || verdict.result === 'error') {
+        expect(verdict.waiver).toBeNull();
+        continue;
+      }
+      expect(verdict.waiver).not.toBeNull();
+      expect(['waived', 'fail']).toContain(verdict.waiver?.result);
+      if (verdict.waiver?.result === 'waived') expect(typeof verdict.waiver.expires_at).toBe('string');
+      else expect(verdict.waiver?.expires_at).toBeNull();
+    }
+    expect(verdicts.filter((verdict) => verdict.waiver?.result === 'waived')).toHaveLength(2);
   });
 });

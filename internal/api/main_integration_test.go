@@ -264,6 +264,9 @@ func (f *fixture) handlerWith(t *testing.T, limits Limits, sessions *Sessions) h
 		Policy:   testPolicy(t),
 		Sessions: sessions,
 		Limits:   limits,
+		// A read that names no transaction time is read at the time of the database that stamps the rows, so a row
+		// seeded a moment ago is known to it even where the database clock runs ahead of this process's.
+		Now: f.databaseNow,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -41,6 +41,10 @@ const stateVerdicts = "tenant A holds a stored verdict"
 // a decision with its grandfather terms and a baseline, and one upload whose digests are all in that baseline.
 const stateVerdictInBaseline = "tenant A holds a verdict whose digests are all in the recorded baseline of its decision"
 
+// stateVerdictWaived is the provider state of a verdict read against a recorded waiver (IPSO-163, ADR-0123). It seeds a
+// decision, a waiver of its org that a human approver recorded, and one upload whose failing verdict names the decision.
+const stateVerdictWaived = "tenant A holds a verdict that a recorded waiver covers"
+
 // stateViewer is the provider state of a refusal by the role policy: the session is a viewer's, and a
 // viewer may not read the audit routes (ADR-0108).
 const stateViewer = "the session belongs to a viewer of tenant A"
@@ -336,6 +340,9 @@ func TestPactProviderIpsoServer(t *testing.T) {
 	verdictInBaseline := func(_ context.Context, n int64) (models.ProviderStateResponse, error) {
 		return nil, f.seedVerdictInBaseline(t, n)
 	}
+	verdictWaived := func(_ context.Context, n int64) (models.ProviderStateResponse, error) {
+		return nil, f.seedVerdictWaived(t, n)
+	}
 	toBaseline := func(ctx context.Context, n int64) (models.ProviderStateResponse, error) {
 		decision, err := f.seedDecision(ctx, "synthetic-baselined-"+strconv.FormatInt(n, 10))
 		if err != nil {
@@ -403,6 +410,7 @@ func TestPactProviderIpsoServer(t *testing.T) {
 			stateRegistry:          as(personA),
 			stateVerdicts:          as(personA),
 			stateVerdictInBaseline: seeds(personA, verdictInBaseline),
+			stateVerdictWaived:     seeds(personA, verdictWaived),
 			stateViewer:            as(viewerA),
 			stateUnanswered:        seeds(approverA, unanswered),
 			stateAnswered:          seeds(approverA, answered),

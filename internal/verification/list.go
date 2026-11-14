@@ -36,6 +36,15 @@ type Baseline struct {
 	Waived       int `json:"waived"`
 }
 
+// Waiver is a verdict read against the waivers recorded for its decision (ADR-0123). Result is waived when a
+// waiver covers the repository and environment of the upload at the time the server stored it, and fail
+// otherwise, which includes no recorded waiver, no decision, and a waiver that was recorded after the time the
+// reader asked about. ExpiresAt is the latest end among the waivers that cover it, and null for fail.
+type Waiver struct {
+	Result    string     `json:"result"`
+	ExpiresAt *time.Time `json:"expires_at"`
+}
+
 // Item is one stored verdict with the upload it came from.
 type Item struct {
 	ID         uuid.UUID `json:"id"`
@@ -48,6 +57,9 @@ type Item struct {
 	Violations int       `json:"violations"`
 	// Baseline is null when the run sent no digest for this verdict. Result stays what the run reported.
 	Baseline *Baseline `json:"baseline"`
+	// Waiver is null when the run reported pass or error. A waiver never covers an error, and a pass has no
+	// violation to cover. Result stays what the run reported, and so does Baseline.
+	Waiver *Waiver `json:"waiver"`
 
 	Repo        string `json:"repo"`
 	SHA         string `json:"sha"`
@@ -71,7 +83,8 @@ type Item struct {
 // List returns the tenant's verdicts, newest first, at most limit of them, starting after the verdict
 // named by before (uuid.Nil for the first page), as the server knew them at transaction time known: an
 // upload stored later is not listed. A verdict that has digests is read against the recorded baseline of its
-// decision and repository as known at that time (ADR-0122). It reads with ipso.tenant set, so another
+// decision and repository as known at that time (ADR-0122), and a verdict that is a fail or a waived is read
+// against the waivers recorded for its decision (ADR-0123). It reads with ipso.tenant set, so another
 // tenant's rows are not visible to it.
 func List(ctx context.Context, db *sql.DB, tenant uuid.UUID, f Filter, limit int, before uuid.UUID, known time.Time) ([]Item, error) {
 	if db == nil || tenant == uuid.Nil || known.IsZero() {
@@ -145,7 +158,7 @@ func List(ctx context.Context, db *sql.DB, tenant uuid.UUID, f Filter, limit int
 	}
 	_ = rows.Close()
 	_ = tx.Rollback()
-	if err := readBaselines(ctx, db, tenant, items, digests, known); err != nil {
+	if err := readReadings(ctx, db, tenant, items, digests, known); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -169,16 +182,15 @@ func parseDigests(joined string) ([]registry.Fingerprint, error) {
 	return out, nil
 }
 
-// readBaselines sets Baseline on every item that has digests (ADR-0122). The decision of an item is the one
-// whose body holds the EDR id the runner reported, as known at known, and the valid time is the time the
-// server stored the upload, never the time the runner states. An id that names no decision or several, and a
-// repository that is not a literal registry name, leave nothing matched: the result is fail and no digest is
-// in the baseline.
-func readBaselines(ctx context.Context, db *sql.DB, tenant uuid.UUID, items []Item, digests [][]registry.Fingerprint, known time.Time) error {
+// readReadings sets Baseline and Waiver on the items that have one (ADR-0122, ADR-0123). The decision of an
+// item is the one whose body holds the EDR id the runner reported, as known at known, and the valid time is the
+// time the server stored the upload, never the time the runner states. An id that names no decision or several,
+// and a repository that is not a literal registry name, leave nothing matched: the result is fail.
+func readReadings(ctx context.Context, db *sql.DB, tenant uuid.UUID, items []Item, digests [][]registry.Fingerprint, known time.Time) error {
 	var edrIDs []string
 	seen := make(map[string]bool)
 	for i, item := range items {
-		if len(digests[i]) > 0 && !seen[item.DecisionID] {
+		if (len(digests[i]) > 0 || waivable(item)) && !seen[item.DecisionID] {
 			seen[item.DecisionID] = true
 			edrIDs = append(edrIDs, item.DecisionID)
 		}
@@ -190,6 +202,22 @@ func readBaselines(ctx context.Context, db *sql.DB, tenant uuid.UUID, items []It
 	if err != nil {
 		return reduce("list: read the decisions", err)
 	}
+	if err := readBaselines(ctx, db, tenant, items, digests, decisions, known); err != nil {
+		return err
+	}
+	return readWaivers(ctx, db, tenant, items, decisions, known)
+}
+
+// decisionOf is the decision a reading of the item applies to: the one whose body holds the EDR id the runner
+// reported, and none when the id names no decision or several, or when the repository of the upload is not a
+// literal registry name. Both readings then stay at fail.
+func decisionOf(item Item, decisions map[string]uuid.UUID) (uuid.UUID, bool) {
+	decision, found := decisions[item.DecisionID]
+	return decision, found && registry.LiteralRepo(item.Repo)
+}
+
+// readBaselines sets Baseline on every item that has digests (ADR-0122).
+func readBaselines(ctx context.Context, db *sql.DB, tenant uuid.UUID, items []Item, digests [][]registry.Fingerprint, decisions map[string]uuid.UUID, known time.Time) error {
 	var reads []registry.BaselineRead
 	var at []int
 	for i := range items {
@@ -197,12 +225,15 @@ func readBaselines(ctx context.Context, db *sql.DB, tenant uuid.UUID, items []It
 			continue
 		}
 		items[i].Baseline = &Baseline{Result: registry.Fail.String(), Fingerprints: len(digests[i])}
-		decision, found := decisions[items[i].DecisionID]
-		if !found || !registry.LiteralRepo(items[i].Repo) {
+		decision, found := decisionOf(items[i], decisions)
+		if !found {
 			continue
 		}
 		reads = append(reads, registry.BaselineRead{Decision: decision, Repo: items[i].Repo, Violations: digests[i], ValidAt: items[i].RecordedAt})
 		at = append(at, i)
+	}
+	if len(at) == 0 {
+		return nil
 	}
 	answers, err := registry.GrandfatherEach(ctx, db, tenant, reads, known)
 	if err != nil {
@@ -216,6 +247,46 @@ func readBaselines(ctx context.Context, db *sql.DB, tenant uuid.UUID, items []It
 		}
 		if items[i].Baseline.Waived == items[i].Baseline.Fingerprints {
 			items[i].Baseline.Result = registry.WaivedBaseline.String()
+		}
+	}
+	return nil
+}
+
+// waivable is true for a verdict that a waiver can cover. A pass has no violation, and a waiver never covers an
+// error (ADR-0054 decision 5). A waived is read like a fail, because the runner covered the violations by a
+// waiver of its own build that the registry does not know (ADR-0123 decision 4).
+func waivable(item Item) bool {
+	return item.Result == "fail" || item.Result == "waived"
+}
+
+// readWaivers sets Waiver on every item a waiver can cover (ADR-0123). The subject is the repository and the
+// environment of the upload with no path, and a waiver whose scope names a path never covers it.
+func readWaivers(ctx context.Context, db *sql.DB, tenant uuid.UUID, items []Item, decisions map[string]uuid.UUID, known time.Time) error {
+	var reads []registry.WaiverRead
+	var at []int
+	for i := range items {
+		if !waivable(items[i]) {
+			continue
+		}
+		items[i].Waiver = &Waiver{Result: registry.OutcomeFail.String()}
+		decision, found := decisionOf(items[i], decisions)
+		if !found {
+			continue
+		}
+		reads = append(reads, registry.WaiverRead{Decision: decision, Repo: items[i].Repo, Env: items[i].Env, ValidAt: items[i].RecordedAt})
+		at = append(at, i)
+	}
+	if len(at) == 0 {
+		return nil
+	}
+	answers, err := registry.WaiverEach(ctx, db, tenant, reads, known)
+	if err != nil {
+		return reduce("list: read the waivers", err)
+	}
+	for n, i := range at {
+		if answers[n].Covered {
+			end := answers[n].ExpiresAt
+			items[i].Waiver = &Waiver{Result: registry.OutcomeWaived.String(), ExpiresAt: &end}
 		}
 	}
 	return nil

@@ -5,6 +5,7 @@ package registry
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -420,5 +421,187 @@ func TestApplyStopsWaivingARetiredScope(t *testing.T) {
 	}
 	if got != OutcomeFail {
 		t.Errorf("as known after retirement = %s, want fail", got)
+	}
+}
+
+func TestWaiverEachCoversTheWholeRepositoryAndNeverWidens(t *testing.T) {
+	r := newRegistryDB(t)
+	org := r.scope(t, tenantA, uuid.Nil, "org", "acme")
+	payments := r.scope(t, tenantA, org, "repo", "acme/payments")
+	billing := r.scope(t, tenantA, org, "repo", "acme/billing")
+	infra := r.scope(t, tenantA, payments, "path", "infra/**")
+	prod := r.scope(t, tenantA, payments, "env", "prod")
+
+	type waiverCase struct {
+		name  string
+		scope uuid.UUID
+		repo  string
+		env   string
+		want  bool
+	}
+	cases := []waiverCase{
+		{"an org waiver covers a repository of the org", org, "acme/payments", "prod", true},
+		{"a repo waiver covers a read with no env", payments, "acme/payments", "", true},
+		{"a repo waiver covers every env, whatever its name", payments, "acme/payments", "not a name!", true},
+		{"a repo waiver covers the repository whatever the case", payments, "Acme/Payments", "prod", true},
+		{"a waiver of another repository does not cover", billing, "acme/payments", "prod", false},
+		{"a waiver does not cover another repository", payments, "acme/billing", "prod", false},
+		{"a path waiver covers no stored verdict", infra, "acme/payments", "prod", false},
+		{"an env waiver covers a read of that env", prod, "acme/payments", "prod", true},
+		{"an env waiver covers it whatever the case of the env", prod, "acme/payments", "PROD", true},
+		{"an env waiver does not cover another env", prod, "acme/payments", "staging", false},
+		{"an env waiver does not cover a read with no env", prod, "acme/payments", "", false},
+		{"an env waiver does not cover an env that is not a name", prod, "acme/payments", "prod\n", false},
+	}
+	var reads []WaiverRead
+	march := at(t, r, "2026-03-01")
+	for i, c := range cases {
+		decision := uuid.MustParse(fmt.Sprintf("00000000-0000-4000-8000-0000000001%02x", i))
+		r.decision(t, tenantA, decision, "[2026-01-01,2026-06-01)", org)
+		r.addWaiver(t, tenantA, decision, c.scope, "[2026-02-01,2026-04-01)", fmt.Sprintf("TICKET-%d", i))
+		reads = append(reads, WaiverRead{Decision: decision, Repo: c.repo, Env: c.env, ValidAt: march})
+	}
+	known := soon(t, r)
+
+	got, err := WaiverEach(t.Context(), r.app, tenantA, reads, known)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(cases) {
+		t.Fatalf("got %d answers, want %d", len(got), len(cases))
+	}
+	for i, c := range cases {
+		if got[i].Covered != c.want {
+			t.Errorf("%s: covered = %v, want %v", c.name, got[i].Covered, c.want)
+		}
+		if c.want && !got[i].ExpiresAt.Equal(at(t, r, "2026-04-01")) {
+			t.Errorf("%s: expires at %s, want 2026-04-01", c.name, got[i].ExpiresAt)
+		}
+		if !c.want && !got[i].ExpiresAt.IsZero() {
+			t.Errorf("%s: expires at %s, want none", c.name, got[i].ExpiresAt)
+		}
+	}
+
+	other, err := WaiverEach(t.Context(), r.app, tenantB, reads, known)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range cases {
+		if other[i].Covered {
+			t.Errorf("%s: another tenant reads it covered", c.name)
+		}
+	}
+}
+
+func TestWaiverEachReadsAsKnownAndAtTheValidTime(t *testing.T) {
+	r := newRegistryDB(t)
+	org := r.scope(t, tenantA, uuid.Nil, "org", "acme")
+	repo := r.scope(t, tenantA, org, "repo", "acme/payments")
+	decision := uuid.MustParse("00000000-0000-4000-8000-0000000000d1")
+	r.decision(t, tenantA, decision, "[2026-01-01,2026-06-01)", org)
+	before := mark(t, r.app)
+	r.addWaiver(t, tenantA, decision, repo, "[2026-02-01,2026-04-01)", "TICKET-1")
+	after := soon(t, r)
+
+	read := func(valid string) WaiverRead {
+		return WaiverRead{Decision: decision, Repo: "acme/payments", Env: "prod", ValidAt: at(t, r, valid)}
+	}
+	reads := []WaiverRead{read("2026-01-15"), read("2026-02-01"), read("2026-03-15"), read("2026-03-31 23:59:59"), read("2026-04-01"), read("2026-05-01")}
+	want := []bool{false, true, true, true, false, false}
+
+	got, err := WaiverEach(t.Context(), r.app, tenantA, reads, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, w := range want {
+		if got[i].Covered != w {
+			t.Errorf("read %d as known after the waiver: covered = %v, want %v", i, got[i].Covered, w)
+		}
+	}
+
+	got, err = WaiverEach(t.Context(), r.app, tenantA, reads, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range reads {
+		if got[i].Covered {
+			t.Errorf("read %d as known before the waiver: covered, want fail", i)
+		}
+	}
+}
+
+func TestWaiverEachReportsTheLatestEndOfTheWaiversThatCover(t *testing.T) {
+	r := newRegistryDB(t)
+	org := r.scope(t, tenantA, uuid.Nil, "org", "acme")
+	repo := r.scope(t, tenantA, org, "repo", "acme/payments")
+	decision := uuid.MustParse("00000000-0000-4000-8000-0000000000d1")
+	r.decision(t, tenantA, decision, "[2026-01-01,2026-06-01)", org)
+	r.addWaiver(t, tenantA, decision, repo, "[2026-02-01,2026-04-01)", "TICKET-1")
+	r.addWaiver(t, tenantA, decision, org, "[2026-03-01,2026-05-01)", "TICKET-2")
+	known := soon(t, r)
+
+	got, err := WaiverEach(t.Context(), r.app, tenantA, []WaiverRead{
+		{Decision: decision, Repo: "acme/payments", ValidAt: at(t, r, "2026-02-15")},
+		{Decision: decision, Repo: "acme/payments", ValidAt: at(t, r, "2026-03-15")},
+		{Decision: decision, Repo: "acme/payments", ValidAt: at(t, r, "2026-03-15")},
+	}, known)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, end := range []string{"2026-04-01", "2026-05-01", "2026-05-01"} {
+		if !got[i].Covered || !got[i].ExpiresAt.Equal(at(t, r, end)) {
+			t.Errorf("read %d: covered %v, expires %s, want covered until %s", i, got[i].Covered, got[i].ExpiresAt, end)
+		}
+	}
+}
+
+func TestWaiverEachDoesNotApplyWhereTheDecisionNoLongerCovers(t *testing.T) {
+	r := newRegistryDB(t)
+	ctx := t.Context()
+	org := r.scope(t, tenantA, uuid.Nil, "org", "acme")
+	var now time.Time
+	if err := r.admin.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		t.Fatal(err)
+	}
+	start := now.Add(-40 * 24 * time.Hour)
+	waiverEnd := now.Add(-time.Hour)
+	decisionEnd := now.Add(10 * 24 * time.Hour)
+	effective := now.Add(-10 * 24 * time.Hour)
+	oldID := uuid.MustParse("00000000-0000-4000-8000-0000000000a1")
+	newID := uuid.MustParse("00000000-0000-4000-8000-0000000000b1")
+	r.decisionBetween(t, tenantA, oldID, start, decisionEnd, org)
+	r.decisionBetween(t, tenantA, newID, effective, effective.Add(30*24*time.Hour), org)
+	r.addWaiverBetween(t, tenantA, oldID, org, start, waiverEnd, "TICKET-9")
+
+	read := func(validAt time.Time) []WaiverRead {
+		return []WaiverRead{{Decision: oldID, Repo: "acme/payments", ValidAt: validAt}}
+	}
+	stillCovered := now.Add(-20 * 24 * time.Hour)
+	stuckOut := now.Add(-2 * time.Hour)
+	beforeClose := mark(t, r.app)
+	if _, err := pgtest.Exec(ctx, r.app, tenantA.String(), `
+		INSERT INTO registry.supersession (tenant_id, from_decision, to_decision, effective_at)
+		VALUES ($1, $2, $3, $4)`, tenantA, oldID, newID, effective); err != nil {
+		t.Fatalf("supersede: %v", err)
+	}
+	afterClose := soon(t, r)
+
+	for _, tc := range []struct {
+		name    string
+		validAt time.Time
+		known   time.Time
+		want    bool
+	}{
+		{"as known before the supersession", stuckOut, beforeClose, true},
+		{"inside the shortened decision", stillCovered, afterClose, true},
+		{"past the shortened decision", stuckOut, afterClose, false},
+	} {
+		got, err := WaiverEach(ctx, r.app, tenantA, read(tc.validAt), tc.known)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[0].Covered != tc.want {
+			t.Errorf("%s: covered = %v, want %v", tc.name, got[0].Covered, tc.want)
+		}
 	}
 }

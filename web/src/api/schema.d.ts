@@ -495,7 +495,7 @@ export interface paths {
         };
         /**
          * List the stored verdicts, newest first, for a repository or a decision or all.
-         * @description Each item is one decision check of one uploaded run, with the run it came from. The run, the commit, the workflow and the repository are the ones the signed CI token named when it was uploaded, and `run_url` is built from them. `known` is the transaction time: only the uploads stored by then are listed, and absent means now. A verdict whose report carried the digests of its violations is read against the recorded baseline of its decision and repository as known at that time, and `baseline` says the result (ADR-0122). `result` stays what the run reported.
+         * @description Each item is one decision check of one uploaded run, with the run it came from. The run, the commit, the workflow and the repository are the ones the signed CI token named when it was uploaded, and `run_url` is built from them. `known` is the transaction time: only the uploads stored by then are listed, and absent means now. A verdict whose report carried the digests of its violations is read against the recorded baseline of its decision and repository as known at that time, and `baseline` says the result (ADR-0122). A verdict that is a fail or a waived is read against the waivers recorded for its decision, as known at that time, and `waiver` says the result (ADR-0123). `result` stays what the run reported.
          */
         get: operations["list_verdicts"];
         put?: never;
@@ -698,6 +698,18 @@ export interface components {
             evidence: Record<string, never>;
             /** @description The verdict read against the recorded baseline, or null when the run sent no digest for it. The `result` above stays what the run reported. */
             baseline: components["schemas"]["VerdictBaseline"] | null;
+            /** @description The verdict read against the waivers recorded for its decision, or null when the run reported pass or error. The `result` above stays what the run reported, and so does `baseline`. */
+            waiver: components["schemas"]["VerdictWaiver"] | null;
+        };
+        /** @description The reading of a verdict that is a fail or a waived against the waivers recorded for its decision, as known at the time of the read (ADR-0123). The valid time is the time the server stored the upload. A waiver covers it when its scope covers every path of the repository, so a waiver of a path never does, and a waiver of an environment does only when the upload names that environment. The reason, the approver, the ticket and the id of a waiver are not in it. */
+        VerdictWaiver: {
+            /**
+             * @description waived when a waiver recorded by the time of the read covers the repository and the environment at the time the upload was stored, and fail otherwise, which includes no decision or more than one for the EDR id, and a waiver that was recorded after the time of the read.
+             * @enum {string}
+             */
+            result: "waived" | "fail";
+            /** @description The latest end among the waivers that cover it, or null for fail. */
+            expires_at: string | null;
         };
         /** @description The reading of a verdict against the baseline recorded for its decision and repository, as known at the time of the read (ADR-0122). The valid time is the time the server stored the upload. */
         VerdictBaseline: {

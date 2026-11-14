@@ -7,7 +7,7 @@ The web app is the browser view of the control plane: the registry, the review q
 | Path | View |
 | --- | --- |
 | `/decisions` | The decisions in force, with their state, owner, criticality and review date. Filter the ones loaded, and ask for another valid or known time. |
-| `/decisions/{id}` | One decision: its record, scope, checks, premises and sources, the CI verdicts reported on it, each as the recorded baseline reads it with what the run reported beside it when the two differ, and the decision that replaced it when it is superseded. It links to the forms to record a waiver for it and to supersede it. |
+| `/decisions/{id}` | One decision: its record, scope, checks, premises and sources, the CI verdicts reported on it, each as the recorded waivers and the recorded baseline read it, with the day a covering waiver ends and what the run reported beside it when the two differ, and the decision that replaced it when it is superseded. It links to the forms to record a waiver for it and to supersede it. |
 | `/scopes` | The scope tree. |
 | `/inbox` | The three review queues: decisions a model found in pull requests, decisions your coding agents proposed, and checks drafted for a decision. A draft of the first two has Approve and Reject, and so has a drafted check, which records the answer only. |
 | `/waivers` | The waivers in force, in words: "Expires in 3 days". |
