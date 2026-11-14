@@ -4367,6 +4367,127 @@
       "type": "Synchronous/HTTP"
     },
     {
+      "description": "a request to record the baseline of a repository",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds a decision with grandfather terms and no baseline, and the session belongs to a decision owner"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "fingerprints": [
+              "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+            ],
+            "repo": "acme/payments"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "path": {
+            "expression": "/v1/decisions/${decisionId}/baselines",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          },
+          "path": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          }
+        },
+        "method": "POST",
+        "path": "/v1/decisions/8c9d0e1f-2a3b-4c4d-8e5f-6a7b8c9d0e1f/baselines"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "decision_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "fingerprint_count": 2,
+            "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "repo": "acme/payments"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.decision_id": {
+              "type": "Uuid"
+            },
+            "$.id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.fingerprint_count": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
       "description": "a request to record the grandfather terms of a decision",
       "pending": false,
       "providerStates": [

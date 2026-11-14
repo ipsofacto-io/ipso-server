@@ -14,6 +14,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { createApi } from '../src/api/client.ts';
 import { exportArchivePath, makeCalls } from '../src/api/calls.ts';
 import type { Scope } from '../src/api/types.ts';
+import { baselineRequest } from '../src/state/baseline.ts';
 import { approvalRequest, rejection, type ApprovalForm } from '../src/state/edr.ts';
 import { clearance, hostRequest } from '../src/state/premises.ts';
 import {
@@ -45,6 +46,9 @@ const TO_WAIVE = 'tenant A holds a decision in force and a repository scope, and
 const CHECK_UNANSWERED = 'tenant A holds a drafted check that nobody answered, and the session belongs to an approver';
 const CHECK_ANSWERED = 'tenant A holds a drafted check that was answered, and the session belongs to an approver';
 const TO_SUPERSEDE = 'tenant A holds two decisions that nobody superseded, and the session belongs to a decision owner';
+// The state of a baseline (ADR-0121). It seeds a decision with its grandfather terms, which a baseline needs first, and the
+// session is a decision owner over the whole tenant, so it covers every scope of the decision.
+const TO_BASELINE = 'tenant A holds a decision with grandfather terms and no baseline, and the session belongs to a decision owner';
 
 // The states of the premises page (ADR-0119). A reason state seeds a decision that names a premise and a fail recorded the
 // way the worker records it, and the cleared one clears it too. The session is a decision owner over the whole tenant, so
@@ -513,6 +517,8 @@ const CHECK_DECISION = '4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8';
 const CHECK = '6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c';
 const ULID = '01JD8Q3M7K2W9X4Y5Z6A7B8C9D';
 const WRITE_FROM = '2026-06-01T00:00:00Z';
+// Two fingerprints of a baseline: the SHA-256 of nothing and of "abc". The provider replays them, so they differ.
+const FINGERPRINTS = ['e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'];
 
 const scopeRef = fromProviderState('${scopeId}', SCOPE);
 /** The route of the answer to a drafted check, under the decision the check was drafted for. */
@@ -794,6 +800,23 @@ describe('the writes of the web app', () => {
       },
     );
   });
+  it('records the baseline of a repository for a decision that has grandfather terms', async () => {
+    await interact(
+      {
+        description: 'a request to record the baseline of a repository',
+        state: TO_BASELINE,
+        method: 'POST',
+        path: fromProviderState('/v1/decisions/${decisionId}/baselines', `/v1/decisions/${TO}/baselines`),
+        requestBody: { repo: 'acme/payments', fingerprints: FINGERPRINTS },
+        status: 201,
+        body: { id: uuid(), decision_id: uuid(), repo: 'acme/payments', fingerprint_count: integer(2) },
+      },
+      async (calls) => {
+        expect(await calls.recordBaseline(TO, baselineRequest('acme/payments', FINGERPRINTS))).toMatchObject({ repo: 'acme/payments', fingerprint_count: 2 });
+      },
+    );
+  });
+
   it('reads the export the tenant holds when it is ready', async () => {
     await interact(
       {

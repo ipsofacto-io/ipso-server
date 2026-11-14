@@ -5,19 +5,21 @@ import { Notice } from './Notice';
 
 /**
  * Says what an API refusal means in words. A 401 is the sign-in itself, and a 429 never signs anyone out. A form
- * says what a 409 means for its own write with `conflict`, and a 400 in its own words with `invalid`, because
- * the server answers both with a code and no message (ADR-0109).
+ * says what a 409 means for its own write with `conflict`, a 400 in its own words with `invalid`, and a 413 with
+ * `tooLarge`, because the server answers each with a code and no message (ADR-0109).
  */
 export function ErrorNotice({
   error,
   onRetry,
   conflict,
   invalid,
+  tooLarge,
 }: {
   error: ApiError;
   onRetry?: () => void;
   conflict?: string;
   invalid?: string;
+  tooLarge?: string;
 }) {
   if (error.status === 401) return <SignInPanel />;
 
@@ -42,7 +44,7 @@ export function ErrorNotice({
       break;
     case error.status === 413:
       title = 'That is too large.';
-      text = 'Shorten it and send it again.';
+      text = tooLarge ?? 'Shorten it and send it again.';
       break;
     case error.status === 415:
       title = 'The server did not accept the format.';

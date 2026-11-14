@@ -33,6 +33,9 @@ export type SupersessionRequest = Schemas['SupersessionRequest'];
 export type Supersession = Schemas['Supersession'];
 export type GrandfatherRequest = Schemas['GrandfatherRequest'];
 export type GrandfatherPeriod = Schemas['GrandfatherPeriod'];
+// The fingerprints of one repository for a decision that has grandfather terms (ADR-0052, ADR-0121).
+export type BaselineRequest = Schemas['BaselineRequest'];
+export type Baseline = Schemas['Baseline'];
 // The answer to a drafted check names an outcome and writes no decision (ADR-0116, ADR-0118).
 export type CheckApprovalRequest = Schemas['CheckApprovalRequest'];
 export type CheckApproval = Schemas['CheckApproval'];

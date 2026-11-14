@@ -14,11 +14,12 @@ The web app is the browser view of the control plane: the registry, the review q
 | `/premises` | The open review reasons of the premises, each with the fail that opened it (the URL, the pointer, the expected and the observed value, shown as text), and the hosts a premise probe may dial. A reason has Clear, and a host has Withdraw or Allow again, with a field to allow a host. |
 | `/waivers/new` | The form to record a waiver. `?decision=` names the decision. |
 | `/supersessions/new` | The form to record a supersession and the grandfather terms of the new decision. `?from=` names the decision that ends. |
+| `/baselines/new` | The form to record the baseline of one repository for a decision that has grandfather terms, from the file that `ipso baseline export` writes. `?decision=` names the decision. |
 | `/export` | The export of the tenant, for an admin: a field for one age public key, the state of the export (pending, running, ready, failed) and its expiry, and the download of the archive once it is ready. A person without the role reads the refusal and no form. |
 | `/audit` | The five questions of section 2.3: what applied, what changed, at a merge, supersessions, and waivers ending soon. The fields are in the address, so an answer can be shared. |
 | `/signin` | The sign-in. Any call the server refuses with 401 ends here. |
 
-Importing decisions and compiling them into checks (UC1 and UC2) have no API route, so they stay in the CLI. Uploading a baseline's fingerprints, delivering an accepted check to a repository, running a premise probe on demand, and creating a scope or changing the role of a person are not in the app either.
+Importing decisions and compiling them into checks (UC1 and UC2) have no API route, so they stay in the CLI. Delivering an accepted check to a repository, running a premise probe on demand, and creating a scope or changing the role of a person are not in the app either.
 
 ## Taking an action
 
@@ -33,10 +34,13 @@ The actions are the write routes of [ADR-0109](https://github.com/ipsofacto-io/i
 | Allow or withdraw a host | `/premises` | `POST /v1/premise-hosts` with `{"host":...,"allowed":...}` | Admin |
 | Record a waiver | `/waivers/new` | `POST /v1/waivers` | Approver or decision owner over the scope of the waiver |
 | Record a supersession | `/supersessions/new` | `POST /v1/supersessions`, then `POST /v1/decisions/{id}/grandfather-period` for the new decision | Decision owner over every scope of both decisions |
+| Record a baseline | `/baselines/new` | `POST /v1/decisions/{decisionID}/baselines` | Decision owner over every scope of the decision |
 
 A coding agent cannot take any of these: the role policy refuses it before the server reads the request, and a browser session always belongs to a person. No route says what role a person holds, so the app shows every action to every signed-in person and says in words, after the call, when no role allows it. Nothing is optimistic: the queue reads again after a write, a draft leaves it only if the server answered, and a 409 says that someone answered first.
 
 An approval writes the decision as an EDR with all sixteen keys of draft 0.2, so a verdict, the detail view and the MCP tools read it the way they read any other. The person gives the owner (`team:name`), the slug, the dates, the criticality, a source link and the scopes. The draft's statement and rationale have no key in the EDR and stay with the proposal. A waiver lasts at most 90 days ([ADR-0054](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0054-waivers-with-expiry.md)), and the form says so before it sends. A supersession closes the old decision at the instant given, and no route removes it, so the form says that above the button. The grandfather terms say how long a recorded baseline counts: none, no end, or a deadline. When the supersession is recorded and the terms are refused, the page says so and sends only the terms again.
+
+A baseline is recorded from the decision, one repository at a time, with the file that `ipso baseline export <EDR id>` writes in the checkout ([ADR-0121](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0121-baseline-upload.md)). The file holds the fingerprints and no salt, so the page never sees what the repository keeps. The page refuses a file made for another decision, a fingerprint that is not 64 lowercase hexadecimal characters, and a baseline that does not fit the 1 MiB of a request, about 15,600 fingerprints, before it sends anything. A decision has one baseline for a repository, the app cannot change or remove it, and the page says so above the button.
 
 A drafted check has no form, because the answer is an outcome and writes no decision: each outcome is one confirmation and one request, and the confirmation says that the answer is recorded once. An approved check reaches a repository only when someone runs `ipso deliver` there, with the answer of `GET /v1/accepted-checks` ([ADR-0120](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0120-accepted-check-delivery.md)), and a rejected rule is not drafted again for the same version of the decision ([ADR-0116](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0116-check-proposal-approval.md), ADR-0118).
 

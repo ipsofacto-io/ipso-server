@@ -7,6 +7,8 @@ import type {
   AuditChain,
   AuditDecisions,
   AuditWaivers,
+  Baseline,
+  BaselineRequest,
   CheckApproval,
   CheckApprovalRequest,
   CheckProposal,
@@ -83,6 +85,9 @@ export function makeCalls(api: Api) {
       api.postJSON<Supersession>('/v1/supersessions', request, signal),
     recordGrandfatherPeriod: (decisionID: string, request: GrandfatherRequest, signal?: AbortSignal) =>
       api.postJSON<GrandfatherPeriod>(`/v1/decisions/${encodeURIComponent(decisionID)}/grandfather-period`, request, signal),
+    /** The fingerprints of one repository, recorded once for a decision that has grandfather terms (ADR-0121). */
+    recordBaseline: (decisionID: string, request: BaselineRequest, signal?: AbortSignal) =>
+      api.postJSON<Baseline>(`/v1/decisions/${encodeURIComponent(decisionID)}/baselines`, request, signal),
     /** The review reasons no clearance names, each with the fail that opened it (ADR-0117). */
     listPremiseReasons: (q: Paging = {}, signal?: AbortSignal) =>
       api.getJSON<{ premise_reasons: PremiseReason[] }>('/v1/premise-reasons', q, signal),

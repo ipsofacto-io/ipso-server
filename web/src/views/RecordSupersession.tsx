@@ -94,12 +94,14 @@ export function RecordSupersessionView() {
               {form.terms === 'baseline' ? 'Grandfather terms were recorded with no end.' : null}
               {form.terms === 'deadline' ? `Grandfather terms were recorded until ${formatTime(fieldToTime(form.deadline))}.` : null}
             </p>
+            {form.terms === 'none' ? null : <p>The terms apply to the baseline of each repository, which is recorded from the new decision.</p>}
           </Notice>
         </div>
         <div className="actions">
           <LinkButton to={decisionPath(form.toId)} variant="primary">
             Open the new decision
           </LinkButton>
+          {form.terms === 'none' ? null : <LinkButton to={`/baselines/new?decision=${encodeURIComponent(form.toId)}`}>Record a baseline</LinkButton>}
           <LinkButton to={decisionPath(form.fromId)}>Open the old decision</LinkButton>
           <Button onClick={again}>Record another</Button>
         </div>
@@ -131,7 +133,7 @@ export function RecordSupersessionView() {
             {form.terms === 'deadline' ? (
               <TextField label="Deadline" type="datetime-local" value={form.deadline} error={shown.deadline} hint="In UTC, to the minute. It comes after the supersession starts." onChange={(event) => set('deadline', event.target.value)} />
             ) : null}
-            <p className="muted">These terms say how long a recorded baseline counts, and a decision has one set. Recording a baseline is not available in the web app.</p>
+            <p className="muted">These terms say how long a recorded baseline counts, and a decision has one set. The baseline of each repository is recorded afterwards, from the decision.</p>
           </fieldset>
 
           {supersession.status === 'failed' ? <ErrorNotice error={supersession.error} conflict={SUPERSESSION_CONFLICT} invalid="Check both decisions and the time." /> : null}
