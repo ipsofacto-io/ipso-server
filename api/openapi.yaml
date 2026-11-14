@@ -1017,11 +1017,26 @@ paths:
     get:
       operationId: audit_merges
       tags: [audit]
-      summary: Q3, the decisions that applied when a change merged.
+      summary: Q3, the decisions that applied when a change merged, and the verdicts CI stored for its commit.
+      description: >-
+        The decisions are those of Q1 at the merge time. The verdicts are every stored verdict of the uploads of
+        the repository and the commit, for every run, attempt, check command and environment, each read as
+        GET /v1/verdicts reads it for the same transaction time. `path` and `env` narrow the decisions and never the
+        verdicts. A commit with no upload stored by the transaction time answers `verdicts: null`, which is
+        unknown and never clean.
       parameters:
         - $ref: '#/components/parameters/Repo'
         - $ref: '#/components/parameters/Path'
         - $ref: '#/components/parameters/Env'
+        - name: sha
+          in: query
+          required: true
+          description: >-
+            The merge commit, 40 or 64 hexadecimal digits, as the signed token of a run names it. Upper case is read
+            as lower case. A run on a pull request names the test merge commit that GitHub makes.
+          schema:
+            type: string
+            pattern: '^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$'
         - name: at
           in: query
           required: true
@@ -1032,16 +1047,19 @@ paths:
         - name: known
           in: query
           required: false
+          description: >-
+            The transaction time, for the decisions and the verdicts. A run stored after it is not in the answer, so
+            a reader who wants the runs that finished after the merge gives a later time.
           schema:
             type: string
             format: date-time
       responses:
         '200':
-          description: The decisions in force at the merge.
+          description: The decisions in force at the merge and the verdicts of its commit.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AuditDecisions'
+                $ref: '#/components/schemas/AuditMerge'
         '400':
           $ref: '#/components/responses/InvalidQuery'
         '401':
@@ -2561,6 +2579,26 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Decision'
+    AuditMerge:
+      type: object
+      additionalProperties: false
+      required: [decisions, verdicts]
+      properties:
+        decisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Decision'
+        verdicts:
+          oneOf:
+            - type: array
+              maxItems: 1000
+              items:
+                $ref: '#/components/schemas/StoredVerdict'
+            - type: 'null'
+          description: >-
+            The stored verdicts of the commit, newest first, or null when no upload of the repository and the commit
+            was stored by the transaction time. Null is unknown, never clean. An empty list means uploads exist and
+            hold no verdict. A commit with more than 1000 verdicts is refused whole with 500.
     AuditBeliefs:
       type: object
       additionalProperties: false

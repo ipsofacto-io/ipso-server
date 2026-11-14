@@ -16,6 +16,8 @@ export type AgentProposal = Omit<Schemas['AgentProposal'], 'payload'> & { payloa
 export type CheckProposal = Omit<Schemas['CheckProposal'], 'spec'> & { spec: Json };
 export type StoredVerdict = Omit<Schemas['StoredVerdict'], 'evidence'> & { evidence: Json };
 export type AuditDecisions = Omit<Schemas['AuditDecisions'], 'decisions'> & { decisions: Decision[] };
+// Q3 answers the decisions at a merge and the verdicts stored for its commit, which are null when no run was stored (ADR-0124).
+export type AuditMerge = Omit<Schemas['AuditMerge'], 'decisions' | 'verdicts'> & { decisions: Decision[]; verdicts: StoredVerdict[] | null };
 export type AuditBeliefs = {
   added: Decision[];
   removed: Decision[];

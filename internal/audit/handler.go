@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
+	"github.com/ipsofacto-io/ipso-server/internal/verification"
 )
 
 // TenantFunc returns the tenant for this request. The tenant must be the authenticated
@@ -51,6 +52,14 @@ type decisionJSON struct {
 
 type decisionsJSON struct {
 	Decisions []decisionJSON `json:"decisions"`
+}
+
+// mergeJSON is the answer to Q3 (ADR-0124). Verdicts is null when the server stored no upload of the repository and
+// the commit by the transaction time, which a reader takes as unknown and never as clean, and an empty list when
+// uploads exist and hold no verdict.
+type mergeJSON struct {
+	Decisions []decisionJSON      `json:"decisions"`
+	Verdicts  []verification.Item `json:"verdicts"`
 }
 
 type changeJSON struct {
@@ -142,6 +151,9 @@ func (h *handler) beliefs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// merges is Q3: the decisions in force at the merge instant, and the verdicts that CI runs stored for the merge
+// commit, read as GET /v1/verdicts reads them for the same transaction time (ADR-0124). path and env narrow the
+// decisions and never the verdicts.
 func (h *handler) merges(w http.ResponseWriter, r *http.Request) {
 	tenant, subject, ok := h.subject(w, r)
 	if !ok {
@@ -158,12 +170,24 @@ func (h *handler) merges(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	sha, ok := requiredCommit(w, r)
+	if !ok {
+		return
+	}
 	decisions, err := registry.Resolve(r.Context(), h.db, tenant, subject, at, knownAt)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, decisionsJSON{Decisions: decisionList(decisions)})
+	verdicts, stored, err := verification.ByCommit(r.Context(), h.db, tenant, subject.Repo, sha, knownAt)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if !stored {
+		verdicts = nil
+	}
+	writeJSON(w, http.StatusOK, mergeJSON{Decisions: decisionList(decisions), Verdicts: verdicts})
 }
 
 func (h *handler) supersessions(w http.ResponseWriter, r *http.Request) {
@@ -337,6 +361,21 @@ func requiredTime(w http.ResponseWriter, r *http.Request, key string) (time.Time
 	return parsed, true
 }
 
+// requiredCommit reads the one sha of the request, in the form an upload stores it. A missing, empty or repeated
+// value, and one that is not a commit of 40 or 64 hexadecimal digits, is 400 and reaches no query.
+func requiredCommit(w http.ResponseWriter, r *http.Request) (string, bool) {
+	raw, ok := sole(w, r.URL.Query(), "sha")
+	if !ok {
+		return "", false
+	}
+	sha, err := verification.Commit(raw)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Error: "invalid query"})
+		return "", false
+	}
+	return sha, true
+}
+
 func decisionList(decisions []registry.Decision) []decisionJSON {
 	out := make([]decisionJSON, 0, len(decisions))
 	for _, d := range decisions {
@@ -350,8 +389,14 @@ func oneDecision(d registry.Decision) decisionJSON {
 }
 
 func writeErr(w http.ResponseWriter, err error) {
-	if errors.Is(err, registry.ErrInvalidQuery) || errors.Is(err, registry.ErrInvalidSubject) {
+	if errors.Is(err, registry.ErrInvalidQuery) || errors.Is(err, registry.ErrInvalidSubject) || errors.Is(err, verification.ErrInvalid) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Error: "invalid query"})
+		return
+	}
+	// A commit with more verdicts than one answer holds is refused whole, with the body the API gives for an answer
+	// over its cap (ADR-0124 decision 5).
+	if errors.Is(err, verification.ErrTooMany) {
+		writeJSON(w, http.StatusInternalServerError, errorBody{Error: "response too large"})
 		return
 	}
 	writeJSON(w, http.StatusInternalServerError, errorBody{Error: "internal"})

@@ -90,6 +90,33 @@ func TestRejectedQueries(t *testing.T) {
 	}
 }
 
+// Q3 names the merge commit, and a commit that is missing, empty, repeated, short or not hexadecimal is refused before
+// the database is read (ADR-0124): the handler here has no database, so a query that got past the check would fail
+// differently.
+func TestRejectedCommits(t *testing.T) {
+	h := allowTenant()
+	const base = "/v1/audit/merges?repo=acme/payments&at=2026-03-01T00:00:00Z"
+	sha := strings.Repeat("ab", 20)
+	for name, raw := range map[string]string{
+		"missing":         base,
+		"empty":           base + "&sha=",
+		"repeated":        base + "&sha=" + sha + "&sha=" + sha,
+		"short":           base + "&sha=" + sha[:39],
+		"long":            base + "&sha=" + sha + "a",
+		"between lengths": base + "&sha=" + strings.Repeat("ab", 25),
+		"not hexadecimal": base + "&sha=" + strings.Repeat("zz", 20),
+		"a branch":        base + "&sha=main",
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := get(h, raw)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+			}
+			assertError(t, rec, "invalid query")
+		})
+	}
+}
+
 func TestMethodAndPath(t *testing.T) {
 	h := allowTenant()
 	rec := httptest.NewRecorder()

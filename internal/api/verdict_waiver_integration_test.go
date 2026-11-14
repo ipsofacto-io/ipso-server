@@ -279,9 +279,19 @@ const pactWaivedEDRID = "01M7PACT000000000000000001"
 // failing verdict for that decision carries no digest.
 func (f *fixture) seedVerdictWaived(t *testing.T, n int64) error {
 	t.Helper()
+	return f.seedWaivedRun(t, n, waivedRun{edrID: pactWaivedEDRID, slug: "synthetic-waived-", repo: "acme/waived", sha: strings.Repeat("ab", 20)})
+}
+
+// waivedRun names what a pact state of a verdict that a recorded waiver covers seeds: a decision whose body holds
+// edrID, and one run of repo on the commit sha with a failing verdict for that decision. Two states seed different
+// ids and repositories, because two decisions that hold one id are ambiguous and read fail.
+type waivedRun struct{ edrID, slug, repo, sha string }
+
+func (f *fixture) seedWaivedRun(t *testing.T, n int64, r waivedRun) error {
+	t.Helper()
 	ctx := t.Context()
 	decision := uuid.New()
-	body, err := json.Marshal(map[string]any{"slug": "synthetic-waived-" + strconv.FormatInt(n, 10), "title": "A decision with a recorded waiver", "id": pactWaivedEDRID})
+	body, err := json.Marshal(map[string]any{"slug": r.slug + strconv.FormatInt(n, 10), "title": "A decision with a recorded waiver", "id": r.edrID})
 	if err != nil {
 		return err
 	}
@@ -306,15 +316,15 @@ func (f *fixture) seedVerdictWaived(t *testing.T, n int64) error {
 	up, err := verification.Parse(uploadBody(t, func(_, report map[string]any) {
 		verdicts := report["verdicts"].([]any)
 		failing := verdicts[0].(map[string]any)
-		failing["decision_id"], failing["violations"] = pactWaivedEDRID, 2
+		failing["decision_id"], failing["violations"] = r.edrID, 2
 	}))
 	if err != nil {
 		return err
 	}
 	_, err = verification.Store(ctx, f.db, tenantA, verification.Run{
-		Installation: 42, RepositoryID: 9200 + n, Repo: "acme/waived", RunID: 9200 + n, RunAttempt: 1,
-		SHA: strings.Repeat("ab", 20), Ref: "refs/heads/main", Event: "push",
-		WorkflowRef: "acme/waived/.github/workflows/ci.yml@refs/heads/main",
+		Installation: 42, RepositoryID: 9200 + n, Repo: r.repo, RunID: 9200 + n, RunAttempt: 1,
+		SHA: r.sha, Ref: "refs/heads/main", Event: "push",
+		WorkflowRef: r.repo + "/.github/workflows/ci.yml@refs/heads/main",
 	}, up)
 	return err
 }

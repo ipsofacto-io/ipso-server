@@ -114,13 +114,8 @@ func List(ctx context.Context, db *sql.DB, tenant uuid.UUID, f Filter, limit int
 		return nil, reduce("list: set the tenant", err)
 	}
 	rows, err := tx.QueryContext(ctx, `
-		SELECT v.id, v.upload_id, v.decision_id, v.slug, v.check_index, v.mode, v.result, v.violations,
-		       (SELECT string_agg(encode(d, 'hex'), ' ' ORDER BY n) FROM unnest(v.fingerprints) WITH ORDINALITY AS t(d, n)),
-		       u.repo, u.sha, u.ref, u.event_name, u.workflow_ref, u.run_id, u.run_attempt,
-		       u.check_name, u.env, u.ipso_version, u.evaluated_at, lower(u.sys_period),
-		       encode(u.build_sha256, 'hex'), encode(u.sarif_sha256, 'hex'), u.evidence
-		FROM verification.verdict AS v
-		JOIN verification.upload AS u ON u.tenant_id = v.tenant_id AND u.id = v.upload_id
+		SELECT `+verdictColumns+`
+		`+verdictFrom+`
 		WHERE v.tenant_id = $1
 		  AND ($2 = '' OR u.repo = $2)
 		  AND ($3 = '' OR v.decision_id = $3 OR v.slug = $3)
@@ -131,6 +126,33 @@ func List(ctx context.Context, db *sql.DB, tenant uuid.UUID, f Filter, limit int
 	if err != nil {
 		return nil, reduce("list: read", err)
 	}
+	items, digests, err := scanVerdicts(rows, "list")
+	if err != nil {
+		return nil, err
+	}
+	_ = tx.Rollback()
+	if err := readReadings(ctx, db, tenant, items, digests, known); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// verdictColumns and verdictFrom are the select list and the join that every read of stored verdicts shares,
+// so a verdict has the same fields wherever it is read. The digests come back joined as lowercase hex.
+const (
+	verdictColumns = `v.id, v.upload_id, v.decision_id, v.slug, v.check_index, v.mode, v.result, v.violations,
+		       (SELECT string_agg(encode(d, 'hex'), ' ' ORDER BY n) FROM unnest(v.fingerprints) WITH ORDINALITY AS t(d, n)),
+		       u.repo, u.sha, u.ref, u.event_name, u.workflow_ref, u.run_id, u.run_attempt,
+		       u.check_name, u.env, u.ipso_version, u.evaluated_at, lower(u.sys_period),
+		       encode(u.build_sha256, 'hex'), encode(u.sarif_sha256, 'hex'), u.evidence`
+	verdictFrom = `FROM verification.verdict AS v
+		JOIN verification.upload AS u ON u.tenant_id = v.tenant_id AND u.id = v.upload_id`
+)
+
+// scanVerdicts reads the rows of a query that selects verdictColumns and closes them. The two slices have one
+// entry for each row, in the order of the rows, and both are empty and not nil when there is no row. The
+// operation names the read in an error.
+func scanVerdicts(rows *sql.Rows, operation string) ([]Item, [][]registry.Fingerprint, error) {
 	defer func() { _ = rows.Close() }()
 	items := []Item{}
 	digests := [][]registry.Fingerprint{}
@@ -142,26 +164,21 @@ func List(ctx context.Context, db *sql.DB, tenant uuid.UUID, f Filter, limit int
 			&joined, &it.Repo, &it.SHA, &it.Ref, &it.Event, &it.WorkflowRef, &it.RunID, &it.RunAttempt,
 			&it.Check, &it.Env, &it.IpsoVersion, &it.EvaluatedAt, &it.RecordedAt,
 			&it.BuildSHA256, &it.SarifSHA256, &evidence); err != nil {
-			return nil, reduce("list: scan", err)
+			return nil, nil, reduce(operation+": scan", err)
 		}
 		it.Evidence = evidence
 		it.RunURL = "https://github.com/" + it.Repo + "/actions/runs/" + strconv.FormatInt(it.RunID, 10)
 		fingerprints, err := parseDigests(joined.String)
 		if err != nil {
-			return nil, reduce("list: read", err)
+			return nil, nil, reduce(operation+": read", err)
 		}
 		items = append(items, it)
 		digests = append(digests, fingerprints)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, reduce("list: read", err)
+		return nil, nil, reduce(operation+": read", err)
 	}
-	_ = rows.Close()
-	_ = tx.Rollback()
-	if err := readReadings(ctx, db, tenant, items, digests, known); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return items, digests, nil
 }
 
 // parseDigests reads the digests of a verdict as the query joins them: lowercase hex, 32 bytes each, with a

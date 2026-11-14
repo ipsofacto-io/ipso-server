@@ -16,7 +16,7 @@ The web app is the browser view of the control plane: the registry, the review q
 | `/supersessions/new` | The form to record a supersession and the grandfather terms of the new decision. `?from=` names the decision that ends. |
 | `/baselines/new` | The form to record the baseline of one repository for a decision that has grandfather terms, from the file that `ipso baseline export` writes. `?decision=` names the decision. |
 | `/export` | The export of the tenant, for an admin: a field for one age public key, the state of the export (pending, running, ready, failed) and its expiry, and the download of the archive once it is ready. A person without the role reads the refusal and no form. |
-| `/audit` | The five questions of section 2.3: what applied, what changed, at a merge, supersessions, and waivers ending soon. The fields are in the address, so an answer can be shared. |
+| `/audit` | The five questions of section 2.3: what applied, what changed, at a merge, supersessions, and waivers ending soon. The fields are in the address, so an answer can be shared. The merge question takes the merge commit and shows the verdicts that CI runs stored for it, read as on the decision page. A commit that no stored run names reads as unknown, never as clean ([ADR-0124](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0124-verdicts-on-audit-merges.md)). |
 | `/signin` | The sign-in. Any call the server refuses with 401 ends here. |
 
 Importing decisions and compiling them into checks (UC1 and UC2) have no API route, so they stay in the CLI. Delivering an accepted check to a repository, running a premise probe on demand, and creating a scope or changing the role of a person are not in the app either.

@@ -405,7 +405,13 @@ export function respond(request: FixtureRequest, now: Date = new Date(), state: 
     return allow(...SUBJECT, 'valid', 'known') ?? need('repo', 'valid', 'known') ?? json(200, { decisions: decisions.slice(-3) });
   }
   if (path === '/v1/audit/merges') {
-    return allow(...SUBJECT, 'at', 'known') ?? need('repo', 'at') ?? json(200, { decisions: decisions.slice(-2) });
+    const refused = allow(...SUBJECT, 'at', 'known', 'sha') ?? need('repo', 'at', 'sha');
+    if (refused) return refused;
+    const sha = query.get('sha') as string;
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha)) return error(400, 'invalid query');
+    // A commit that no stored run names is unknown, which is null and never an empty list (ADR-0124).
+    const rows = verdicts(now).filter((v) => v.repo === (query.get('repo') as string).toLowerCase() && v.sha === sha.toLowerCase());
+    return json(200, { decisions: decisions.slice(-2), verdicts: rows.length === 0 ? null : rows });
   }
   if (path === '/v1/audit/beliefs') {
     const refused = allow(...SUBJECT, 'valid', 'then', 'now') ?? need('repo', 'valid', 'then', 'now');

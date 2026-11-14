@@ -6,6 +6,7 @@ import type {
   AuditBeliefs,
   AuditChain,
   AuditDecisions,
+  AuditMerge,
   AuditWaivers,
   Baseline,
   BaselineRequest,
@@ -68,8 +69,8 @@ export function makeCalls(api: Api) {
       api.getJSON<AuditDecisions>('/v1/audit/decisions', q, signal),
     auditBeliefs: (q: Subject & { valid: string; then: string; now: string }, signal?: AbortSignal) =>
       api.getJSON<AuditBeliefs>('/v1/audit/beliefs', q, signal),
-    auditMerges: (q: Subject & { at: string; known?: string }, signal?: AbortSignal) =>
-      api.getJSON<AuditDecisions>('/v1/audit/merges', q, signal),
+    auditMerges: (q: Subject & { at: string; sha: string; known?: string }, signal?: AbortSignal) =>
+      api.getJSON<AuditMerge>('/v1/audit/merges', q, signal),
     auditSupersessions: (decisionID: string, q: { known: string }, signal?: AbortSignal) =>
       api.getJSON<AuditChain>(`/v1/audit/supersessions/${encodeURIComponent(decisionID)}`, q, signal),
     auditWaivers: (q: { known: string; now: string }, signal?: AbortSignal) => api.getJSON<AuditWaivers>('/v1/audit/waivers', q, signal),

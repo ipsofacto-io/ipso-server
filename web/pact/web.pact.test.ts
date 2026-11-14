@@ -38,6 +38,8 @@ const VERDICTS = 'tenant A holds a stored verdict';
 const VERDICT_IN_BASELINE = 'tenant A holds a verdict whose digests are all in the recorded baseline of its decision';
 // A verdict that a waiver recorded for its decision covers (ADR-0123).
 const VERDICT_WAIVED = 'tenant A holds a verdict that a recorded waiver covers';
+// A merged commit whose failing verdict a waiver recorded for its decision covers, read on audit question Q3 (ADR-0124).
+const MERGED_COMMIT = 'tenant A holds a merged commit whose verdict a recorded waiver covers';
 const VIEWER = 'the session belongs to a viewer of tenant A';
 // The states of the writes (ADR-0110). A write changes what the provider holds, so each of these states seeds
 // its own rows when it is set up and hands their ids back, and the interaction names them with
@@ -84,6 +86,9 @@ const VALID = '2026-06-01T00:00:00Z';
 const KNOWN = '2026-11-01T00:00:00Z';
 // A time after every row the provider seeds, so an audit question reads all of them.
 const LATER = '2099-01-01T00:00:00Z';
+// A commit that no stored run names, and the commit of the one run that the merged-commit state seeds (ADR-0124).
+const UNKNOWN_COMMIT = '0123456789abcdef0123456789abcdef01234567';
+const MERGED_SHA = 'efefefefefefefefefefefefefefefefefefefef';
 
 const decision = {
   id: uuid(),
@@ -492,18 +497,43 @@ describe('the web app and the control plane API', () => {
     );
   });
 
-  it('answers Q3, at a merge', async () => {
+  it('answers Q3, at a merge, with a commit that no stored run names as unknown', async () => {
     await interact(
       {
-        description: 'a request for the decisions that applied at a merge',
+        description: 'a request for the decisions that applied at a merge and the verdicts of a commit that no run reported on',
         state: REGISTRY,
         path: '/v1/audit/merges',
-        query: { repo: 'acme/api', at: VALID, known: LATER },
+        query: { repo: 'acme/api', sha: UNKNOWN_COMMIT, at: VALID, known: LATER },
         status: 200,
-        body: { decisions: eachLike(decision) },
+        // Null is unknown and never clean: an empty list would read as nothing failed (ADR-0124).
+        body: { decisions: eachLike(decision), verdicts: nullValue() },
       },
       async (calls) => {
-        expect((await calls.auditMerges({ repo: 'acme/api', at: VALID, known: LATER })).decisions).not.toHaveLength(0);
+        const answer = await calls.auditMerges({ repo: 'acme/api', sha: UNKNOWN_COMMIT, at: VALID, known: LATER });
+        expect(answer.decisions).not.toHaveLength(0);
+        expect(answer.verdicts).toBeNull();
+      },
+    );
+  });
+
+  it('answers Q3 with the verdicts of the merged commit, read against the recorded waivers', async () => {
+    await interact(
+      {
+        description: 'a request for the decisions that applied at a merge and the verdicts of its commit',
+        state: MERGED_COMMIT,
+        path: '/v1/audit/merges',
+        query: { repo: 'acme/merged', sha: MERGED_SHA, at: VALID, known: LATER },
+        status: 200,
+        body: {
+          decisions: eachLike(decision),
+          // The route names no decision, so it also returns the passing verdict of the same run, which has no waiver.
+          verdicts: arrayContaining(storedVerdict(nullValue(), { result: 'waived', expires_at: timestamp(KNOWN) })),
+        },
+      },
+      async (calls) => {
+        const reading = (await calls.auditMerges({ repo: 'acme/merged', sha: MERGED_SHA, at: VALID, known: LATER })).verdicts?.[0]?.waiver;
+        expect(reading?.result).toBe('waived');
+        expect(typeof reading?.expires_at).toBe('string');
       },
     );
   });

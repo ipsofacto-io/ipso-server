@@ -6,7 +6,9 @@ import { Notice } from './Notice';
 /**
  * Says what an API refusal means in words. A 401 is the sign-in itself, and a 429 never signs anyone out. A form
  * says what a 409 means for its own write with `conflict`, a 400 in its own words with `invalid`, and a 413 with
- * `tooLarge`, because the server answers each with a code and no message (ADR-0109).
+ * `tooLarge`, because the server answers each with a code and no message (ADR-0109). A question whose answer can be too
+ * large says in `tooWide` what, if anything, narrows it: the default advice names a path and an environment, which
+ * narrow decisions and not the verdicts of a commit (ADR-0124).
  */
 export function ErrorNotice({
   error,
@@ -14,12 +16,14 @@ export function ErrorNotice({
   conflict,
   invalid,
   tooLarge,
+  tooWide,
 }: {
   error: ApiError;
   onRetry?: () => void;
   conflict?: string;
   invalid?: string;
   tooLarge?: string;
+  tooWide?: string;
 }) {
   if (error.status === 401) return <SignInPanel />;
 
@@ -56,7 +60,7 @@ export function ErrorNotice({
       break;
     case error.code === 'response too large':
       title = 'The answer is too large to show.';
-      text = 'Narrow the question with a path or an environment.';
+      text = tooWide ?? 'Narrow the question with a path or an environment.';
       break;
     case error.status === 503 || error.code === 'timeout':
       title = 'The request took too long.';

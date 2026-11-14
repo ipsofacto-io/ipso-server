@@ -45,6 +45,11 @@ const stateVerdictInBaseline = "tenant A holds a verdict whose digests are all i
 // decision, a waiver of its org that a human approver recorded, and one upload whose failing verdict names the decision.
 const stateVerdictWaived = "tenant A holds a verdict that a recorded waiver covers"
 
+// stateMergedCommit is the provider state of audit question Q3 with a verdict (IPSO-164, ADR-0124): tenant A holds one run
+// on a commit whose failing verdict a recorded waiver covers. It has its own decision and repository, because
+// stateVerdictWaived seeds another and two decisions that hold one EDR id are ambiguous.
+const stateMergedCommit = "tenant A holds a merged commit whose verdict a recorded waiver covers"
+
 // stateViewer is the provider state of a refusal by the role policy: the session is a viewer's, and a
 // viewer may not read the audit routes (ADR-0108).
 const stateViewer = "the session belongs to a viewer of tenant A"
@@ -343,6 +348,9 @@ func TestPactProviderIpsoServer(t *testing.T) {
 	verdictWaived := func(_ context.Context, n int64) (models.ProviderStateResponse, error) {
 		return nil, f.seedVerdictWaived(t, n)
 	}
+	mergedCommit := func(_ context.Context, n int64) (models.ProviderStateResponse, error) {
+		return nil, f.seedMergedCommit(t, n)
+	}
 	toBaseline := func(ctx context.Context, n int64) (models.ProviderStateResponse, error) {
 		decision, err := f.seedDecision(ctx, "synthetic-baselined-"+strconv.FormatInt(n, 10))
 		if err != nil {
@@ -411,6 +419,7 @@ func TestPactProviderIpsoServer(t *testing.T) {
 			stateVerdicts:          as(personA),
 			stateVerdictInBaseline: seeds(personA, verdictInBaseline),
 			stateVerdictWaived:     seeds(personA, verdictWaived),
+			stateMergedCommit:      seeds(personA, mergedCommit),
 			stateViewer:            as(viewerA),
 			stateUnanswered:        seeds(approverA, unanswered),
 			stateAnswered:          seeds(approverA, answered),
