@@ -111,12 +111,59 @@ func InstallationTenant(ctx context.Context, db *sql.DB, installation int64) (uu
 		return uuid.Nil, false, reduce("installation tenant: begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	return installationOwner(ctx, tx, "installation tenant", installation)
+}
+
+// UnbindInstallation removes the binding of an installation that GitHub deleted, and returns the tenant that
+// held it. It is one transaction as the application role. The tenant comes from the lookup that
+// InstallationTenant makes, with no tenant set, and never from the caller. The delete runs with ipso.tenant set
+// to that tenant, so row-level security lets it remove that one tenant's binding and nothing else (ADR-0125).
+// An installation no tenant holds changes nothing and reports false, and so does a second call.
+//
+// The caller proves that GitHub deleted the installation. This function trusts its argument.
+func UnbindInstallation(ctx context.Context, db *sql.DB, installation int64) (uuid.UUID, bool, error) {
+	if db == nil {
+		return uuid.Nil, false, errors.New("unbind: a database is required")
+	}
+	if installation <= 0 {
+		return uuid.Nil, false, nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return uuid.Nil, false, reduce("unbind: begin", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	tenant, bound, err := installationOwner(ctx, tx, "unbind", installation)
+	if err != nil || !bound {
+		return uuid.Nil, false, err
+	}
+	if err := setSession(ctx, tx, tenant, false); err != nil {
+		return uuid.Nil, false, err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM tenancy.installation WHERE installation_id = $1`, installation)
+	if err != nil {
+		return uuid.Nil, false, reduce("unbind: delete the binding", err)
+	}
+	// Offboarding may have removed the binding since the lookup. Then there is nothing left to remove.
+	if n, _ := res.RowsAffected(); n != 1 {
+		return uuid.Nil, false, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return uuid.Nil, false, reduce("unbind: commit", err)
+	}
+	return tenant, true, nil
+}
+
+// installationOwner clears the tenant setting of tx and asks tenancy.installation_tenant for the tenant of one
+// installation, the way the webhooks process asks. A setting left on a pooled connection cannot change the
+// answer.
+func installationOwner(ctx context.Context, tx *sql.Tx, operation string, installation int64) (uuid.UUID, bool, error) {
 	if _, err := tx.ExecContext(ctx, `SELECT set_config('ipso.tenant', '', true)`); err != nil {
-		return uuid.Nil, false, reduce("installation tenant: clear the tenant", err)
+		return uuid.Nil, false, reduce(operation+": clear the tenant", err)
 	}
 	var tenant uuid.NullUUID
 	if err := tx.QueryRowContext(ctx, `SELECT tenancy.installation_tenant($1)`, installation).Scan(&tenant); err != nil {
-		return uuid.Nil, false, reduce("installation tenant: look up", err)
+		return uuid.Nil, false, reduce(operation+": look up", err)
 	}
 	if !tenant.Valid {
 		return uuid.Nil, false, nil
