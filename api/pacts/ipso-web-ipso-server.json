@@ -1036,7 +1036,7 @@
       "type": "Synchronous/HTTP"
     },
     {
-      "description": "a request for the decisions that applied at a merge",
+      "description": "a request for the decisions that applied at a merge and the verdicts of a commit that no run reported on",
       "pending": false,
       "providerStates": [
         {
@@ -1076,6 +1076,9 @@
           ],
           "repo": [
             "acme/api"
+          ],
+          "sha": [
+            "0123456789abcdef0123456789abcdef01234567"
           ]
         }
       },
@@ -1090,6 +1093,168 @@
                 },
                 "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
                 "version": 1
+              }
+            ],
+            "verdicts": null
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.decisions[*].id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decisions": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.decisions[*].body": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decisions[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.decisions[*].version": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.verdicts": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "null"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the decisions that applied at a merge and the verdicts of its commit",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds a merged commit whose verdict a recorded waiver covers"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/audit/merges",
+        "query": {
+          "at": [
+            "2026-06-01T00:00:00Z"
+          ],
+          "known": [
+            "2099-01-01T00:00:00Z"
+          ],
+          "repo": [
+            "acme/merged"
+          ],
+          "sha": [
+            "efefefefefefefefefefefefefefefefefefefef"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "decisions": [
+              {
+                "body": {
+                  "slug": "use-tls",
+                  "title": "use-tls"
+                },
+                "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "version": 1
+              }
+            ],
+            "verdicts": [
+              {
+                "baseline": null,
+                "build_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "check": "plan",
+                "check_index": 0,
+                "decision_id": "01M5QJ0V9EVXKR4C89XNBNT5GG",
+                "env": "prod",
+                "evaluated_at": "2026-06-01T00:00:00Z",
+                "event": "push",
+                "evidence": {
+                  "plan_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                },
+                "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "ipso_version": "0.5.0",
+                "mode": "block",
+                "recorded_at": "2026-11-01T00:00:00Z",
+                "ref": "refs/heads/main",
+                "repo": "acme/api",
+                "result": "fail",
+                "run_attempt": 1,
+                "run_id": 1001,
+                "run_url": "https://github.com/acme/api/actions/runs/1001",
+                "sarif_sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+                "sha": "abababababababababababababababababababab",
+                "slug": "use-tls",
+                "upload_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "violations": 2,
+                "waiver": {
+                  "expires_at": "2026-11-01T00:00:00Z",
+                  "result": "waived"
+                },
+                "workflow_ref": "acme/api/.github/workflows/ci.yml@refs/heads/main"
               }
             ]
           },
@@ -1141,6 +1306,244 @@
               "matchers": [
                 {
                   "match": "integer"
+                }
+              ]
+            },
+            "$.verdicts": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "arrayContains",
+                  "variants": [
+                    {
+                      "generators": {
+                        "$.id": {
+                          "type": "Uuid"
+                        },
+                        "$.upload_id": {
+                          "type": "Uuid"
+                        }
+                      },
+                      "index": 0,
+                      "rules": {
+                        "$.baseline": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "null"
+                            }
+                          ]
+                        },
+                        "$.build_sha256": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "^[0-9a-f]{64}$"
+                            }
+                          ]
+                        },
+                        "$.check": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.check_index": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "integer"
+                            }
+                          ]
+                        },
+                        "$.decision_id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.env": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.evaluated_at": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                            }
+                          ]
+                        },
+                        "$.event": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.evidence": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                            }
+                          ]
+                        },
+                        "$.ipso_version": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.mode": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.recorded_at": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                            }
+                          ]
+                        },
+                        "$.ref": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.repo": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.result": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.run_attempt": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "integer"
+                            }
+                          ]
+                        },
+                        "$.run_id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "integer"
+                            }
+                          ]
+                        },
+                        "$.run_url": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.sarif_sha256": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "^[0-9a-f]{64}$"
+                            }
+                          ]
+                        },
+                        "$.sha": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.slug": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.upload_id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                            }
+                          ]
+                        },
+                        "$.violations": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "integer"
+                            }
+                          ]
+                        },
+                        "$.waiver.expires_at": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                            }
+                          ]
+                        },
+                        "$.workflow_ref": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
                 }
               ]
             }

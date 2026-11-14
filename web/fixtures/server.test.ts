@@ -318,6 +318,31 @@ describe('the export routes of the fixtures server', () => {
   });
 });
 
+describe('audit question Q3 of the fixtures server', () => {
+  const get = (path: string) => respond({ method: 'GET', url: path, cookie }, NOW, newFixtureState());
+  const merge = (sha: string) => get(`/v1/audit/merges?repo=acme%2Fpayments&at=2026-11-01T00:00:00Z&sha=${sha}`);
+  const COMMIT = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
+
+  it('answers the verdicts of a commit that a stored run names, in either case', () => {
+    for (const sha of [COMMIT, COMMIT.toUpperCase()]) {
+      const body = merge(sha).body as { decisions: unknown[]; verdicts: { sha: string }[] | null };
+      expect(body.decisions).toHaveLength(2);
+      expect(body.verdicts).not.toBeNull();
+      expect(body.verdicts?.every((verdict) => verdict.sha === COMMIT)).toBe(true);
+    }
+  });
+
+  it('answers null for a commit that no stored run names, and never an empty list', () => {
+    expect((merge('0123456789abcdef0123456789abcdef01234567').body as { verdicts: unknown }).verdicts).toBeNull();
+  });
+
+  it('refuses a request with no commit or with something that is not a commit', () => {
+    expect(get('/v1/audit/merges?repo=acme%2Fpayments&at=2026-11-01T00:00:00Z').status).toBe(400);
+    expect(merge('main').status).toBe(400);
+    expect(merge(COMMIT.slice(0, 7)).status).toBe(400);
+  });
+});
+
 describe('the verdict list of the fixtures server', () => {
   const get = (path: string) => respond({ method: 'GET', url: path, cookie }, NOW, newFixtureState());
   const reading = (path: string) => (get(path).body as { known: string; verdicts: { id: string; result: string; baseline: { result: string } | null; waiver: { result: string; expires_at: string | null } | null }[] });

@@ -58,6 +58,9 @@ const (
 	ghost         = "ghost"
 )
 
+// seededSHA is the commit of the verdict upload seeded for each tenant.
+const seededSHA = "abababababababababababababababababababab"
+
 // fixture is a migrated database with the same rows in two tenants, so a read that crossed tenants
 // would show. Every row is synthetic.
 type fixture struct {

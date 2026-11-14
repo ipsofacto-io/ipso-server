@@ -2,7 +2,7 @@ import { Link, useParams } from 'react-router';
 
 import { calls } from '../api/calls';
 import { useResource } from '../api/hooks';
-import type { Decision, StoredVerdict } from '../api/types';
+import type { Decision } from '../api/types';
 import { DecisionStatus } from '../components/DecisionStatus';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorNotice } from '../components/ErrorNotice';
@@ -11,6 +11,7 @@ import { Loading } from '../components/Loading';
 import { Page } from '../components/Page';
 import { ExternalLink } from '../components/Safe';
 import { TimeControls, useTimes } from '../components/TimeControls';
+import { VerdictReading } from '../components/VerdictReading';
 import { formatDate, formatTime, nowAsTime } from '../lib/format';
 import { checkLines, decisionPath, premiseLines, scopeLines, sourceLines, summarize, supersedes } from '../state/decision';
 
@@ -206,29 +207,6 @@ function Successor({ id }: { id: string }) {
 
 const SHOWN = 20;
 
-/**
- * The result of one verdict. A recorded waiver that covers it is the first reading, then the recorded baseline for a
- * run that sent the digests of its violations, then a waiver reading of no cover, and the run's own result last
- * (ADR-0122, ADR-0123). What the run reported stays next to the reading when the two differ, so a local file that
- * disagrees with the registry is seen.
- */
-function Reading({ verdict }: { verdict: StoredVerdict }) {
-  const { baseline, waiver } = verdict;
-  const covered = waiver !== null && waiver.result === 'waived';
-  const shown = covered ? 'waived' : baseline ? baseline.result : waiver ? waiver.result : verdict.result;
-  const agrees = shown === verdict.result || (shown === 'waived(baseline)' && verdict.result === 'waived');
-  const notes: string[] = [];
-  if (covered && waiver.expires_at) notes.push(`covered by a recorded waiver until ${formatTime(waiver.expires_at)}`);
-  if (baseline) notes.push(`${baseline.waived} of ${baseline.fingerprints} in the recorded baseline`);
-  if (!agrees) notes.push(`the run reported ${verdict.result}`);
-  return (
-    <>
-      <span className={shown === 'fail' || shown === 'error' ? 'result result-bad' : 'result'}>{shown}</span>
-      {notes.length > 0 ? <div className="muted">{notes.join(', ')}</div> : null}
-    </>
-  );
-}
-
 function Verdicts({ decision }: { decision: string }) {
   const verdicts = useResource((signal) => calls.listVerdicts({ decision, limit: SHOWN }, signal), [decision]);
   return (
@@ -257,7 +235,7 @@ function Verdicts({ decision }: { decision: string }) {
               {verdicts.data.verdicts.map((verdict) => (
                 <tr key={verdict.id}>
                   <td>
-                    <Reading verdict={verdict} />
+                    <VerdictReading verdict={verdict} />
                   </td>
                   <td>{verdict.mode}</td>
                   <td className="mono">{verdict.violations}</td>

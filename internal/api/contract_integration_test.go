@@ -204,8 +204,8 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 				t.Errorf("%v", a)
 			}
 		}},
-		{"audit_merges", http.MethodGet, "/v1/audit/merges?" + subject + "&at=" + valid + "&known=" + known, nil, func(t *testing.T, a map[string]any) {
-			if len(list(a, "decisions")) != 2 {
+		{"audit_merges", http.MethodGet, "/v1/audit/merges?" + subject + "&at=" + valid + "&known=" + known + "&sha=" + seededSHA, nil, func(t *testing.T, a map[string]any) {
+			if v := list(a, "verdicts"); len(list(a, "decisions")) != 2 || len(v) != 1 || v[0].(map[string]any)["upload_id"] != f.uploads[tenantA].String() {
 				t.Errorf("%v", a)
 			}
 		}},

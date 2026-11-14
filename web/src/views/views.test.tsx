@@ -11,6 +11,8 @@ import { NOW, renderApp, stubFetch } from '../test/render';
 
 /** The layout also reads the export once a person is signed in, to decide whether the menu has the Export entry (ADR-0115). */
 const MENU_READ = 'GET /v1/exports/current';
+// The commit of the verdicts in the fixtures.
+const COMMIT = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
@@ -297,10 +299,54 @@ describe('the audit', () => {
     expect(screen.getByRole('table', { name: 'Decisions removed' })).toBeInTheDocument();
   });
 
-  it('answers Q3 for the time a change merged', async () => {
-    const stub = renderAndStub('/audit/merges?repo=acme/payments&at=2026-11-01T00:00:00Z');
+  it('answers Q3 for the time a change merged and the commit that merged, with the verdicts of its runs', async () => {
+    const stub = renderAndStub(`/audit/merges?repo=acme/payments&sha=${COMMIT}&at=2026-11-01T00:00:00Z`);
     expect(await screen.findByRole('table', { name: 'Decisions at the merge' })).toBeInTheDocument();
-    expect(stub.requests).toEqual(['GET /v1/audit/merges?repo=acme%2Fpayments&at=2026-11-01T00%3A00%3A00Z', MENU_READ]);
+    expect(stub.requests).toEqual([`GET /v1/audit/merges?repo=acme%2Fpayments&sha=${COMMIT}&at=2026-11-01T00%3A00%3A00Z`, MENU_READ]);
+    const verdicts = await screen.findByRole('table', { name: 'Verdicts of the runs on the commit' });
+    const rows = within(verdicts).getAllByRole('row').slice(1);
+    expect(rows).toHaveLength(6);
+    // The same readings as the decision page: a recorded waiver first, and what the run reported when it differs.
+    const covered = rows.find((row) => within(row).queryByRole('link', { name: '9909000.1' })) as HTMLElement;
+    expect(covered).toBeDefined();
+    expect(within(covered).getByText('waived')).not.toHaveClass('result-bad');
+    expect(within(covered).getByText(/covered by a recorded waiver until .*the run reported fail/)).toBeInTheDocument();
+    expect(within(verdicts).getByRole('link', { name: '9912345.1' })).toHaveAttribute('href', 'https://github.com/acme/payments/actions/runs/9912345');
+    expect(within(verdicts).getAllByRole('link', { name: 'use-tls' })[0]).toHaveAttribute('href', '/decisions/use-tls');
+    expect(screen.queryByText('Unknown, not clean')).not.toBeInTheDocument();
+  });
+
+  it('says a commit that no stored run names is unknown and not clean, and shows no table of verdicts', async () => {
+    renderAndStub('/audit/merges?repo=acme/payments&sha=0123456789abcdef0123456789abcdef01234567&at=2026-11-01T00:00:00Z');
+    expect(await screen.findByText('Unknown, not clean')).toBeInTheDocument();
+    expect(screen.getByText(/Nothing passed and nothing failed/)).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: 'Verdicts of the runs on the commit' })).not.toBeInTheDocument();
+  });
+
+  it('says runs that reported no decision check are not unknown', async () => {
+    stubFetch({
+      override: ({ url }) => (url.startsWith('/v1/audit/merges') ? { status: 200, headers: {}, body: { decisions: [], verdicts: [] } } : undefined),
+    });
+    renderApp(`/audit/merges?repo=acme/payments&sha=${COMMIT}&at=2026-11-01T00:00:00Z`);
+    expect(await screen.findByText('The runs on this commit reported no decision check.')).toBeInTheDocument();
+    expect(screen.queryByText('Unknown, not clean')).not.toBeInTheDocument();
+  });
+
+  it('refuses a commit that is not a commit before it asks, and asks with the commit that is', async () => {
+    const stub = stubFetch();
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    renderApp('/audit/merges');
+    await user.type(screen.getByLabelText('Repository'), 'acme/payments');
+    await user.type(screen.getByLabelText('Commit'), 'main');
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    expect(screen.getByText('A commit is 40 or 64 hexadecimal digits.')).toBeInTheDocument();
+    expect(stub.requests).toHaveLength(0);
+
+    await user.clear(screen.getByLabelText('Commit'));
+    await user.type(screen.getByLabelText('Commit'), COMMIT);
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    expect(await screen.findByRole('table', { name: 'Verdicts of the runs on the commit' })).toBeInTheDocument();
+    expect(stub.requests[0]).toBe(`GET /v1/audit/merges?repo=acme%2Fpayments&sha=${COMMIT}&at=2026-11-07T12%3A00%3A00Z`);
   });
 
   it('answers Q4 from the link on a decision, with the chain and its versions', async () => {
@@ -318,10 +364,18 @@ describe('the audit', () => {
   });
 
   it('says a question is too wide when the answer is over the cap', async () => {
-    stubFetch({ override: ({ url }) => (url.startsWith('/v1/audit/merges') ? { status: 500, headers: {}, body: { error: 'response too large' } } : undefined) });
-    renderApp('/audit/merges?repo=acme/payments&at=2026-11-01T00:00:00Z');
+    stubFetch({ override: ({ url }) => (url.startsWith('/v1/audit/decisions') ? { status: 500, headers: {}, body: { error: 'response too large' } } : undefined) });
+    renderApp('/audit/decisions?repo=acme/payments&valid=2026-11-01T00:00:00Z&known=2026-11-01T00:00:00Z');
     expect(await screen.findByText('The answer is too large to show.')).toBeInTheDocument();
     expect(screen.getByText('Narrow the question with a path or an environment.')).toBeInTheDocument();
+  });
+
+  it('does not tell a reader to narrow the verdicts of a commit with a path or an environment, which cannot', async () => {
+    stubFetch({ override: ({ url }) => (url.startsWith('/v1/audit/merges') ? { status: 500, headers: {}, body: { error: 'response too large' } } : undefined) });
+    renderApp(`/audit/merges?repo=acme/payments&sha=${COMMIT}&at=2026-11-01T00:00:00Z`);
+    expect(await screen.findByText('The answer is too large to show.')).toBeInTheDocument();
+    expect(screen.getByText(/narrow only the decisions, not the verdicts/)).toBeInTheDocument();
+    expect(screen.queryByText('Narrow the question with a path or an environment.')).not.toBeInTheDocument();
   });
 });
 

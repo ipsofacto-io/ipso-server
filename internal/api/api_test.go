@@ -398,7 +398,7 @@ func TestGuardRefusesAQueryNoRouteReads(t *testing.T) {
 		"/v1/check-proposals?limit=1&limit=2",
 		"/v1/scopes?known=%zz",
 		"/v1/proposals?limt=5",
-		"/v1/audit/merges?repo=acme/api&at=2026-06-01T00:00:00Z&knwon=2026-01-01T00:00:00Z",
+		"/v1/audit/merges?repo=acme/api&at=2026-06-01T00:00:00Z&sha=" + strings.Repeat("ab", 20) + "&knwon=2026-01-01T00:00:00Z",
 		"/v1/decisions?valid=2026-06-01T00:00:00Z&Known=2026-01-01T00:00:00Z",
 		"POST /v1/resolve?known=2026-01-01T00:00:00Z",
 	} {

@@ -29,6 +29,10 @@ import (
 // next starts on 2026-06-01, so those two answers assume the clock is after that day.
 var auditClockAfter = time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
 
+// auditCommit is the merge commit every Q3 question of the golden file names. The dataset stores no upload, so the
+// verdicts of that commit are unknown.
+const auditCommit = "0123456789abcdef0123456789abcdef01234567"
+
 type auditFile struct {
 	Steps   []auditStep  `json:"steps"`
 	Queries []auditQuery `json:"queries"`
@@ -292,7 +296,7 @@ func runAuditQuery(t *testing.T, r registryDB, h http.Handler, q auditQuery, ten
 	case "merges":
 		at := auditTime(t, marks, q.At)
 		knownAt := at
-		params := url.Values{"repo": {q.Repo}, "at": {at.Format(time.RFC3339Nano)}}
+		params := url.Values{"repo": {q.Repo}, "at": {at.Format(time.RFC3339Nano)}, "sha": {auditCommit}}
 		if q.Known != "" {
 			knownAt = auditTime(t, marks, q.Known)
 			params.Set("known", knownAt.Format(time.RFC3339Nano))
@@ -303,14 +307,16 @@ func runAuditQuery(t *testing.T, r registryDB, h http.Handler, q auditQuery, ten
 		}
 		assertDecisionRefs(t, refOf, got, q.Want)
 		body := auditGET(t, h, tenant, "/v1/audit/merges", params)
-		if strings.Contains(body, "verdicts") {
-			t.Fatalf("merges response has a verdicts field: %s", body)
-		}
 		var decoded struct {
-			Decisions []decisionWire `json:"decisions"`
+			Decisions []decisionWire  `json:"decisions"`
+			Verdicts  json.RawMessage `json:"verdicts"`
 		}
 		decodeAudit(t, body, &decoded)
 		assertDecisionRefs(t, refOf, wires(decoded.Decisions), q.Want)
+		// A commit with no stored upload is unknown, which an empty list would read as clean (ADR-0124).
+		if string(decoded.Verdicts) != "null" {
+			t.Fatalf("a commit with no stored upload reads %s, want null: %s", decoded.Verdicts, body)
+		}
 
 	case "supersessions":
 		d := decisions[q.Decision]

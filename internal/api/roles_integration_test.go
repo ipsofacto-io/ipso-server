@@ -41,7 +41,7 @@ func (f *fixture) operations(t *testing.T) []operation {
 		{"list_accepted_checks", http.MethodGet, "/v1/accepted-checks?repo=acme%2Fapi", nil},
 		{"audit_decisions", http.MethodGet, "/v1/audit/decisions?" + subject + "&valid=" + valid + "&known=" + known, nil},
 		{"audit_beliefs", http.MethodGet, "/v1/audit/beliefs?" + subject + "&valid=" + valid + "&then=" + at(f.before) + "&now=" + known, nil},
-		{"audit_merges", http.MethodGet, "/v1/audit/merges?" + subject + "&at=" + valid + "&known=" + known, nil},
+		{"audit_merges", http.MethodGet, "/v1/audit/merges?" + subject + "&at=" + valid + "&known=" + known + "&sha=" + seededSHA, nil},
 		{"audit_supersessions", http.MethodGet, "/v1/audit/supersessions/" + f.old.String() + "?known=" + known, nil},
 		{"audit_waivers", http.MethodGet, "/v1/audit/waivers?known=" + known + "&now=" + valid, nil},
 		{"list_verdicts", http.MethodGet, "/v1/verdicts?repo=acme%2Fapi&decision=use-tls", nil},

@@ -442,7 +442,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Q3, the decisions that applied when a change merged. */
+        /**
+         * Q3, the decisions that applied when a change merged, and the verdicts CI stored for its commit.
+         * @description The decisions are those of Q1 at the merge time. The verdicts are every stored verdict of the uploads of the repository and the commit, for every run, attempt, check command and environment, each read as GET /v1/verdicts reads it for the same transaction time. `path` and `env` narrow the decisions and never the verdicts. A commit with no upload stored by the transaction time answers `verdicts: null`, which is unknown and never clean.
+         */
         get: operations["audit_merges"];
         put?: never;
         post?: never;
@@ -1085,6 +1088,11 @@ export interface components {
         };
         AuditDecisions: {
             decisions: components["schemas"]["Decision"][];
+        };
+        AuditMerge: {
+            decisions: components["schemas"]["Decision"][];
+            /** @description The stored verdicts of the commit, newest first, or null when no upload of the repository and the commit was stored by the transaction time. Null is unknown, never clean. An empty list means uploads exist and hold no verdict. A commit with more than 1000 verdicts is refused whole with 500. */
+            verdicts: components["schemas"]["StoredVerdict"][] | null;
         };
         AuditBeliefs: {
             added: components["schemas"]["Decision"][];
@@ -2115,8 +2123,11 @@ export interface operations {
                 path?: components["parameters"]["Path"];
                 /** @description An environment. Absent matches every env scope, which widens the answer. */
                 env?: components["parameters"]["Env"];
+                /** @description The merge commit, 40 or 64 hexadecimal digits, as the signed token of a run names it. Upper case is read as lower case. A run on a pull request names the test merge commit that GitHub makes. */
+                sha: string;
                 /** @description When the change merged. It is also the transaction time unless known is given. */
                 at: string;
+                /** @description The transaction time, for the decisions and the verdicts. A run stored after it is not in the answer, so a reader who wants the runs that finished after the merge gives a later time. */
                 known?: string;
             };
             header?: never;
@@ -2125,13 +2136,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The decisions in force at the merge. */
+            /** @description The decisions in force at the merge and the verdicts of its commit. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AuditDecisions"];
+                    "application/json": components["schemas"]["AuditMerge"];
                 };
             };
             400: components["responses"]["InvalidQuery"];
