@@ -127,12 +127,13 @@ describe('a decision', () => {
       if (!row) throw new Error(`no verdict row ${index}`);
       return row;
     };
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(6);
     expect(within(rowAt(0)).getByText('pass')).toBeInTheDocument();
     expect(within(rowAt(1)).getByText('fail')).toHaveClass('result-bad');
     expect(within(rowAt(2)).getByText('waived')).not.toHaveClass('result-bad');
     // A verdict with no digest has no reading, so it has no line about the baseline.
     expect(within(rowAt(0)).queryByText(/recorded baseline/)).not.toBeInTheDocument();
+    expect(within(rowAt(0)).queryByText(/recorded waiver/)).not.toBeInTheDocument();
     expect(within(verdicts).getByRole('link', { name: '9912345.1' })).toHaveAttribute('href', 'https://github.com/acme/payments/actions/runs/9912345');
     expect(stub.requests.some((request) => request.startsWith('GET /v1/verdicts?decision=01JB015QEHVBS2Q67NPD1BPZ2E'))).toBe(true);
   });
@@ -156,6 +157,29 @@ describe('a decision', () => {
     expect(within(rowAt(4)).getByText('fail')).toHaveClass('result-bad');
     expect(within(rowAt(4)).getByText('0 of 2 in the recorded baseline, the run reported waived')).toBeInTheDocument();
     expect(within(rowAt(4)).queryByText('waived')).not.toBeInTheDocument();
+  });
+
+  it('shows a verdict as the recorded waivers read it, with the day the waiver ends, and says what the run reported when that differs', async () => {
+    renderAndStub(`/decisions/${ids.useTls}`);
+    const verdicts = await screen.findByRole('table', { name: 'Verdicts uploaded by CI runs' });
+    const rows = within(verdicts).getAllByRole('row').slice(1);
+    const rowAt = (index: number) => {
+      const row = rows[index];
+      if (!row) throw new Error(`no verdict row ${index}`);
+      return row;
+    };
+
+    // The run failed and a recorded waiver covers it: the registry reads it as waived.
+    expect(within(rowAt(5)).getByText('waived')).not.toHaveClass('result-bad');
+    expect(within(rowAt(5)).getByText(/^covered by a recorded waiver until \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC, the run reported fail$/)).toBeInTheDocument();
+    expect(within(rowAt(5)).queryByText('fail')).not.toBeInTheDocument();
+
+    // The run waived it and a recorded waiver agrees: nothing differs to report.
+    expect(within(rowAt(2)).getByText(/^covered by a recorded waiver until \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/)).toBeInTheDocument();
+
+    // A fail that no recorded waiver covers shows no line about waivers.
+    expect(within(rowAt(1)).getByText('fail')).toHaveClass('result-bad');
+    expect(within(rowAt(1)).queryByText(/recorded waiver/)).not.toBeInTheDocument();
   });
 
   it('names the successor of a superseded decision', async () => {

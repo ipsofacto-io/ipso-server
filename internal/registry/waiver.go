@@ -42,28 +42,33 @@ func (o Outcome) String() string {
 	}
 }
 
-// waiverCovers is true when a waiver of the decision was recorded by T, is in
-// force at V, names a scope the subject matches, and the decision itself covers
-// V as known at T. A waiver that sticks out past a shortened decision does not
-// match, because the decision row has to contain V.
-const waiverCovers = `
-SELECT EXISTS (
-    SELECT 1
-    FROM registry.waiver w
-    WHERE w.tenant_id = ipso.current_tenant()
-      AND w.decision_id = $1
-      AND w.scope_id = ANY($2::uuid[])
-      AND w.valid_period @> $3::timestamptz
-      AND w.sys_period @> $4::timestamptz
-      AND EXISTS (
-          SELECT 1
-          FROM registry.decision_version_all d
-          WHERE d.tenant_id = w.tenant_id
-            AND d.decision_id = w.decision_id
-            AND d.valid_period @> $3::timestamptz
-            AND d.sys_period @> $4::timestamptz
-      )
-)`
+// waiverEnd is the latest end among the waivers of the decision that were recorded by T, are in
+// force at V, and name a scope in the given set, and it is NULL when there is none. The decision
+// itself has to cover V as known at T. A waiver that sticks out past a shortened decision does
+// not match, because the decision row has to contain V.
+const waiverEnd = `
+SELECT max(upper(w.valid_period))
+FROM registry.waiver w
+WHERE w.tenant_id = ipso.current_tenant()
+  AND w.decision_id = $1
+  AND w.scope_id = ANY($2::uuid[])
+  AND w.valid_period @> $3::timestamptz
+  AND w.sys_period @> $4::timestamptz
+  AND EXISTS (
+      SELECT 1
+      FROM registry.decision_version_all d
+      WHERE d.tenant_id = w.tenant_id
+        AND d.decision_id = w.decision_id
+        AND d.valid_period @> $3::timestamptz
+        AND d.sys_period @> $4::timestamptz
+  )`
+
+// waiverEndIn reads waiverEnd. A waiver covers when the end is valid.
+func waiverEndIn(ctx context.Context, tx *sql.Tx, decision uuid.UUID, scopes []uuid.UUID, validAt, knownAt time.Time) (sql.NullTime, error) {
+	var end sql.NullTime
+	err := tx.QueryRowContext(ctx, waiverEnd, decision, scopes, validAt, knownAt).Scan(&end)
+	return end, err
+}
 
 // Apply reports the outcome of one check after waivers. A fail becomes waived
 // when a waiver of decision covers the subject at valid time validAt, as the
@@ -99,28 +104,129 @@ func Apply(ctx context.Context, db *sql.DB, tenant, decision uuid.UUID, in Subje
 	if err != nil {
 		return OutcomeFail, err
 	}
-	var covered bool
+	var end sql.NullTime
 	err = readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
-		matched, err := matchingScopes(ctx, tx, subject, knownAt)
-		if err != nil {
+		scopes, err := scopesOf(ctx, tx, subject, knownAt)
+		if err != nil || len(scopes) == 0 {
 			return err
 		}
-		if len(matched) == 0 {
-			return nil
-		}
-		scopes, err := ancestorsOf(ctx, tx, matched, knownAt)
-		if err != nil {
-			return err
-		}
-		return tx.QueryRowContext(ctx, waiverCovers, decision, scopes, validAt, knownAt).Scan(&covered)
+		end, err = waiverEndIn(ctx, tx, decision, scopes, validAt, knownAt)
+		return err
 	})
 	if err != nil {
 		return OutcomeFail, err
 	}
-	if covered {
+	if end.Valid {
 		return OutcomeWaived, nil
 	}
 	return OutcomeFail, nil
+}
+
+// scopesOf returns the scopes that select the subject and every ancestor of them, as known at
+// knownAt, or none when no scope selects it.
+func scopesOf(ctx context.Context, tx *sql.Tx, s subject, knownAt time.Time) ([]uuid.UUID, error) {
+	matched, err := matchingScopes(ctx, tx, s, knownAt)
+	if err != nil || len(matched) == 0 {
+		return nil, err
+	}
+	return ancestorsOf(ctx, tx, matched, knownAt)
+}
+
+// WaiverRead is one stored verdict to read against the waivers of its decision: the repository and
+// the environment of its upload, and the valid time at which a waiver has to be in force. It has no
+// path, because a report holds none (ADR-0030, ADR-0123).
+type WaiverRead struct {
+	Decision uuid.UUID
+	Repo     string
+	Env      string
+	ValidAt  time.Time
+}
+
+// WaiverAnswer is the reading of one WaiverRead. Covered is true when a waiver covers the verdict, and
+// ExpiresAt is then the latest end among the waivers that do, the upper bound of their periods.
+type WaiverAnswer struct {
+	Covered   bool
+	ExpiresAt time.Time
+}
+
+// WaiverEach reports, for each read, whether a waiver of its decision covers the whole repository at
+// valid time ValidAt, as the registry knew the waivers at transaction time knownAt. The answers are in
+// the order of the reads. It applies the rule of Apply, with one change: a waiver covers only when its
+// scope covers every path of the repository, so a scope that names a path never covers a read, and a
+// scope that names an environment covers it only when the read names that environment. An
+// environment that is not a registry name is read as none. The scopes are read once for the same
+// repository and environment, and a waiver once for the same decision, repository, environment and
+// valid time, all in one read-only REPEATABLE READ transaction.
+//
+// The tenant must be the authenticated one, because WaiverEach trusts it. A nil tenant or decision, a
+// zero time, or a repository that is not a literal registry name is an error before the database is
+// touched, and never an empty answer. The answers are meaningful only when err is nil.
+func WaiverEach(ctx context.Context, db *sql.DB, tenant uuid.UUID, reads []WaiverRead, knownAt time.Time) ([]WaiverAnswer, error) {
+	if tenant == uuid.Nil {
+		return nil, fmt.Errorf("%w: no tenant", ErrInvalidQuery)
+	}
+	if knownAt.IsZero() {
+		return nil, fmt.Errorf("%w: the transaction time is required", ErrInvalidQuery)
+	}
+	subjects := make([]subject, len(reads))
+	for i, read := range reads {
+		if read.Decision == uuid.Nil {
+			return nil, fmt.Errorf("%w: no decision", ErrInvalidQuery)
+		}
+		if read.ValidAt.IsZero() {
+			return nil, fmt.Errorf("%w: the valid time is required", ErrInvalidQuery)
+		}
+		s, err := newWholeSubject(read.Repo, read.Env)
+		if err != nil {
+			return nil, err
+		}
+		subjects[i] = s
+	}
+	answers := make([]WaiverAnswer, len(reads))
+	if len(reads) == 0 {
+		return answers, nil
+	}
+
+	type subjectKey struct{ repo, env string }
+	type coverKey struct {
+		decision uuid.UUID
+		subject  subjectKey
+		validAt  int64
+	}
+	err := readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
+		scopesFor := make(map[subjectKey][]uuid.UUID)
+		answered := make(map[coverKey]WaiverAnswer)
+		for i, read := range reads {
+			sk := subjectKey{subjects[i].repoString(), subjects[i].env}
+			scopes, ok := scopesFor[sk]
+			if !ok {
+				var err error
+				if scopes, err = scopesOf(ctx, tx, subjects[i], knownAt); err != nil {
+					return err
+				}
+				scopesFor[sk] = scopes
+			}
+			if len(scopes) == 0 {
+				continue
+			}
+			ck := coverKey{read.Decision, sk, read.ValidAt.UnixNano()}
+			answer, ok := answered[ck]
+			if !ok {
+				end, err := waiverEndIn(ctx, tx, read.Decision, scopes, read.ValidAt, knownAt)
+				if err != nil {
+					return fmt.Errorf("read waivers: %w", err)
+				}
+				answer = WaiverAnswer{Covered: end.Valid, ExpiresAt: end.Time}
+				answered[ck] = answer
+			}
+			answers[i] = answer
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return answers, nil
 }
 
 // Notify records the expiry notices that are due for tenant. A notice is one

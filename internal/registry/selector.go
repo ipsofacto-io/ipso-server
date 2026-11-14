@@ -133,6 +133,10 @@ type subject struct {
 	path    []string
 	hasPath bool
 	env     string
+	// whole is set for the subject of a stored verdict, which names a repository and maybe an
+	// environment and never a path. A node covers it only when it covers every path of the
+	// repository, so a missing path or env never widens the match (see selects).
+	whole bool
 }
 
 // canonicalRepo folds a repository name to lowercase ASCII and checks the literal repo
@@ -173,6 +177,22 @@ func newSubject(in Subject) (subject, error) {
 			return subject{}, err
 		}
 		out.path, out.hasPath = segments, true
+	}
+	return out, nil
+}
+
+// newWholeSubject is the subject of a stored verdict: a literal repository and an environment, with
+// no path, because a report holds none (ADR-0030). An environment that is not a registry name
+// (an upload may hold any text) is read as no environment, so it matches no env node.
+func newWholeSubject(repo, env string) (subject, error) {
+	canonical, err := canonicalRepo(repo)
+	if err != nil {
+		return subject{}, err
+	}
+	out := subject{repo: strings.Split(canonical, "/"), whole: true}
+	out.org = out.repo[0]
+	if folded, ok := asciiLower(env); ok && nameExpr.MatchString(folded) {
+		out.env = folded
 	}
 	return out, nil
 }
@@ -218,8 +238,12 @@ type candidate struct {
 
 // selects reports whether the effective selector of a scope node matches the subject. A node
 // matches when each of its non-NULL columns matches. A subject with no path or no env matches
-// a node that names one, so a missing input widens the result and never narrows it. A stored
-// value that does not parse is an error, so a damaged row cannot drop out of the answer.
+// a node that names one, so a missing input widens the result and never narrows it. A whole
+// subject is the exception: widening a match to a node that names a path or another
+// environment would waive a verdict that the waiver was not recorded for, so a node that names
+// a path never matches it, and a node that names an env matches it only when it names that env.
+// A stored value that does not parse is an error, so a damaged row cannot drop out of the answer,
+// except the path selector of a node that a whole subject never matches.
 func (s subject) selects(c candidate) (bool, error) {
 	if c.repo.Valid {
 		pattern, err := parseRepoSelector(c.repo.String)
@@ -231,6 +255,11 @@ func (s subject) selects(c candidate) (bool, error) {
 		}
 	}
 	if c.path.Valid {
+		if s.whole {
+			// Whatever the pattern, it covers fewer than every path, so it is not parsed: a damaged row can
+			// only fail to cover, which is the safe direction for a waiver.
+			return false, nil
+		}
 		pattern, err := parsePathSelector(c.path.String)
 		if err != nil {
 			return false, err
@@ -243,7 +272,7 @@ func (s subject) selects(c candidate) (bool, error) {
 		if err := validateName(c.env.String); err != nil {
 			return false, err
 		}
-		if s.env != "" && s.env != c.env.String {
+		if (s.whole || s.env != "") && s.env != c.env.String {
 			return false, nil
 		}
 	}
