@@ -544,7 +544,7 @@ func expectedPolicies() []string {
 		"registry.waiver_notice":            "SELECT INSERT",
 		"tenancy.export":                    "SELECT INSERT UPDATE DELETE",
 		"tenancy.export_part":               "SELECT INSERT DELETE",
-		"tenancy.installation":              "SELECT INSERT",
+		"tenancy.installation":              "SELECT INSERT DELETE",
 		"tenancy.offboarding":               "SELECT",
 		"tenancy.tenant":                    "SELECT INSERT",
 		"tenancy.tenant_key":                "SELECT INSERT",

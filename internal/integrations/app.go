@@ -52,7 +52,9 @@ var appPermissions = map[string]string{
 	"pull_requests": writeAccess,
 }
 
-// appEvents are the webhook events the App may subscribe to.
+// appEvents are the webhook events the App may subscribe to. GitHub sends installation events to every App
+// without a subscription, and they cannot be subscribed to, so the service handles them and they are not
+// listed here (ADR-0125).
 var appEvents = []string{"pull_request", "push"}
 
 // ErrNotFound is a 404 from the API.

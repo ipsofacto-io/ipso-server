@@ -38,7 +38,7 @@ The GitHub App service takes the tenant of a delivery from this binding and neve
 
 - An installation belongs to one tenant. A second tenant's bind is refused, and the error does not name the owner. Binding the same pair again changes nothing, and a tenant may hold several installations.
 - The tenant must exist and must not have been offboarded.
-- The application role can write a binding once and cannot change or delete it. Offboarding removes a tenant's bindings, which frees the installation for another tenant.
+- The application role can write a binding once and cannot change it. Offboarding removes a tenant's bindings, which frees the installation for another tenant. When an account uninstalls the App, `ipso-server webhooks` removes that installation's binding once GitHub confirms the installation is gone ([ADR-0125](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0125-installation-unbind-on-uninstall.md)). A reinstalled App has a new installation id and needs a new bind.
 
 ## Export
 

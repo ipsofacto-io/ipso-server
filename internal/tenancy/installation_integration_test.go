@@ -188,3 +188,73 @@ func TestExportLeavesTheBindingsOut(t *testing.T) {
 		t.Errorf("the export lists %s: %v", installationTable, report.Rows)
 	}
 }
+
+func (l *lifecycle) unbind(t *testing.T, installation int64) (uuid.UUID, bool) {
+	t.Helper()
+	tenant, removed, err := tenancy.UnbindInstallation(t.Context(), l.app, installation)
+	if err != nil {
+		t.Fatalf("unbind %d: %v", installation, err)
+	}
+	return tenant, removed
+}
+
+func TestUnbindInstallationRemovesOneBindingOfItsOwner(t *testing.T) {
+	l := newLifecycle(t)
+	l.provision(t, tenantA, "alpha", nil)
+	l.provision(t, tenantB, "beta", nil)
+	l.bind(t, tenantA, 11)
+	l.bind(t, tenantA, 12)
+	l.bind(t, tenantB, 22)
+
+	// The tenant comes from the mapping, as the application role the webhooks process runs as.
+	if tenant, removed := l.unbind(t, 11); !removed || tenant.String() != tenantA {
+		t.Fatalf("unbind 11 = %v, %v; want tenant A", tenant, removed)
+	}
+	if owner, ok := l.owner(t, 11); ok {
+		t.Errorf("11 still maps to %s", owner)
+	}
+	// The tenant's other installation and the other tenant's stay bound.
+	if l.count(t, installationTable, tenantA) != 1 || l.count(t, installationTable, tenantB) != 1 {
+		t.Errorf("rows: A %d, B %d; want 1 and 1", l.count(t, installationTable, tenantA), l.count(t, installationTable, tenantB))
+	}
+
+	// A repeat, an installation nobody holds and an id that is not one change nothing.
+	for _, installation := range []int64{11, 33, 0, -4} {
+		if tenant, removed := l.unbind(t, installation); removed || tenant != uuid.Nil {
+			t.Errorf("unbind %d = %v, %v; want nothing removed", installation, tenant, removed)
+		}
+	}
+	if l.count(t, installationTable, tenantA) != 1 || l.count(t, installationTable, tenantB) != 1 {
+		t.Errorf("rows after the no-ops: A %d, B %d; want 1 and 1", l.count(t, installationTable, tenantA), l.count(t, installationTable, tenantB))
+	}
+
+	// A removed installation is free, so a new installation of the same id could be bound again.
+	if !l.bind(t, tenantB, 11).Bound {
+		t.Error("an unbound installation could not be bound")
+	}
+}
+
+// A setting another tenant left on a pooled connection must not stop the removal or widen it.
+func TestUnbindInstallationIgnoresAStaleTenantSetting(t *testing.T) {
+	l := newLifecycle(t)
+	l.provision(t, tenantA, "alpha", nil)
+	l.provision(t, tenantB, "beta", nil)
+	l.bind(t, tenantA, 11)
+	l.bind(t, tenantB, 22)
+	l.app.SetMaxOpenConns(1)
+	if _, err := l.app.ExecContext(t.Context(), `SELECT set_config('ipso.tenant', $1, false)`, tenantB); err != nil {
+		t.Fatal(err)
+	}
+	if tenant, removed := l.unbind(t, 11); !removed || tenant.String() != tenantA {
+		t.Fatalf("unbind 11 on a connection set to tenant B = %v, %v; want tenant A", tenant, removed)
+	}
+	if l.count(t, installationTable, tenantA) != 0 || l.count(t, installationTable, tenantB) != 1 {
+		t.Errorf("rows: A %d, B %d; want 0 and 1", l.count(t, installationTable, tenantA), l.count(t, installationTable, tenantB))
+	}
+}
+
+func TestUnbindInstallationNeedsADatabase(t *testing.T) {
+	if _, _, err := tenancy.UnbindInstallation(t.Context(), nil, 11); err == nil {
+		t.Fatal("unbind with no database passed")
+	}
+}

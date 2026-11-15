@@ -245,6 +245,16 @@ func TestWebhooksServes(t *testing.T) {
 	if _, ok, err := got.Tenants(context.Background(), 43); err != nil || ok {
 		t.Errorf("Tenants(43) = %v, %v; want no tenant", ok, err)
 	}
+	// The removal of a binding on uninstall is the one of that same database (ADR-0125).
+	if got.Unbind == nil {
+		t.Fatal("the service cannot remove a binding")
+	}
+	if tenant, removed, err := got.Unbind(context.Background(), 42); err != nil || !removed || tenant != other {
+		t.Errorf("Unbind(42) = %v, %v, %v", tenant, removed, err)
+	}
+	if len(calls.unbound) != 1 || calls.unbound[0] != 42 || calls.unbindDB != calls.openedDB {
+		t.Errorf("unbound %v on %p, want 42 on the webhooks database %p", calls.unbound, calls.unbindDB, calls.openedDB)
+	}
 }
 
 const gatewayConfig = `{"routes":[{"name":"mistral","provider":"mistral","model":"mistral-medium-latest","key_env":"IPSO_LLM_MISTRAL"}],"default":["mistral"],"monthly_tokens":1000000}`

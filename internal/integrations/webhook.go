@@ -34,6 +34,9 @@ const (
 	mergedJobTimeout = 15 * time.Minute
 	// lookupTimeout bounds the tenant lookup of a delivery. GitHub gives a delivery 10 seconds.
 	lookupTimeout = 5 * time.Second
+	// unbindTimeout bounds the removal of a binding, which asks GitHub and then the database while GitHub waits
+	// for the answer (ADR-0125).
+	unbindTimeout = 8 * time.Second
 	// evaluateTimeout leaves the rest of jobTimeout to close the check run.
 	evaluateTimeout = 100 * time.Second
 	seenDeliveries  = 4096
@@ -66,11 +69,16 @@ type MergedPullRequest struct {
 // Tenants maps the installation of a delivery to its tenant, and reports false for an installation no
 // tenant owns. A delivery that would start work is answered 403 and starts nothing when the installation
 // has no tenant, and 503 when the lookup fails. Without Tenants every such delivery is refused (ADR-0101).
+//
+// Unbind removes the binding of an installation that GitHub deleted, and reports the tenant that held it, or
+// false when no tenant did. It is called only after GitHub confirms that the installation is gone. Without it an
+// uninstall delivery is answered 503 (ADR-0125).
 type Config struct {
 	App           *App
 	WebhookSecret []byte
 	Logger        *slog.Logger
 	Tenants       func(ctx context.Context, installationID int64) (uuid.UUID, bool, error)
+	Unbind        func(ctx context.Context, installationID int64) (uuid.UUID, bool, error)
 	OnMerged      func(context.Context, MergedPullRequest) error
 }
 
@@ -204,7 +212,12 @@ func (s *Service) receive(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	next, err := s.route(r.Header.Get("X-GitHub-Event"), body)
+	event := r.Header.Get("X-GitHub-Event")
+	if event == "installation" {
+		s.receiveInstallation(r.Context(), w, delivery, body)
+		return
+	}
+	next, err := s.route(event, body)
 	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
@@ -263,6 +276,75 @@ func (s *Service) tenantOf(ctx context.Context, installationID int64) (uuid.UUID
 		return uuid.Nil, false, nil
 	}
 	return tenant, true, nil
+}
+
+// receiveInstallation removes the binding of an installation that its account uninstalled (ADR-0125). The work
+// is one read of GitHub and one short transaction, so it runs while GitHub waits and the answer says whether it
+// was done, which lets an operator redeliver a failed delivery. Every other action of the event needs no work: a
+// suspended installation keeps its binding, and GitHub refuses it tokens meanwhile.
+func (s *Service) receiveInstallation(ctx context.Context, w http.ResponseWriter, delivery string, body []byte) {
+	var payload struct {
+		Action       string       `json:"action"`
+		Installation installation `json:"installation"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if payload.Action != "deleted" {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	id := payload.Installation.ID
+	if id <= 0 {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if s.cfg.Unbind == nil {
+		s.cfg.Logger.Error("webhook service cannot remove a binding", "delivery", delivery, "installation", id)
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, unbindTimeout)
+	defer cancel()
+	// Every other delivery starts only work that GitHub then enforces with a token of its own. Nothing enforces
+	// a removal, so the App asks GitHub itself, and a delivery forged with a stolen secret removes nothing.
+	gone, err := s.installationGone(ctx, id)
+	if err != nil {
+		s.cfg.Logger.Error("webhook installation check failed", "delivery", delivery, "installation", id, "error", err)
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !gone {
+		s.cfg.Logger.Warn("webhook says an installation was deleted and GitHub still has it", "delivery", delivery, "installation", id)
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	tenant, removed, err := s.cfg.Unbind(ctx, id)
+	if err != nil {
+		s.cfg.Logger.Error("webhook binding removal failed", "delivery", delivery, "installation", id, "error", "the removal failed")
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if removed {
+		s.cfg.Logger.Info("webhook removed the binding of a deleted installation", "delivery", delivery, "installation", id, "tenant", tenant)
+	} else {
+		s.cfg.Logger.Info("webhook deleted installation had no binding", "delivery", delivery, "installation", id)
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// installationGone asks GitHub, as the App, whether an installation still exists. Not found means it is gone.
+func (s *Service) installationGone(ctx context.Context, id int64) (bool, error) {
+	_, err := s.cfg.App.InstallationAccount(ctx, id)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return true, nil
+	case err != nil:
+		return false, err
+	default:
+		return false, nil
+	}
 }
 
 func validSignature(secret, body []byte, header string) bool {

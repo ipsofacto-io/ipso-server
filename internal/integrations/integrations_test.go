@@ -1050,13 +1050,14 @@ func TestServeRefusesAShortSecretAndAnOverprivilegedApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	tenants := ownedBy(nil)
-	if err := Serve(context.Background(), listener, Config{App: app, WebhookSecret: []byte("short"), Logger: logger, Tenants: tenants}); err == nil {
+	tenants, unbind := ownedBy(nil), ownedBy(nil)
+	if err := Serve(context.Background(), listener, Config{App: app, WebhookSecret: []byte("short"), Logger: logger, Tenants: tenants, Unbind: unbind}); err == nil {
 		t.Fatal("a short secret passed")
 	}
 	fake.permissions["administration"] = "write"
-	if err := Serve(context.Background(), listener, Config{App: app, WebhookSecret: []byte(testSecret), Logger: logger, Tenants: tenants}); err == nil {
-		t.Fatal("an overprivileged app passed")
+	err = Serve(context.Background(), listener, Config{App: app, WebhookSecret: []byte(testSecret), Logger: logger, Tenants: tenants, Unbind: unbind})
+	if err == nil || !strings.Contains(err.Error(), "section 3.1") {
+		t.Fatalf("Serve = %v, want the refusal of an overprivileged app", err)
 	}
 }
 
@@ -1174,7 +1175,7 @@ func TestServeStopsWithItsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Serve(ctx, listener, Config{App: app, WebhookSecret: []byte(testSecret), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Tenants: ownedBy(nil)})
+		done <- Serve(ctx, listener, Config{App: app, WebhookSecret: []byte(testSecret), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Tenants: ownedBy(nil), Unbind: ownedBy(nil)})
 	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for {

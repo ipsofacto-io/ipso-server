@@ -22,6 +22,9 @@ func Serve(ctx context.Context, listener net.Listener, cfg Config) error {
 	if cfg.Tenants == nil {
 		return errors.New("the webhook service has no installation to tenant mapping")
 	}
+	if cfg.Unbind == nil {
+		return errors.New("the webhook service cannot remove the binding of a deleted installation")
+	}
 	if err := cfg.App.Verify(ctx); err != nil {
 		return err
 	}

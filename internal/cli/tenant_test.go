@@ -48,6 +48,9 @@ type tenantCalls struct {
 	lookupRequired int
 	lookupErr      error
 	owners         map[int64]uuid.UUID
+	// unbound lists the installations whose binding was removed, and unbindDB the database it was asked on.
+	unbound  []int64
+	unbindDB *sql.DB
 }
 
 // askedAccount is what the fake GitHub was asked.
@@ -99,6 +102,13 @@ func tenantDeps(values map[string]string, calls *tenantCalls) deps {
 		},
 		installationTenant: func(_ context.Context, _ *sql.DB, installation int64) (uuid.UUID, bool, error) {
 			tenant, ok := calls.owners[installation]
+			return tenant, ok, nil
+		},
+		unbindInstallation: func(_ context.Context, db *sql.DB, installation int64) (uuid.UUID, bool, error) {
+			calls.unbound = append(calls.unbound, installation)
+			calls.unbindDB = db
+			tenant, ok := calls.owners[installation]
+			delete(calls.owners, installation)
 			return tenant, ok, nil
 		},
 	}

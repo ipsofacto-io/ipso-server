@@ -131,14 +131,9 @@ func TestApplicationRoleCannotChangeOrTakeABinding(t *testing.T) {
 	pgtest.SeedEveryTable(t, app, tenantB)
 	ids := installationIDs(t, admin)
 
-	// A binding is written once. There is no UPDATE or DELETE for the application role at all.
-	for name, statement := range map[string]string{
-		"update": `UPDATE tenancy.installation SET tenant_id = tenant_id`,
-		"delete": `DELETE FROM tenancy.installation`,
-	} {
-		if _, err := pgtest.Exec(t.Context(), app, tenantA, statement); sqlState(err) != "42501" {
-			t.Errorf("%s: sqlstate = %q, want 42501 (%v)", name, sqlState(err), err)
-		}
+	// A binding never moves to another tenant. There is no UPDATE for the application role at all.
+	if _, err := pgtest.Exec(t.Context(), app, tenantA, `UPDATE tenancy.installation SET tenant_id = tenant_id`); sqlState(err) != "42501" {
+		t.Errorf("update: sqlstate = %q, want 42501 (%v)", sqlState(err), err)
 	}
 
 	// Another tenant's id is taken for good, whoever asks. The refusal is the primary key.
@@ -181,5 +176,45 @@ func TestMigrationRoleDeletesOneTenantsBindingsAtATime(t *testing.T) {
 	}
 	if deleted, _ := res.RowsAffected(); deleted != 1 {
 		t.Errorf("a delete for tenant A removed %d bindings, want 1", deleted)
+	}
+}
+
+// The webhooks process removes the binding of a deleted installation as the application role, with ipso.tenant
+// set to the tenant the lookup gave (ADR-0125). Its delete reaches that tenant's bindings and no other's, and a
+// session with no tenant removes nothing.
+func TestApplicationRoleDeletesOnlyItsOwnTenantsBindings(t *testing.T) {
+	db := migrated(t)
+	app := db.Open(t, pgtest.App)
+	admin := db.Open(t, pgtest.Admin)
+	pgtest.SeedEveryTable(t, app, tenantA)
+	pgtest.SeedEveryTable(t, app, tenantB)
+	ids := installationIDs(t, admin)
+
+	res, err := app.ExecContext(t.Context(), `DELETE FROM tenancy.installation`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted, _ := res.RowsAffected(); deleted != 0 {
+		t.Errorf("a delete with no tenant removed %d bindings, want 0", deleted)
+	}
+	res, err = pgtest.Exec(t.Context(), app, tenantB, `DELETE FROM tenancy.installation WHERE installation_id = $1`, ids[tenantA])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted, _ := res.RowsAffected(); deleted != 0 {
+		t.Errorf("tenant B removed %d of tenant A's bindings, want 0", deleted)
+	}
+	res, err = pgtest.Exec(t.Context(), app, tenantA, `DELETE FROM tenancy.installation`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted, _ := res.RowsAffected(); deleted != 1 {
+		t.Errorf("tenant A removed %d bindings, want its own 1", deleted)
+	}
+	if got := lookup(t, app, "", ids[tenantA]); got.Valid {
+		t.Errorf("tenant A's installation still maps to %v", got)
+	}
+	if got := lookup(t, app, "", ids[tenantB]); got.String != tenantB {
+		t.Errorf("tenant B's installation = %v, want tenant B", got)
 	}
 }
