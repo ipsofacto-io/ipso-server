@@ -86,7 +86,7 @@ The file is the one `tenant export` writes, so the `age --decrypt` command above
 
 A tenant holds one current export. While one is pending or running a new request is 409. Ten minutes after the last export finished or failed a new request is accepted, and sooner it is 429 with a `Retry-After`. A new request replaces a finished one: the old id is a 404 at once, and its parts are kept for half an hour so that a download in flight can end. An export can be downloaded for 24 hours and is then deleted, with the same half hour of grace. A process sends two archives at once and answers a third with 429 and a `Retry-After`. A tenant whose archive would pass 1 GiB gets an export in the state `failed`: use the operator command for it. The worker's log says why any export failed, and the admin can ask again.
 
-The archive waits in PostgreSQL, encrypted to the key the admin gave, so a copy of the database holds no export in the clear. Each request and each download is logged with the person's id in `identity.action_log`, which the audit log of IPSO-68 builds on. A reverse proxy in front of the API must let a download run for as long as the client takes and must not spool it to disk: the Compose front sets `proxy_max_temp_file_size 0`.
+The archive waits in PostgreSQL, encrypted to the key the admin gave, so a copy of the database holds no export in the clear. Each request and each download is logged with the person's id in `identity.action_log`, which is the hash chain of [docs/audit-log.md](audit-log.md). A reverse proxy in front of the API must let a download run for as long as the client takes and must not spool it to disk: the Compose front sets `proxy_max_temp_file_size 0`.
 
 ## Restore
 
@@ -115,7 +115,7 @@ ipso-server tenant offboard --tenant <id> --confirm acme
 
 `--confirm` must be the name of the tenant, so a pasted id alone deletes nothing. In one transaction the command deletes every row of the tenant from every table that has a `tenant_id`, the wrapped data key and the installation bindings included, and the River jobs that name the tenant. It counts again, writes the tombstone, and commits. Then, in a new transaction, it looks a second time and exits non-zero if any row is left. A repeat removes what appeared since, such as a job a worker inserted while it was still running.
 
-The tombstone, `tenancy.offboarding`, holds the tenant id, the row and job counts, whether a key was destroyed, and the time. It is the record that the tenant was offboarded, and it outlives the tenant. Nothing deletes it.
+The tombstone, `tenancy.offboarding`, holds the tenant id, the row and job counts, whether a key was destroyed, the head of the hash chain of the action log that was deleted with the tenant (`log_seq` and `log_hash`, empty when the log was empty), and the time. It is the record that the tenant was offboarded, and it outlives the tenant. Nothing deletes it. The head lets a customer who kept a copy of the log show that it was complete and unaltered ([docs/audit-log.md](audit-log.md#retention-and-offboarding)).
 
 ### What the deletion covers
 

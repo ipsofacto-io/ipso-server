@@ -164,13 +164,14 @@ func grants(ctx context.Context, tx *sql.Tx, principal uuid.UUID) ([]Grant, erro
 }
 
 // RecordAction logs one action and returns the person answerable for it, which the database decides
-// from the principal. The tenant must be the authenticated one, because RecordAction trusts it.
+// from the principal. The transaction is READ COMMITTED, because the database refuses to chain an entry in
+// any other level (ADR-0126). The tenant must be the authenticated one, because RecordAction trusts it.
 func RecordAction(ctx context.Context, db *sql.DB, tenant, principal uuid.UUID, action, subject string) (uuid.UUID, error) {
 	if tenant == uuid.Nil || principal == uuid.Nil {
 		return uuid.Nil, fmt.Errorf("%w: a tenant and a principal are required", ErrInvalidQuery)
 	}
 	var responsible uuid.UUID
-	err := inTenant(ctx, db, tenant, false, func(tx *sql.Tx) error {
+	err := inTenantAt(ctx, db, tenant, sql.LevelReadCommitted, false, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 			INSERT INTO identity.action_log (tenant_id, principal_id, responsible_id, action, subject)
 			VALUES ($1, $2, $2, $3, $4)
@@ -243,7 +244,7 @@ func inTenantAt(ctx context.Context, db *sql.DB, tenant uuid.UUID, level sql.Iso
 // WithAction runs fn and logs the action in the same transaction, so a write that cannot be logged does
 // not run and a log entry never outlives a write that failed (ADR-0109). The transaction is READ
 // COMMITTED with ipso.tenant set, because the scope and supersession triggers refuse a repeatable read
-// transaction. fn returns the subject of the entry: the ids it wrote, never a reason, a ticket or a body.
+// transaction and so does the one that chains the entry (ADR-0126). fn returns the subject of the entry: the ids it wrote, never a reason, a ticket or a body.
 // The database names the person answerable, the sponsor for an agent, whatever the caller sends. fn's
 // error is returned as it is. The tenant must be the authenticated one, because WithAction trusts it.
 func WithAction(ctx context.Context, db *sql.DB, tenant, principal uuid.UUID, action string, fn func(*sql.Tx) (string, error)) error {

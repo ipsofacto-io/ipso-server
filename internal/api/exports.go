@@ -24,8 +24,8 @@ import (
 // the age public key they give, and downloads the archive when the worker has finished it. The archive is the
 // one `ipso-server tenant export` writes, and it waits in the database for 24 hours (tenancy.ExportKept).
 //
-// Starting an export and downloading one are logged with the person's id in identity.action_log, the entry the
-// audit log of IPSO-68 builds on, and the key and the archive are never in a log line.
+// Starting an export and downloading one are logged with the person's id in identity.action_log, an entry of
+// the hash chain of ADR-0126, and the key and the archive are never in a log line.
 
 const (
 	// archivePattern is the one route that does not pass through bounded: an archive is far over the response

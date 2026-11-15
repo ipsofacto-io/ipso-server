@@ -593,6 +593,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/audit-log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the hash chain of the action log as JSON lines.
+         * @description The auditor and the admin take it (ADR-0108, ADR-0126). Every action a person or an agent takes that the server logs is an entry of one chain per tenant, and this route pages through it in the order of the chain. Pass the `seq` of the last line you kept as `after`: the answer holds the lines above it, oldest first, at most 1000 and about 1 MiB, one JSON object per line with a newline at the end of each. An empty body means nothing is new. A line holds exactly what its hash covers. Its `hash` is the SHA-256 of nine lines joined by LF: `ipso-audit-log/1`, `prev`, `seq`, `id`, `at`, `principal`, `responsible`, `action` and `subject`, with `prev` and `at` as the line writes them. The first line of the chain has a `prev` of 64 zeros, and the `prev` of every other line is the `hash` of the line before it, so a reader can check every hash and that a page continues the one before it. An entry is added only after the entry before it has committed, so a reader that continues from the last `seq` it kept never skips one. Reading the log is not itself logged. The lines name principals by id and carry no name, and the server writes none of them to a log line.
+         */
+        get: operations["read_audit_log"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -970,6 +990,41 @@ export interface components {
             bytes: number | null;
             /** @description The SHA-256 of the archive in lowercase hexadecimal, set when the export is ready. */
             sha256: string | null;
+        };
+        /** @description One line of the audit log route, and exactly what its hash covers (ADR-0126). */
+        AuditLogLine: {
+            /**
+             * @description The hashed form. A change to it is a new version.
+             * @constant
+             */
+            format: "ipso-audit-log/1";
+            /**
+             * Format: int64
+             * @description The place of the entry in the chain of the tenant, from 1 without a gap.
+             */
+            seq: number;
+            /** Format: uuid */
+            id: string;
+            /** @description The time of the entry in UTC with six digits, as the hash covers it. */
+            at: string;
+            /**
+             * Format: uuid
+             * @description The person or agent that acted.
+             */
+            principal: string;
+            /**
+             * Format: uuid
+             * @description The person answerable for it, the sponsor for an agent.
+             */
+            responsible: string;
+            /** @description What was done, such as api.record_waiver. */
+            action: string;
+            /** @description The ids it touched, never a reason, a ticket or a body. */
+            subject: string;
+            /** @description The hash of the entry before it, 64 zeros for the first. */
+            prev: components["schemas"]["Sha256"];
+            /** @description The SHA-256 of the nine fields, as the description of read_audit_log gives. */
+            hash: components["schemas"]["Sha256"];
         };
         /** @description The first version of the decision an approval writes. */
         DecisionDraft: {
@@ -2440,6 +2495,35 @@ export interface operations {
                 };
             };
             409: components["responses"]["Conflict"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    read_audit_log: {
+        parameters: {
+            query?: {
+                /** @description The `seq` of the last line already read. Absent means 0, the start of the chain. */
+                after?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The lines above `after`, as JSON lines of AuditLogLine. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/jsonl": string;
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Timeout"];

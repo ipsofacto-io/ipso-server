@@ -58,9 +58,17 @@ func (c contract) exchange(t *testing.T, handler http.Handler, method, target, a
 	handler.ServeHTTP(w, request())
 	var ok bool
 	var problems []*verrors.ValidationError
-	if authorization == "" {
+	switch {
+	case strings.HasPrefix(w.Header().Get("Content-Type"), "application/jsonl"):
+		// The validator reads a body of that type as one JSON value, and JSON lines are many. The document
+		// says 200 and the type for the route, and auditlog_integration_test.go reads every line.
+		if w.Code != http.StatusOK {
+			t.Errorf("%s %s: %d with a body of JSON lines", method, target, w.Code)
+		}
+		ok, problems = c.validator.ValidateHttpRequest(request())
+	case authorization == "":
 		ok, problems = c.validator.ValidateHttpResponse(request(), w.Result())
-	} else {
+	default:
 		ok, problems = c.validator.ValidateHttpRequestResponse(request(), w.Result())
 	}
 	if !ok {
@@ -219,6 +227,8 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 				t.Errorf("%v", a)
 			}
 		}},
+		// The answer is JSON lines, which auditlog_integration_test.go reads. The exchange is matched here.
+		{"read_audit_log", http.MethodGet, "/v1/audit-log?after=0", nil, nil},
 		{"list_verdicts", http.MethodGet, "/v1/verdicts?repo=acme%2Fapi&decision=use-tls&limit=10", nil, func(t *testing.T, a map[string]any) {
 			if v := list(a, "verdicts"); len(v) != 1 || v[0].(map[string]any)["upload_id"] != f.uploads[tenantA].String() {
 				t.Errorf("%v", a)
@@ -234,16 +244,18 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 			if w.Code != http.StatusOK {
 				t.Fatalf("status %d: %s", w.Code, w.Body.String())
 			}
-			tc.check(t, answerOf(t, w))
+			if tc.check != nil {
+				tc.check(t, answerOf(t, w))
+			}
 		})
 	}
 	if t.Failed() {
 		return
 	}
 	t.Run("every operation is covered", func(t *testing.T) {
-		// 17 are called above as a person, the writes in writes_integration_test.go, and the two reads of the export
+		// 18 are called above as a person, the writes in writes_integration_test.go, and the two reads of the export
 		// in exports_integration_test.go. upload_verdicts is called as a CI job in upload_integration_test.go.
-		if got, want := 17+len(writeOps)+len(exportOps)+1, len(operations(t, loadDocument(t))); got != want {
+		if got, want := 18+len(writeOps)+len(exportOps)+1, len(operations(t, loadDocument(t))); got != want {
 			t.Fatalf("%d operations covered, the document has %d", got, want)
 		}
 	})

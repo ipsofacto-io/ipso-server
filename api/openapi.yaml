@@ -11,7 +11,7 @@ info:
     route no person calls is POST /v1/verdicts, which a CI job calls with its own GitHub
     Actions token and which stores the verdicts of one run (ADR-0102). Every other route asks the role policy
     before it runs, and a principal no role of which allows the route gets 403 (ADR-0108). The five audit
-    routes need the auditor or the admin role. The tenant is always the one the bearer token or the session cookie speaks for, or,
+    routes and the audit log route (ADR-0126) need the auditor or the admin role. The tenant is always the one the bearer token or the session cookie speaks for, or,
     for that upload, the one that owns the installation of the repository the signed token names. So no
     route takes a tenant, and a query key `tenant` or `tenant_id` is 400. A request that carries an Authorization header is read as a bearer call, whatever
     cookie it also carries.
@@ -36,6 +36,8 @@ tags:
     description: The verdicts a CI job uploads, and the per-repository and per-decision results (ADR-0102).
   - name: export
     description: The export of the whole tenant that an admin asks for and downloads (ADR-0111).
+  - name: audit-log
+    description: The hash chain of the tenant's action log, as JSON lines (ADR-0126).
 paths:
   /v1/resolve:
     post:
@@ -1426,6 +1428,53 @@ paths:
           $ref: '#/components/responses/Internal'
         '503':
           $ref: '#/components/responses/Timeout'
+  /v1/audit-log:
+    get:
+      operationId: read_audit_log
+      tags: [audit-log]
+      summary: Read the hash chain of the action log as JSON lines.
+      description: >-
+        The auditor and the admin take it (ADR-0108, ADR-0126). Every action a person or an agent takes that
+        the server logs is an entry of one chain per tenant, and this route pages through it in the order of the
+        chain. Pass the `seq` of the last line you kept as `after`: the answer holds the lines above it, oldest
+        first, at most 1000 and about 1 MiB, one JSON object per line with a newline at the end of each. An empty
+        body means nothing is new. A line holds exactly what its hash covers. Its `hash` is the SHA-256 of nine
+        lines joined by LF: `ipso-audit-log/1`, `prev`, `seq`, `id`, `at`, `principal`, `responsible`, `action`
+        and `subject`, with `prev` and `at` as the line writes them. The first line of the chain has a `prev` of
+        64 zeros, and the `prev` of every other line is the `hash` of the line before it, so a reader can check
+        every hash and that a page continues the one before it. An entry is added only after the entry before it
+        has committed, so a reader that continues from the last `seq` it kept never skips one. Reading the log
+        is not itself logged. The lines name principals by id and carry no name, and the server writes none of
+        them to a log line.
+      parameters:
+        - name: after
+          in: query
+          required: false
+          description: The `seq` of the last line already read. Absent means 0, the start of the chain.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+      responses:
+        '200':
+          description: The lines above `after`, as JSON lines of AuditLogLine.
+          content:
+            application/jsonl:
+              schema:
+                type: string
+                contentMediaType: application/jsonl
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
 components:
   securitySchemes:
     bearerAuth:
@@ -2370,6 +2419,48 @@ components:
           type: [string, 'null']
           pattern: '^[0-9a-f]{64}$'
           description: The SHA-256 of the archive in lowercase hexadecimal, set when the export is ready.
+    AuditLogLine:
+      type: object
+      additionalProperties: false
+      required: [format, seq, id, at, principal, responsible, action, subject, prev, hash]
+      description: One line of the audit log route, and exactly what its hash covers (ADR-0126).
+      properties:
+        format:
+          type: string
+          const: ipso-audit-log/1
+          description: The hashed form. A change to it is a new version.
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The place of the entry in the chain of the tenant, from 1 without a gap.
+        id:
+          type: string
+          format: uuid
+        at:
+          type: string
+          pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$'
+          description: The time of the entry in UTC with six digits, as the hash covers it.
+        principal:
+          type: string
+          format: uuid
+          description: The person or agent that acted.
+        responsible:
+          type: string
+          format: uuid
+          description: The person answerable for it, the sponsor for an agent.
+        action:
+          type: string
+          description: What was done, such as api.record_waiver.
+        subject:
+          type: string
+          description: The ids it touched, never a reason, a ticket or a body.
+        prev:
+          $ref: '#/components/schemas/Sha256'
+          description: The hash of the entry before it, 64 zeros for the first.
+        hash:
+          $ref: '#/components/schemas/Sha256'
+          description: The SHA-256 of the nine fields, as the description of read_audit_log gives.
     DecisionDraft:
       type: object
       additionalProperties: false

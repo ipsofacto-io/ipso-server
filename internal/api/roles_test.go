@@ -42,6 +42,7 @@ var mayCall = func() map[string][]string {
 		"audit_merges":         auditors,
 		"audit_supersessions":  auditors,
 		"audit_waivers":        auditors,
+		"read_audit_log":       auditors,
 		"list_verdicts":        every,
 
 		// The writes of ADR-0109, by the roles that hold the action in policy.rego.
@@ -77,8 +78,8 @@ var writeOps = []string{
 // The other operation of the export is the write start_export, which is in writeOps.
 var exportOps = []string{"current_export", "get_export", "download_export"}
 
-// the five audit routes of ADR-0055.
-var auditOps = []string{"audit_decisions", "audit_beliefs", "audit_merges", "audit_supersessions", "audit_waivers"}
+// the routes that ask for audit.read: the five audit questions of ADR-0055 and the audit log of ADR-0126.
+var auditOps = []string{"audit_decisions", "audit_beliefs", "audit_merges", "audit_supersessions", "audit_waivers", "read_audit_log"}
 
 // reached is a stand-in for every route's handler, so a test sees whether the guard let a call through.
 type reached struct{ calls int }
@@ -306,8 +307,8 @@ func TestEveryRoleOnEveryOperation(t *testing.T) {
 	}
 }
 
-// The five audit routes of ADR-0055 answer 403 to every role but the auditor and the admin.
-func TestTheFiveAuditRoutesRefuseARoleWithoutAuditRead(t *testing.T) {
+// The audit routes answer 403 to every role but the auditor and the admin.
+func TestTheAuditRoutesRefuseARoleWithoutAuditRead(t *testing.T) {
 	ops := operations(t, loadDocument(t))
 	for _, role := range []string{"", identity.RoleViewer, identity.RoleContributor, identity.RoleDecisionOwner, identity.RoleApprover, identity.RoleAgent} {
 		for pattern, op := range ops {

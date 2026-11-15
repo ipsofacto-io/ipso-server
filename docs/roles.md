@@ -16,7 +16,7 @@ A principal holds a role through a row of `identity.role_binding`. A principal w
 | `auditor` | yes | yes | | | | | |
 | `agent` | yes | | yes | | | | |
 
-The write routes of the table are served ([ADR-0109](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0109-control-plane-write-routes.md), and [ADR-0116](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0116-check-proposal-approval.md) for a drafted check), apart from managing people, which comes with IPSO-137, and so is the export ([ADR-0111]({adr})). The five `GET /v1/audit/*` routes need `auditor` or `admin`. Every other read, and the MCP tools, need any role. Proposing over MCP needs `contributor`, `decision-owner`, `approver` or `agent`.
+The write routes of the table are served ([ADR-0109](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0109-control-plane-write-routes.md), and [ADR-0116](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0116-check-proposal-approval.md) for a drafted check), apart from managing people, which comes with IPSO-137, and so is the export ([ADR-0111]({adr})). The five `GET /v1/audit/*` routes and `GET /v1/audit-log` need `auditor` or `admin`. Every other read, and the MCP tools, need any role. Proposing over MCP needs `contributor`, `decision-owner`, `approver` or `agent`.
 
 An admin manages people and structure and does not approve or waive, so the person who grants a role is not the person who approves a decision.
 
@@ -52,7 +52,7 @@ Every write is an action only a person takes, so an agent is refused all of them
 | `POST /v1/proposals/{id}/approval` and `POST /v1/agent-proposals/{id}/approval` | `decision.approve` | approver, decision-owner | an approval: every scope of the decision it writes. A rejection: the whole tenant |
 | `POST /v1/decisions/{decisionID}/check-proposals/{id}/approval` | `decision.approve` | approver, decision-owner | every scope of the decision the check is for, for an approval and a rejection alike |
 
-The approver of a waiver or an approval is the authenticated person and is never in the body. An approval writes the first version of the decision in the same transaction, so a decision version exists only through the approval of a person. The answer to a drafted check writes no decision and leaves the check pending in its table, and a scoped approver may give it, a rejection too, for a decision inside its scope. A premise evaluation, a review reason and a waiver notice are not routes: the worker writes them. Each write is logged with the person's id in the same transaction, in `identity.action_log`, which the audit log of IPSO-68 builds on.
+The approver of a waiver or an approval is the authenticated person and is never in the body. An approval writes the first version of the decision in the same transaction, so a decision version exists only through the approval of a person. The answer to a drafted check writes no decision and leaves the check pending in its table, and a scoped approver may give it, a rejection too, for a decision inside its scope. A premise evaluation, a review reason and a waiver notice are not routes: the worker writes them. Each write is logged with the person's id in the same transaction, in `identity.action_log`, which is the hash chain of [docs/audit-log.md](audit-log.md).
 
 ## The export routes
 
@@ -65,6 +65,14 @@ Only an `admin` who is a person takes the action `tenant.export` ([ADR-0111](htt
 | `GET /v1/exports/{id}/archive` | `tenant.export` | admin |
 
 Starting an export and downloading one are logged with the person's id in `identity.action_log`. How an export is made and kept is in [docs/tenants.md](tenants.md#export-through-the-api).
+
+## The audit log route
+
+| Route | Action | Roles |
+| --- | --- | --- |
+| `GET /v1/audit-log` | `audit.read` | auditor, admin |
+
+The action is the one of the five audit questions, so the same two roles hold it and an agent never does ([ADR-0126](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0126-hash-chained-action-log.md)). The route is tenant-wide and takes no scope. Reading the log writes no entry. The format of a line and how to check a chain are in [docs/audit-log.md](audit-log.md).
 
 ## Bind and revoke
 

@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/ipsofacto-io/ipso/pkg/edrcheck"
 
+	chain "github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/migrate"
 	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
@@ -113,6 +114,26 @@ func (l *lifecycle) count(t *testing.T, table, tenant string) int {
 }
 
 // countAs counts the rows a role sees when ipso.tenant is the tenant.
+// logged adds n entries to the action log of the tenant as its seeded person, so the chain is longer than the
+// one entry the seed leaves, and returns what the check says about it.
+func (l *lifecycle) logged(t *testing.T, tenant string, n int) chain.LogReport {
+	t.Helper()
+	var person uuid.UUID
+	if err := pgtest.Scan(t.Context(), l.app, tenant, `SELECT id FROM identity.principal WHERE tenant_id = $1::uuid AND kind = 'human' ORDER BY id LIMIT 1`, []any{tenant}, &person); err != nil {
+		t.Fatal(err)
+	}
+	for i := range n {
+		if _, err := chain.RecordAction(t.Context(), l.app, uuid.MustParse(tenant), person, "api.record_waiver", fmt.Sprintf("entry %d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report, err := chain.VerifyLog(t.Context(), l.app, uuid.MustParse(tenant))
+	if err != nil || !report.Intact || report.Entries != int64(n)+1 {
+		t.Fatalf("the log of %s: %+v %v", tenant, report, err)
+	}
+	return report
+}
+
 func (l *lifecycle) countAs(t *testing.T, db *sql.DB, table, tenant string) int {
 	t.Helper()
 	var n int
@@ -309,6 +330,8 @@ func TestExportThenRestoreReproducesTheTenantInAFreshOne(t *testing.T) {
 	pgtest.SeedEveryTable(t, l.app, tenantB)
 	l.provision(t, tenantC, "restored", nil)
 	id := identity(t)
+	// The chain of the log has to survive a restore into another tenant id, which rewrites every row's tenant.
+	chained := l.logged(t, tenantA, 4)
 
 	archive, exported := l.export(t, tenantA, id)
 
@@ -347,6 +370,10 @@ func TestExportThenRestoreReproducesTheTenantInAFreshOne(t *testing.T) {
 		if strings.Join(got, "\n") != strings.Join(wantRows, "\n") {
 			t.Errorf("%s differs after the restore:\n got  %v\n want %v", table, got, wantRows)
 		}
+	}
+	// The chain verifies in the tenant it was restored into, and ends at the same hash: the tenant id is not in it.
+	if restored, err := chain.VerifyLog(t.Context(), l.app, uuid.MustParse(tenantC)); err != nil || !restored.Intact || restored.Entries != chained.Entries || restored.Head != chained.Head {
+		t.Errorf("the restored chain: %+v %v, want the head %s of %d entries", restored, err, chained.Head, chained.Entries)
 	}
 	// What a restore must not carry: sessions, the source's key, the source's name.
 	if n := l.count(t, "identity.session", tenantC); n != 0 {
@@ -689,6 +716,7 @@ func TestOffboardDeletesEverythingAndVerifiesIt(t *testing.T) {
 	pgtest.SeedEveryTable(t, l.app, tenantB)
 	l.addJob(t, tenantA)
 	l.addJob(t, tenantB)
+	head := l.logged(t, tenantA, 2)
 
 	tables := l.tables(t)
 	beforeA, beforeB := map[string]int{}, map[string]int{}
@@ -724,6 +752,9 @@ func TestOffboardDeletesEverythingAndVerifiesIt(t *testing.T) {
 	if !report.Verified || report.Repeat || !report.KeyDestroyed || report.DeletedRows != int64(totalA) || report.DeletedJobs != 1 {
 		t.Fatalf("report = %+v, want %d rows, 1 job, key destroyed, verified", report, totalA)
 	}
+	if report.LogSeq != head.HeadSeq || report.LogHash != head.Head {
+		t.Fatalf("the report holds the head %d %s, the chain ended at %d %s", report.LogSeq, report.LogHash, head.HeadSeq, head.Head)
+	}
 	for table, n := range beforeA {
 		if report.Rows[table] != int64(n) {
 			t.Errorf("report says %d rows deleted from %s, there were %d", report.Rows[table], table, n)
@@ -748,6 +779,16 @@ func TestOffboardDeletesEverythingAndVerifiesIt(t *testing.T) {
 	if rows != int64(totalA) || jobs != 1 || !destroyed {
 		t.Errorf("tombstone = %d rows, %d jobs, destroyed %v", rows, jobs, destroyed)
 	}
+	// It also keeps the head of the chain of the log that was deleted with the tenant, so that a copy held
+	// elsewhere can still be checked (ADR-0126).
+	var logSeq int64
+	var logHash []byte
+	if err := l.admin.QueryRowContext(t.Context(), `SELECT log_seq, log_hash FROM tenancy.offboarding WHERE tenant_id = $1::uuid`, tenantA).Scan(&logSeq, &logHash); err != nil {
+		t.Fatal(err)
+	}
+	if logSeq != head.HeadSeq || hex.EncodeToString(logHash) != head.Head {
+		t.Errorf("the tombstone holds the head %d %x, the chain ended at %d %s", logSeq, logHash, head.HeadSeq, head.Head)
+	}
 	if l.count(t, tombstone, tenantB) != 0 {
 		t.Error("tenant B has a tombstone")
 	}
@@ -770,6 +811,10 @@ func TestOffboardDeletesEverythingAndVerifiesIt(t *testing.T) {
 	}
 	if !again.Repeat || !again.Verified || again.DeletedJobs != 1 || again.DeletedRows != 0 || l.jobs(t, tenantA) != 0 {
 		t.Errorf("repeat = %+v", again)
+	}
+	// The log is gone, so a repeat reports the head the first run kept.
+	if again.LogSeq != head.HeadSeq || again.LogHash != head.Head {
+		t.Errorf("a repeat reports the head %d %s, want %d %s", again.LogSeq, again.LogHash, head.HeadSeq, head.Head)
 	}
 	if err := l.admin.QueryRowContext(t.Context(), `SELECT deleted_rows FROM tenancy.offboarding WHERE tenant_id = $1::uuid`, tenantA).Scan(&rows); err != nil || rows != int64(totalA) {
 		t.Errorf("tombstone after a repeat = %d, %v", rows, err)
