@@ -44,12 +44,13 @@ func (f *fixture) operations(t *testing.T) []operation {
 		{"audit_merges", http.MethodGet, "/v1/audit/merges?" + subject + "&at=" + valid + "&known=" + known + "&sha=" + seededSHA, nil},
 		{"audit_supersessions", http.MethodGet, "/v1/audit/supersessions/" + f.old.String() + "?known=" + known, nil},
 		{"audit_waivers", http.MethodGet, "/v1/audit/waivers?known=" + known + "&now=" + valid, nil},
+		{"read_audit_log", http.MethodGet, "/v1/audit-log?after=0", nil},
 		{"list_verdicts", http.MethodGet, "/v1/verdicts?repo=acme%2Fapi&decision=use-tls", nil},
 	}
 }
 
 // Against the store, a person with no role is refused every operation with the document's plain 403,
-// a viewer is refused the five audit routes and served the rest, and an auditor is served all of them.
+// a viewer is refused the audit routes and served the rest, and an auditor is served all of them.
 func TestEveryOperationAsksTheRoleOfTheCaller(t *testing.T) {
 	f := newFixture(t)
 	c := newContract(t)

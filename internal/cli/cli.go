@@ -22,6 +22,7 @@ import (
 	"github.com/ipsofacto-io/ipso/pkg/plancheck"
 
 	"github.com/ipsofacto-io/ipso-server/internal/controlplane"
+	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
 	"github.com/ipsofacto-io/ipso-server/internal/llmgw"
 	"github.com/ipsofacto-io/ipso-server/internal/login"
@@ -120,6 +121,8 @@ type deps struct {
 	installationTenant   func(ctx context.Context, db *sql.DB, installation int64) (uuid.UUID, bool, error)
 	unbindInstallation   func(ctx context.Context, db *sql.DB, installation int64) (uuid.UUID, bool, error)
 	requireInstallations func(ctx context.Context, db *sql.DB) error
+	// verifyLog serves audit-log verify (ADR-0126). Tests inject it.
+	verifyLog func(ctx context.Context, db *sql.DB, tenant uuid.UUID) (identity.LogReport, error)
 }
 
 // Run executes one CLI invocation. args excludes the program name.
@@ -156,6 +159,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		installationTenant:   tenancy.InstallationTenant,
 		unbindInstallation:   tenancy.UnbindInstallation,
 		requireInstallations: tenancy.RequireInstallationLookup,
+		verifyLog:            identity.VerifyLog,
 		loadBundle: func(layout, digest, publicKey string) (integrations.PlanEvaluator, error) {
 			return plancheck.Load(layout, digest, publicKey)
 		},
@@ -179,6 +183,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 		return migrateCmd(ctx, stdout, stderr, d)
 	case "tenant":
 		return tenantCmd(ctx, args[1:], stdout, stderr, d)
+	case "audit-log":
+		return auditLogCmd(ctx, args[1:], stdout, stderr, d)
 	case "webhooks":
 		if len(args) != 1 {
 			fprintln(stderr, "usage: ipso-server webhooks")
@@ -211,6 +217,7 @@ usage:
   ipso-server --role=worker
   ipso-server migrate
   ipso-server tenant create|export|restore|offboard|bind-installation
+  ipso-server audit-log verify
   ipso-server webhooks
   ipso-server runtasks
 
@@ -233,6 +240,9 @@ connection string from ` + migrateDatabaseEnv + ` and must run as the migration 
 
 tenant creates, exports, restores and offboards a tenant, and binds a GitHub App installation to it. Run
 ipso-server tenant help for the commands, their flags and the credential each one uses.
+
+audit-log verify checks the hash chain of the action log of a tenant and prints its head (ADR-0126). Run
+ipso-server audit-log help for the flags.
 
 webhooks serves the GitHub App webhook on ` + listenAddrEnv + ` (default ` + defaultListen + `). It reads
 ` + appIDEnv + `, ` + appPrivateKeyEnv + `, and ` + webhookSecretEnv + `, and opens ` + databaseEnv + `

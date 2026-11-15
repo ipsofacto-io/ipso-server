@@ -3,6 +3,7 @@ package tenancy
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,13 +28,18 @@ type OffboardOptions struct {
 }
 
 // OffboardReport says what was deleted and whether a second look found anything left. It holds counts and
-// table names only.
+// table names only, and the head of the hash chain of the action log, which is a position and a hash.
 type OffboardReport struct {
 	Tenant       uuid.UUID        `json:"tenant"`
 	Rows         map[string]int64 `json:"rows"`
 	DeletedRows  int64            `json:"deleted_rows"`
 	DeletedJobs  int64            `json:"deleted_jobs"`
 	KeyDestroyed bool             `json:"key_destroyed"`
+	// LogSeq and LogHash are the last entry of the action log, which the tombstone keeps so that a copy of
+	// the log held elsewhere can still be checked after the tenant is gone (ADR-0126). They are empty when
+	// the log was empty and for a tombstone written before the chain.
+	LogSeq  int64  `json:"log_seq,omitempty"`
+	LogHash string `json:"log_hash,omitempty"`
 	// Repeat is true when the tenant had no row and a tombstone already existed: the run only removed
 	// what had appeared since.
 	Repeat   bool `json:"repeat"`
@@ -93,6 +99,13 @@ func Offboard(ctx context.Context, db *sql.DB, o OffboardOptions) (OffboardRepor
 	if err := requirePolicies(ctx, tx, tables); err != nil {
 		return report, err
 	}
+	// The head is read before the delete, because the delete removes the log. The caller has stopped the api
+	// and the worker, so nothing is appended between this read and the delete.
+	head, err := logHead(ctx, tx, o.Tenant)
+	if err != nil {
+		return report, err
+	}
+	report.LogSeq, report.LogHash = head.seq, head.hash
 	for _, t := range tables {
 		res, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE tenant_id = $1`, t.ident()), o.Tenant)
 		if err != nil {
@@ -130,8 +143,8 @@ func Offboard(ctx context.Context, db *sql.DB, o OffboardOptions) (OffboardRepor
 			return report, reduce("offboard: restore triggers", err)
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO tenancy.offboarding (tenant_id, deleted_rows, deleted_jobs, key_destroyed) VALUES ($1, $2, $3, $4)`,
-			o.Tenant, report.DeletedRows, report.DeletedJobs, report.KeyDestroyed); err != nil {
+			`INSERT INTO tenancy.offboarding (tenant_id, deleted_rows, deleted_jobs, key_destroyed, log_seq, log_hash) VALUES ($1, $2, $3, $4, $5, $6)`,
+			o.Tenant, report.DeletedRows, report.DeletedJobs, report.KeyDestroyed, head.seqArg(), head.hashArg()); err != nil {
 			return report, reduce("offboard: write the tombstone", err)
 		}
 	}
@@ -164,6 +177,52 @@ func Offboard(ctx context.Context, db *sql.DB, o OffboardOptions) (OffboardRepor
 	}
 	report.Verified = true
 	return report, nil
+}
+
+// chainHead is the last entry of the action log of a tenant, or the zero value when it has none.
+type chainHead struct {
+	seq  int64
+	hash string
+}
+
+func (h chainHead) seqArg() any {
+	if h.seq == 0 {
+		return nil
+	}
+	return h.seq
+}
+
+func (h chainHead) hashArg() any {
+	if h.hash == "" {
+		return nil
+	}
+	raw, _ := hex.DecodeString(h.hash)
+	return raw
+}
+
+// logHead reads the head of the chain of the tenant's action log. It repeats the query of identity's chain
+// reader on purpose: offboarding runs as the migration role in one replica-mode transaction, which the
+// application-role reader of internal/identity does not use. A repeat has no log left, so it reads the
+// head the first run put in the tombstone.
+func logHead(ctx context.Context, q queryer, tenant uuid.UUID) (chainHead, error) {
+	var seq sql.NullInt64
+	var hash []byte
+	err := q.QueryRowContext(ctx,
+		`SELECT seq, hash FROM identity.action_log WHERE tenant_id = $1 ORDER BY seq DESC LIMIT 1`, tenant).Scan(&seq, &hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = q.QueryRowContext(ctx,
+			`SELECT log_seq, log_hash FROM tenancy.offboarding WHERE tenant_id = $1`, tenant).Scan(&seq, &hash)
+		if errors.Is(err, sql.ErrNoRows) {
+			return chainHead{}, nil
+		}
+	}
+	if err != nil {
+		return chainHead{}, reduce("offboard: read the head of the action log", err)
+	}
+	if !seq.Valid {
+		return chainHead{}, nil
+	}
+	return chainHead{seq: seq.Int64, hash: hex.EncodeToString(hash)}, nil
 }
 
 // requirePolicies refuses to purge when the current role has no SELECT or no DELETE policy on a table. Row-level

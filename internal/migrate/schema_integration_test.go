@@ -492,8 +492,10 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	// tgtype bits: 1 row, 2 before, 4 insert, 8 delete, 16 update. An after trigger has no bit 2.
+	// tgtype bits: 1 row, 2 before, 4 insert, 8 delete, 16 update, 32 truncate. An after trigger has no bit 2.
 	want := []trigger{
+		{"identity.action_log", "action_log_append_only", 1 | 2 | 8 | 16},
+		{"identity.action_log", "action_log_no_truncate", 2 | 32},
 		{"identity.action_log", "action_log_open_sys_period", 1 | 2 | 4},
 		{"identity.action_log", "action_log_stamp", 1 | 2 | 4},
 		{"proposals.agent_approval", "agent_approval_approver", 1 | 2 | 4},
