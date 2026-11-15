@@ -653,3 +653,100 @@ func TestStartRefusesAProviderItCannotReach(t *testing.T) {
 		t.Fatal("a client id equal to the API audience was accepted")
 	}
 }
+
+// postJSON sends a JSON body the way the page of the web app does.
+func postJSON(handler http.Handler, target, body string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	for _, c := range cookies {
+		req.AddCookie(&http.Cookie{Name: c.Name, Value: c.Value})
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+// The whole path of ADR-0127 on PostgreSQL 18, through the handler the process serves: an admin makes an
+// invitation, a person with no login opens its link, the page posts the token, the provider sends the browser
+// back, and the callback writes the person, the login and the role and answers with their session, which the API
+// accepts for exactly the role of the invitation. The invitation is then gone.
+func TestAPersonWithAnInvitationSignsInForTheFirstTimeAndIsBoundToItsRole(t *testing.T) {
+	s := newStack(t)
+	in := newSignIn(t)
+	admin := s.database.Open(t, pgtest.Admin)
+	handler := s.handler(t, in.config(s))
+
+	token, hash, err := identity.NewInvitationToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := identity.WithAction(t.Context(), s.app, tenant, s.person, "api.create_invitation", func(tx *sql.Tx) (string, error) {
+		_, err := identity.CreateInvitation(t.Context(), tx, s.person, "Dana", identity.RoleViewer, hash)
+		return "invitation", err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The wrong token, and the right one from another site, start nothing.
+	if rec := postJSON(handler, "/auth/invitation/idp", `{"token":"`+strings.Repeat("A", 43)+`"}`); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "unknown_invitation") {
+		t.Fatalf("a token nobody made: %d %s", rec.Code, rec.Body)
+	}
+	cross := httptest.NewRequest(http.MethodPost, "/auth/invitation/idp", strings.NewReader(`{"token":"`+token+`"}`))
+	cross.Header.Set("Content-Type", "application/json")
+	cross.Header.Set("Sec-Fetch-Site", "cross-site")
+	crossRec := httptest.NewRecorder()
+	handler.ServeHTTP(crossRec, cross)
+	if crossRec.Code != http.StatusForbidden || cookieOf(crossRec, "__Host-ipso-login") != nil {
+		t.Fatalf("a cross-site start: %d", crossRec.Code)
+	}
+
+	started := postJSON(handler, "/auth/invitation/idp", `{"token":"`+token+`"}`)
+	if started.Code != http.StatusOK {
+		t.Fatalf("start: %d %s", started.Code, started.Body)
+	}
+	var answer struct {
+		Location string `json:"location"`
+	}
+	if err := json.Unmarshal(started.Body.Bytes(), &answer); err != nil {
+		t.Fatal(err)
+	}
+	loc, err := url.Parse(answer.Location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.challenge, in.nonce = loc.Query().Get("code_challenge"), loc.Query().Get("nonce")
+	attempt := cookieOf(started, "__Host-ipso-login")
+
+	rec := request(handler, http.MethodGet, "/auth/callback/idp?code=good-code&state="+loc.Query().Get("state"), nil, attempt)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
+		t.Fatalf("callback: %d %s", rec.Code, rec.Body)
+	}
+	session := cookieOf(rec, "__Host-ipso-session")
+	if session == nil {
+		t.Fatal("no session")
+	}
+	person, err := identity.PrincipalFor(t.Context(), s.app, tenant, in.idp.Server.URL, "person-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := identity.Get(t.Context(), s.app, tenant, person)
+	if err != nil || got.Name != "Dana" || got.Kind != identity.KindHuman || len(got.Grants) != 1 || got.Grants[0].Role != identity.RoleViewer {
+		t.Fatalf("%+v %v", got, err)
+	}
+	// The session is the new person's: a viewer reads, and is refused what an admin takes.
+	if rec := request(handler, http.MethodGet, "/v1/scopes", nil, session); rec.Code != http.StatusOK {
+		t.Errorf("the API with the new session: %d", rec.Code)
+	}
+	if rec := request(handler, http.MethodGet, "/v1/invitations", nil, session); rec.Code != http.StatusForbidden {
+		t.Errorf("a viewer lists invitations: %d", rec.Code)
+	}
+	var open int
+	if err := admin.QueryRowContext(t.Context(), `SELECT count(*) FROM identity.invitation`).Scan(&open); err != nil || open != 0 {
+		t.Errorf("%d invitations are left: %v", open, err)
+	}
+	// A second start with the same link fails at once.
+	if rec := postJSON(handler, "/auth/invitation/idp", `{"token":"`+token+`"}`); rec.Code != http.StatusForbidden {
+		t.Errorf("the link a second time: %d", rec.Code)
+	}
+}

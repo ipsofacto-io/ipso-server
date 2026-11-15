@@ -10,7 +10,7 @@
 | `api.<operation>` for every call an agent makes | the guard, before the call runs | the request target, cut to 200 characters |
 | `decisions.applicable`, `decisions.get`, `checks.evaluate`, `decisions.propose` | the remote MCP handler, before the tool runs | the repository, the reference or the title, cut to 200 characters |
 
-A write that cannot be logged does not run, and an entry never outlives a write that failed. A person's reads, a refused call, a CI verdict upload, the worker's jobs, a sign-in and the operator commands on a tenant are not in the log. The commands are a follow-up of IPSO-68, because an entry needs a principal and a command has none.
+A write that cannot be logged does not run, and an entry never outlives a write that failed. A person's reads, a refused call, a CI verdict upload, the worker's jobs, a sign-in and the operator commands on a tenant are not in the log. The one sign-in that is logged is the first one with an invitation, which writes a person ([ADR-0127](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0127-invitations.md)). The commands are a follow-up of IPSO-68, because an entry needs a principal and a command has none.
 
 ## The chain
 

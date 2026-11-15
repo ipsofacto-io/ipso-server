@@ -23,7 +23,7 @@ import (
 // Only the archive of an export skips the response cap and the request deadline. A route added later is in the
 // bounded chain unless it is added here on purpose.
 func TestOnlyTheArchiveRouteSkipsTheBoundedChain(t *testing.T) {
-	mux, _ := mount(routes(nil, time.Now, nil), ciRoutes(nil, nil))
+	mux, _ := mount(routes(nil, time.Now, nil, ""), ciRoutes(nil, nil))
 	var via string
 	mark := func(name string) http.Handler {
 		return http.HandlerFunc(func(http.ResponseWriter, *http.Request) { via = name })

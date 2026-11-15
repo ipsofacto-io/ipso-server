@@ -184,7 +184,11 @@ func New(cfg Config) (http.Handler, error) {
 	if g.uploads != nil {
 		ci = ciRoutes(cfg.DB, g.log)
 	}
-	mux, table := mount(routes(cfg.DB, cfg.Now, g.log), ci)
+	var origin string
+	if cfg.Sessions != nil {
+		origin = cfg.Sessions.Origin
+	}
+	mux, table := mount(routes(cfg.DB, cfg.Now, g.log, origin), ci)
 	guarded := g.serve(mux, table)
 	capped := bounded(guarded, limits, g.log)
 	stream := streamed(guarded, limits)
@@ -256,7 +260,7 @@ func newGuard(cfg Config) (*guard, Limits, error) {
 
 // routes is every operation the API serves. Each reads the tenant from the caller that wrap put in
 // the request context. The reads come first, and the writes of ADR-0109 after them.
-func routes(db *sql.DB, now func() time.Time, log *slog.Logger) []route {
+func routes(db *sql.DB, now func() time.Time, log *slog.Logger, origin string) []route {
 	reg := &registryRoutes{db: db, now: now}
 	audits := audit.Handler(db, tenantOf)
 	reviews := proposals.Handler(db, tenantOf)
@@ -280,7 +284,7 @@ func routes(db *sql.DB, now func() time.Time, log *slog.Logger) []route {
 		{"GET /v1/audit/waivers", "audit_waivers", authz.AuditRead, []string{"known", "now"}, nil, audits},
 		{"GET /v1/verdicts", "list_verdicts", authz.VerdictsRead, []string{"repo", "decision", "known", "limit", "before"}, nil, http.HandlerFunc(verdicts.list)},
 	}
-	return slices.Concat(reads, writeRoutes(db, log), exportRoutes(db, log), auditLogRoutes(db, log))
+	return slices.Concat(reads, writeRoutes(db, log), exportRoutes(db, log), invitationRoutes(db, log, origin), auditLogRoutes(db, log))
 }
 
 // ciRoutes are the operations a CI job calls with its own OIDC token instead of a person's. They are

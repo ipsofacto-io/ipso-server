@@ -35,7 +35,10 @@ type scribe struct {
 func newScribe(t *testing.T) scribe {
 	t.Helper()
 	f := newFixture(t)
-	return scribe{t: t, f: f, c: newContract(t), h: f.handler(t, Limits{Rate: 1000, Burst: 1000})}
+	// Sign-in is on, with an origin and no session that a test holds, so an invitation has somewhere to point (ADR-0127).
+	// Every call of a scribe is a bearer call.
+	sessions := &Sessions{Origin: invitationOrigin, Lookup: func(context.Context, []byte) (Caller, SessionStatus) { return Caller{}, SessionUnknown }}
+	return scribe{t: t, f: f, c: newContract(t), h: f.handlerWith(t, Limits{Rate: 1000, Burst: 1000}, sessions)}
 }
 
 // send sends a request the document allows, as the subject, and returns the status and the answer.
@@ -202,6 +205,11 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 	if requested["state"] != "pending" || idOf(t, requested, "requested_by") != f.callers[personA].Principal {
 		t.Fatalf("the export request answered %v", requested)
 	}
+	invited := s.expect(http.StatusCreated, personA, http.MethodPost, "/v1/invitations", map[string]any{"name": "Dana", "role": "viewer"})
+	if invited["role"] != "viewer" || idOf(t, invited, "created_by") != f.callers[personA].Principal {
+		t.Fatalf("the invitation answered %v", invited)
+	}
+	s.expect(http.StatusNoContent, personA, http.MethodDelete, "/v1/invitations/"+idOf(t, invited, "id").String(), nil)
 
 	// The waiver names the person who recorded it, taken from the session and not from the body.
 	var approverID uuid.UUID
@@ -245,8 +253,8 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 		byAction["api.allow_premise_host"].Principal != f.callers[personA].Principal {
 		t.Errorf("the log names the wrong people: %+v", byAction)
 	}
-	if len(s.logged()) != before+5 {
-		t.Errorf("%d entries after the clearance, host, agent approval, check approval and export request, from %d", len(s.logged()), before)
+	if len(s.logged()) != before+7 {
+		t.Errorf("%d entries after the clearance, host, agent approval, check approval, export request, invitation and its revocation, from %d", len(s.logged()), before)
 	}
 }
 
@@ -278,6 +286,10 @@ func TestAWriteTheRoleDoesNotAllowStoresAndLogsNothing(t *testing.T) {
 			return http.MethodPost, "/v1/premise-hosts", map[string]any{"host": "denied.example.com", "allowed": true}
 		case "start_export":
 			return http.MethodPost, "/v1/exports", map[string]any{"recipient": aRecipient}
+		case "create_invitation":
+			return http.MethodPost, "/v1/invitations", map[string]any{"name": "Denied", "role": "viewer"}
+		case "revoke_invitation":
+			return http.MethodDelete, "/v1/invitations/" + f.prod.String(), nil
 		case "approve_proposal":
 			return http.MethodPost, "/v1/proposals/" + f.proposal.String() + "/approval", approval("denied", []uuid.UUID{f.org})
 		case "approve_check_proposal":
@@ -291,7 +303,8 @@ func TestAWriteTheRoleDoesNotAllowStoresAndLogsNothing(t *testing.T) {
 		+ (SELECT count(*) FROM registry.waiver WHERE tenant_id = $1) + (SELECT count(*) FROM registry.premise_host_allow WHERE tenant_id = $1)
 		+ (SELECT count(*) FROM registry.decision_version WHERE tenant_id = $1) + (SELECT count(*) FROM proposals.approval WHERE tenant_id = $1)
 		+ (SELECT count(*) FROM proposals.agent_approval WHERE tenant_id = $1) + (SELECT count(*) FROM identity.action_log WHERE tenant_id = $1)
-		+ (SELECT count(*) FROM proposals.check_approval WHERE tenant_id = $1) + (SELECT count(*) FROM tenancy.export WHERE tenant_id = $1)`
+		+ (SELECT count(*) FROM proposals.check_approval WHERE tenant_id = $1) + (SELECT count(*) FROM tenancy.export WHERE tenant_id = $1)
+		+ (SELECT count(*) FROM identity.invitation WHERE tenant_id = $1)`
 	rows := s.count(tenantA, `SELECT `+tables)
 	roleOf := map[string]string{agentA: identity.RoleAgent, viewerA: identity.RoleViewer, auditorA: identity.RoleAuditor, contributorA: identity.RoleContributor, nobodyA: ""}
 	for subject, role := range roleOf {

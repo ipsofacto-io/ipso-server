@@ -64,6 +64,11 @@ var mayCall = func() map[string][]string {
 		"current_export":  {identity.RoleAdmin},
 		"get_export":      {identity.RoleAdmin},
 		"download_export": {identity.RoleAdmin},
+
+		// The invitations of ADR-0127: only an admin who is a person holds principal.manage.
+		"create_invitation": {identity.RoleAdmin},
+		"list_invitations":  {identity.RoleAdmin},
+		"revoke_invitation": {identity.RoleAdmin},
 	}
 }()
 
@@ -71,12 +76,16 @@ var mayCall = func() map[string][]string {
 var writeOps = []string{
 	"create_scope", "reparent_scope", "retire_scope", "record_supersession", "record_grandfather_period",
 	"record_baseline", "record_waiver", "clear_premise_reason", "allow_premise_host", "approve_proposal",
-	"approve_agent_proposal", "approve_check_proposal", "start_export",
+	"approve_agent_proposal", "approve_check_proposal", "start_export", "create_invitation", "revoke_invitation",
 }
 
 // exportOps are the reads of the export (ADR-0111, and current_export of ADR-0115), which only an admin takes.
 // The other operation of the export is the write start_export, which is in writeOps.
 var exportOps = []string{"current_export", "get_export", "download_export"}
+
+// invitationOps is the read of the invitations (ADR-0127), which only an admin takes. The other two operations are the
+// writes create_invitation and revoke_invitation, which are in writeOps.
+var invitationOps = []string{"list_invitations"}
 
 // the routes that ask for audit.read: the five audit questions of ADR-0055 and the audit log of ADR-0126.
 var auditOps = []string{"audit_decisions", "audit_beliefs", "audit_merges", "audit_supersessions", "audit_waivers", "read_audit_log"}
@@ -166,7 +175,7 @@ func guardedStore(t *testing.T, p identity.Principal, stand http.Handler, extra 
 	}
 	g.principals = func(context.Context, uuid.UUID, uuid.UUID) (identity.Principal, error) { return p, nil }
 	g.decisionScopes, g.chains = store.decisionScopes, store.chainsOf
-	stubbed := routes(nil, time.Now, nil)
+	stubbed := routes(nil, time.Now, nil, "")
 	for i := range stubbed {
 		stubbed[i].handler = stand
 	}
@@ -369,7 +378,7 @@ func TestARouteWithoutAKnownActionIsRefused(t *testing.T) {
 // Every route a person calls names an action the policy knows, and the CI route names none, because the
 // CI identity and the installation mapping authorize it (ADR-0102).
 func TestEveryRouteNamesAnActionThePolicyKnows(t *testing.T) {
-	for _, rt := range routes(nil, time.Now, nil) {
+	for _, rt := range routes(nil, time.Now, nil, "") {
 		if !slices.Contains(authz.Actions, rt.action) {
 			t.Errorf("%s names %q, which the policy does not know", rt.pattern, rt.action)
 		}

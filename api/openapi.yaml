@@ -7,7 +7,7 @@ info:
     The routes that write (ADR-0109) are actions only a person takes: each asks the role policy, which must cover
     every scope the request names, and an agent gets 403. A waiver and an approval take the approver from the
     session or the token and never from the body, and each write is logged with the principal in the same
-    transaction. A repeat, and a change the registry refuses because of what it already holds, is 409. The three export routes (ADR-0111) let an admin ask for the export of the tenant and download it. The one
+    transaction. A repeat, and a change the registry refuses because of what it already holds, is 409. The three export routes (ADR-0111) let an admin ask for the export of the tenant and download it. The three invitation routes (ADR-0127) let an admin invite a person, list the open invitations and revoke one. The one
     route no person calls is POST /v1/verdicts, which a CI job calls with its own GitHub
     Actions token and which stores the verdicts of one run (ADR-0102). Every other route asks the role policy
     before it runs, and a principal no role of which allows the route gets 403 (ADR-0108). The five audit
@@ -36,6 +36,8 @@ tags:
     description: The verdicts a CI job uploads, and the per-repository and per-decision results (ADR-0102).
   - name: export
     description: The export of the whole tenant that an admin asks for and downloads (ADR-0111).
+  - name: identity
+    description: The invitations an admin makes so that a person can sign in for the first time (ADR-0127).
   - name: audit-log
     description: The hash chain of the tenant's action log, as JSON lines (ADR-0126).
 paths:
@@ -1251,6 +1253,114 @@ paths:
           $ref: '#/components/responses/Internal'
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/invitations:
+    post:
+      operationId: create_invitation
+      tags: [identity]
+      summary: Invite a person by name and role, and get the link to hand to them.
+      description: >-
+        Only an admin who is a person takes it (ADR-0108, ADR-0127), so an agent receives 403. The answer holds the
+        link once: the server keeps only the SHA-256 of the token, so a lost link cannot be read again and is revoked
+        and made anew. The token is in the fragment of the link, so no server or proxy that carries the link sees it.
+        An invitation lasts seven days, is used once, and belongs to this tenant. The person opens the link, signs in
+        with an identity provider of this server, and that first sign-in binds their issuer and subject to a new
+        principal with the name and the one role given, over the whole tenant. The role is one a person may hold, so
+        `agent` is 400, and a name a principal could not have is 400. A tenant holds at most 1000 open invitations, and
+        more is 409. It is 409 as well when browser sign-in is not configured, because no one could use the link.
+        The request is logged with the person's id, the id of the invitation and its role, and never the name or the token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationRequest'
+      responses:
+        '201':
+          description: The invitation was stored. The token is in this answer and nowhere else.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationCreated'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+    get:
+      operationId: list_invitations
+      tags: [identity]
+      summary: List the invitations that are still open.
+      description: >-
+        Only an admin who is a person takes it (ADR-0108, ADR-0127). An invitation that was used, was revoked or has
+        expired is not listed. The answer never holds a token or a hash.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of the open invitations, by id from the highest.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationPage'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/invitations/{id}:
+    delete:
+      operationId: revoke_invitation
+      tags: [identity]
+      summary: Revoke an open invitation, so its link stops working.
+      description: >-
+        Only an admin who is a person takes it (ADR-0108, ADR-0127). An invitation that was used, was already revoked
+        or has expired is 404, and so is an id the tenant does not have. The request is logged with the person's id
+        and the id of the invitation.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: The invitation was revoked.
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
   /v1/exports:
     post:
       operationId: start_export
@@ -2419,6 +2529,85 @@ components:
           type: [string, 'null']
           pattern: '^[0-9a-f]{64}$'
           description: The SHA-256 of the archive in lowercase hexadecimal, set when the export is ready.
+    InvitationRequest:
+      type: object
+      additionalProperties: false
+      required: [name, role]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: The name of the new person. It has no control character and no space at either end, and it is all the server knows of them, because it keeps no email address (ADR-0093).
+        role:
+          type: string
+          enum: [viewer, contributor, decision-owner, approver, admin, auditor]
+          description: The one role the person is bound to, over the whole tenant. Roles on a scope are changed afterwards (ADR-0108).
+    Invitation:
+      type: object
+      additionalProperties: false
+      required: [id, name, role, created_by, created_at, expires_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        role:
+          type: string
+          enum: [viewer, contributor, decision-owner, approver, admin, auditor]
+        created_by:
+          type: string
+          format: uuid
+          description: The admin who made it.
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          description: Seven days after it was made. After this the link is refused and the row is deleted.
+    InvitationCreated:
+      type: object
+      additionalProperties: false
+      required: [id, name, role, created_by, created_at, expires_at, token, url]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        role:
+          type: string
+          enum: [viewer, contributor, decision-owner, approver, admin, auditor]
+        created_by:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        token:
+          type: string
+          minLength: 43
+          maxLength: 43
+          pattern: '^[A-Za-z0-9_-]{43}$'
+          description: 32 random bytes as unpadded base64url. It is shown once, it is a credential until the invitation is used or expires, and the server never logs it.
+        url:
+          type: string
+          format: uri
+          description: The link to hand to the person, the public origin of this server and `/invitation#` and the token. The token is in the fragment, so a browser never sends it in a request.
+    InvitationPage:
+      type: object
+      additionalProperties: false
+      required: [invitations]
+      properties:
+        invitations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Invitation'
     AuditLogLine:
       type: object
       additionalProperties: false

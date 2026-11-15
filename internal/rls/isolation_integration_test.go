@@ -350,6 +350,9 @@ func smuggleInserts() []smuggle {
 		// The stamp trigger reads the login as the caller's tenant, so it refuses this row (23514) before the
 		// policy is asked (42501). Either way the insert fails, and the policy stays as a second line.
 		{"identity.session", `INSERT INTO identity.session (tenant_id, login_id, token_sha256) VALUES ($1::uuid, $1::uuid, sha256(convert_to('smuggled', 'UTF8')))`, []any{tenantA}, false},
+		// The stamp trigger reads the inviter as the caller's tenant, so it refuses this row (23514) before the
+		// policy is asked (42501), like the session stamp above.
+		{"identity.invitation", `INSERT INTO identity.invitation (tenant_id, token_sha256, name, role, created_by) VALUES ($1::uuid, sha256(convert_to('smuggled', 'UTF8')), 'Smuggled', 'viewer', $1::uuid)`, []any{tenantA}, false},
 		// The binding check reads the principal as the caller's tenant, so it refuses this row (23514) before the
 		// policy is asked (42501), like the session stamp above.
 		{"identity.role_binding", `INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ($1::uuid, $1::uuid, 'viewer')`, []any{tenantA}, false},
@@ -474,6 +477,7 @@ func policies(ctx context.Context, db *sql.DB) ([]string, error) {
 func policyTables() []string {
 	tables := []string{
 		"identity.action_log",
+		"identity.invitation",
 		"identity.login",
 		"identity.principal",
 		"identity.role_binding",
@@ -516,6 +520,7 @@ func policyTables() []string {
 func expectedPolicies() []string {
 	app := map[string]string{
 		"identity.action_log":               "SELECT INSERT",
+		"identity.invitation":               "SELECT INSERT DELETE",
 		"identity.login":                    "SELECT INSERT",
 		"identity.principal":                "SELECT INSERT",
 		"identity.role_binding":             "SELECT INSERT DELETE",
@@ -560,6 +565,8 @@ func expectedPolicies() []string {
 		migrate[table] = "SELECT INSERT DELETE"
 	}
 	migrate["identity.session"] = "SELECT DELETE"
+	// An invitation holds a credential hash, so an export leaves it out like a session (ADR-0127).
+	migrate["identity.invitation"] = "SELECT DELETE"
 	// A binding is unique across tenants, so an export leaves it out and a restore does not write it.
 	migrate["tenancy.installation"] = "SELECT DELETE"
 	// An export made through the API is never in an archive, so a restore writes neither table (ADR-0111).

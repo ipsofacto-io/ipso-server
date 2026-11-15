@@ -39,6 +39,8 @@ var notRestored = map[string]bool{
 	"tenancy.tenant":     true,
 	"tenancy.tenant_key": true,
 	"identity.session":   true,
+	// An invitation holds a credential hash and is used once, so it is never in an archive (ADR-0127).
+	"identity.invitation": true,
 	// A binding is unique across tenants, so a restore into a fresh tenant would find it taken (ADR-0101).
 	"tenancy.installation": true,
 	// The exports made through the API stay where they are made and are never in another archive (ADR-0111).

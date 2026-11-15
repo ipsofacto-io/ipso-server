@@ -20,6 +20,7 @@ import type {
   ExportRequest,
   GrandfatherPeriod,
   GrandfatherRequest,
+  InvitationStart,
   PremiseHost,
   PremiseHostRequest,
   PremiseReason,
@@ -103,6 +104,12 @@ export function makeCalls(api: Api) {
     currentExport: (signal?: AbortSignal) => api.getJSON<Export>('/v1/exports/current', {}, signal),
     startExport: (request: ExportRequest, signal?: AbortSignal) => api.postJSON<Export>('/v1/exports', request, signal),
     providers: (signal?: AbortSignal) => api.getJSON<{ providers: ProviderInfo[] }>('/auth/providers', {}, signal),
+    /**
+     * Starts the sign-in of a person who came with an invitation and answers where to send the browser (ADR-0127). The
+     * token is in the body and never in an address, so no log keeps it.
+     */
+    startInvitation: (provider: string, token: string, signal?: AbortSignal) =>
+      api.postJSON<InvitationStart>(`/auth/invitation/${encodeURIComponent(provider)}`, { token }, signal),
     logout: (signal?: AbortSignal) => api.post('/auth/logout', signal),
   };
 }

@@ -58,7 +58,11 @@ type Options struct {
 
 // store is the part of the database a session uses.
 type store interface {
-	start(ctx context.Context, issuer, subject string, hash, previous []byte) (time.Time, error)
+	// start opens a session. invitation is the hash of the invitation the sign-in carries, or nil: with one, a
+	// login that is not bound yet is bound to the person the invitation names (ADR-0127).
+	start(ctx context.Context, issuer, subject string, hash, previous, invitation []byte) (time.Time, error)
+	// check says whether the tenant holds an open invitation with this hash, and changes nothing.
+	check(ctx context.Context, invitation []byte) error
 	principal(ctx context.Context, hash []byte) (uuid.UUID, time.Time, error)
 	end(ctx context.Context, hash []byte) error
 }
@@ -68,8 +72,15 @@ type dbStore struct {
 	tenant uuid.UUID
 }
 
-func (s dbStore) start(ctx context.Context, issuer, subject string, hash, previous []byte) (time.Time, error) {
+func (s dbStore) start(ctx context.Context, issuer, subject string, hash, previous, invitation []byte) (time.Time, error) {
+	if invitation != nil {
+		return identity.AcceptInvitation(ctx, s.db, s.tenant, issuer, subject, invitation, hash, previous)
+	}
 	return identity.StartSession(ctx, s.db, s.tenant, issuer, subject, hash, previous)
+}
+
+func (s dbStore) check(ctx context.Context, invitation []byte) error {
+	return identity.CheckInvitation(ctx, s.db, s.tenant, invitation)
 }
 
 func (s dbStore) principal(ctx context.Context, hash []byte) (uuid.UUID, time.Time, error) {
@@ -100,6 +111,9 @@ type Service struct {
 	// lists charges GET /auth/providers, which needs no session, in a bucket of its own: a client that
 	// reads the list must not be able to spend the callbacks' bucket and stop people signing in.
 	lists *ratelimit.Limiter
+	// invitations charges POST /auth/invitation/{provider}, which needs no session and reads the database for
+	// each token it is given, in a bucket of its own so that guessing tokens cannot stop people signing in.
+	invitations *ratelimit.Limiter
 }
 
 // New validates the configuration, discovers every OpenID Connect provider, and returns the service.
@@ -178,6 +192,8 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 		misses:    ratelimit.New(opts.Rate, opts.Burst),
 		callbacks: ratelimit.New(opts.Rate, opts.Burst),
 		lists:     ratelimit.New(opts.Rate, opts.Burst),
+
+		invitations: ratelimit.New(opts.Rate, opts.Burst),
 	}, nil
 }
 

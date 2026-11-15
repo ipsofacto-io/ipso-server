@@ -22,13 +22,17 @@ const (
 // sent, and the PKCE verifier it holds back until the code exchange. Previous is the hash of the
 // session the browser held when the sign-in began, as unpadded base64url, or empty. The callback is a
 // request from the provider's site, so a SameSite=Strict session cookie is not sent with it, and this
-// is how the sign-in still ends the session it replaces.
+// is how the sign-in still ends the session it replaces. Invitation is the token of the invitation the
+// person came with, or empty (ADR-0127). It is the token and not its hash, because the cookie is not
+// signed: a hash in it would let anyone who read the table use an invitation. Only the server sets the
+// cookie, and the callback hashes the token itself.
 type attempt struct {
-	Provider string `json:"p"`
-	State    string `json:"s"`
-	Nonce    string `json:"n"`
-	Verifier string `json:"v"`
-	Previous string `json:"o,omitempty"`
+	Provider   string `json:"p"`
+	State      string `json:"s"`
+	Nonce      string `json:"n"`
+	Verifier   string `json:"v"`
+	Previous   string `json:"o,omitempty"`
+	Invitation string `json:"i,omitempty"`
 }
 
 func (a attempt) cookie() *http.Cookie {

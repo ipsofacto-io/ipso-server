@@ -16,7 +16,7 @@ A principal holds a role through a row of `identity.role_binding`. A principal w
 | `auditor` | yes | yes | | | | | |
 | `agent` | yes | | yes | | | | |
 
-The write routes of the table are served ([ADR-0109](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0109-control-plane-write-routes.md), and [ADR-0116](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0116-check-proposal-approval.md) for a drafted check), apart from managing people, which comes with IPSO-137, and so is the export ([ADR-0111]({adr})). The five `GET /v1/audit/*` routes and `GET /v1/audit-log` need `auditor` or `admin`. Every other read, and the MCP tools, need any role. Proposing over MCP needs `contributor`, `decision-owner`, `approver` or `agent`.
+The write routes of the table are served ([ADR-0109](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0109-control-plane-write-routes.md), and [ADR-0116](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0116-check-proposal-approval.md) for a drafted check), and the invitation routes ([ADR-0127](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0127-invitations.md)) for the people an admin adds, apart from changing and revoking the role of a person, which comes with IPSO-147, and so is the export ([ADR-0111]({adr})). The five `GET /v1/audit/*` routes and `GET /v1/audit-log` need `auditor` or `admin`. Every other read, and the MCP tools, need any role. Proposing over MCP needs `contributor`, `decision-owner`, `approver` or `agent`.
 
 An admin manages people and structure and does not approve or waive, so the person who grants a role is not the person who approves a decision.
 
@@ -66,6 +66,18 @@ Only an `admin` who is a person takes the action `tenant.export` ([ADR-0111](htt
 
 Starting an export and downloading one are logged with the person's id in `identity.action_log`. How an export is made and kept is in [docs/tenants.md](tenants.md#export-through-the-api).
 
+## The invitation routes
+
+Only an `admin` who is a person takes the action `principal.manage` ([ADR-0127](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0127-invitations.md)). It is tenant-wide and names no scope, so a binding to a scope never covers it, and every other role, an agent included, is refused with the same plain 403. A refusal stores nothing and logs nothing.
+
+| Route | Action | Roles |
+| --- | --- | --- |
+| `POST /v1/invitations` | `principal.manage` | admin |
+| `GET /v1/invitations` | `principal.manage` | admin |
+| `DELETE /v1/invitations/{id}` | `principal.manage` | admin |
+
+An invitation names the person and one role the person may hold, so never `agent`, over the whole tenant. A person who signs in with it is bound to that role, and a role on a scope is bound afterwards. Creating and revoking one is logged with the admin's id, and using one is logged with the new person's id: the subject holds the id of the invitation and its role and never the name or the token. How an invitation is made and used is in [docs/login.md](login.md#invite-a-person).
+
 ## The audit log route
 
 | Route | Action | Roles |
@@ -76,7 +88,7 @@ The action is the one of the five audit questions, so the same two roles hold it
 
 ## Bind and revoke
 
-`ipso-server tenant create --person …` binds the first person of a tenant as `admin` ([docs/tenants.md](tenants.md)). Until IPSO-137 adds the routes, an operator binds and revokes other roles with SQL as the application role:
+`ipso-server tenant create --person …` binds the first person of a tenant as `admin` ([docs/tenants.md](tenants.md)). A person is added with an invitation ([docs/login.md](login.md#invite-a-person)), and until IPSO-147 adds the routes, an operator changes the role of a person and revokes one with SQL as the application role:
 
 ```sql
 BEGIN;

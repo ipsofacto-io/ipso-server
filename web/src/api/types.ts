@@ -59,3 +59,8 @@ export interface ProviderInfo {
   id: string;
   kind: string;
 }
+
+/** Where POST /auth/invitation/{provider} says to send the browser: the first step of the provider's sign-in (ADR-0127). */
+export interface InvitationStart {
+  location: string;
+}

@@ -32,31 +32,46 @@ Sign-in asks for no scope other than `openid`, and GitHub for none at all.
 - **GitHub.** Create an OAuth App with the callback URL `{IPSO_PUBLIC_URL}/auth/callback/github`. The subject is the numeric id of the user and never the user name, which can be renamed. GitHub cannot assert MFA in a token. A deployment that must enforce MFA leaves GitHub off or binds only members of an organization that requires two-factor authentication. GitHub Enterprise Server is not supported.
 - **Your own provider.** Any OpenID Connect provider that publishes metadata at `/.well-known/openid-configuration` (or RFC 8414) and keys over https works. Register `{IPSO_PUBLIC_URL}/auth/callback/{id}` with it. The local stack uses Dex this way.
 
-## Bind a person
+## Invite a person
 
-A sign-in becomes a session only for a login the tenant has bound to a person (ADR-0093). The flow creates nobody, so a person who signs in for the first time and is not bound gets 403 with the two values to bind:
+A sign-in becomes a session only for a login the tenant has bound to a person ([ADR-0093](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0093-single-tenant-token-mapping.md)). `ipso-server tenant create` binds the first person of a tenant ([docs/tenants.md](tenants.md)), and an admin invites everyone after that ([ADR-0127](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0127-invitations.md)).
+
+An admin who is a person makes an invitation with a name and one role, over the whole tenant:
+
+```sh
+curl -sS -X POST "$IPSO/v1/invitations" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"name":"Ada","role":"viewer"}'
+```
+
+The answer is 201 and holds the link in `url`, such as `https://ipso.example.com/invitation#<token>`. Send it to the person yourself: ipso sends no email, because it keeps no address. The answer is the only time the link is shown, because the database keeps the SHA-256 of the token and not the token, so a link that is lost is revoked and made again. The link is a credential until it is used. It lasts seven days, it is used once, and it belongs to this tenant.
+
+The person opens the link and picks a provider. The web app reads the token from the fragment, which no server or proxy sees, removes it from the address, and posts it to `POST /auth/invitation/{id}`. The server checks that the invitation is open, keeps the token in the attempt cookie, and answers where to send the browser. At the end of the sign-in the first login with a valid invitation writes, in one transaction, one person with the name the admin gave, the login of that issuer and subject, the role, the session, and an entry of the action log named `auth.accept_invitation` with the id of the invitation and its role. The invitation is gone, so a second use finds nothing. A person who abandons the sign-in leaves the invitation open until it expires, and a person who is already bound signs in as always and leaves the invitation for the one it was made for.
+
+- `GET /v1/invitations` lists the open ones, without their tokens.
+- `DELETE /v1/invitations/{id}` revokes one, so a link that went to the wrong person stops working.
+- Only an admin takes these routes ([docs/roles.md](roles.md)), a tenant holds at most 1000 open invitations, and the routes answer 409 when sign-in is not configured, because no one could use the link.
+
+A person who signs in with no invitation and no bound login still gets 403 with the two values:
 
 ```json
 {"error": "unknown_login", "issuer": "https://accounts.google.com", "subject": "110169484474386276334"}
 ```
 
-Nothing is written. `ipso-server tenant create` binds the first person of a tenant ([docs/tenants.md](tenants.md)). An operator binds each later person with SQL as the application role:
+Nothing is written. An operator can still bind a new login to a person who already exists, for example after a Microsoft registration changed every subject, with SQL as the application role:
 
 ```sql
 BEGIN;
 SELECT set_config('ipso.tenant', '<tenant id>', true);
-INSERT INTO identity.principal (tenant_id, kind, name) VALUES ('<tenant id>', 'human', 'Ada') RETURNING id;
 INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ('<tenant id>', '<principal id>', '<issuer>', '<subject>');
-INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ('<tenant id>', '<principal id>', 'viewer');
 COMMIT;
 ```
 
-A person with no role is refused every page, so the last insert gives one. [docs/roles.md](roles.md) lists the roles and how to bind one to a scope. A login of an agent cannot start a browser session. The route that binds a person without SQL is IPSO-137.
+A login of an agent cannot start a browser session.
 
 ## What a session is
 
 - `GET /auth/providers` lists the providers the server is configured with, as `{"providers":[{"id":"dex","kind":"oidc"}]}`, so the sign-in page of the web app can link to each. It needs no session, names no issuer, client id or secret, and has a rate limit of its own, so reading it never spends the bucket of the callbacks.
 - `GET /auth/login/{id}` sends the browser to the provider and keeps the state of the attempt in the cookie `__Host-ipso-login` for ten minutes.
+- `POST /auth/invitation/{id}` starts the same sign-in for a person who came with an invitation. It takes `{"token":"..."}`, needs no session, refuses a request from another site, and has a rate limit of its own. It answers 200 with `{"location":"..."}`, the address of the provider, and sets the same cookie with the token in it. A token that is not open is 403 `unknown_invitation` and sets no cookie.
 - `GET /auth/callback/{id}` finishes it, clears that cookie on every outcome, and answers 303 to `/` with the cookie `__Host-ipso-session`.
 - `POST /auth/logout` ends the session and clears the cookie. It is a POST, and a request from another site is refused.
 
@@ -77,8 +92,10 @@ A session belongs to the one tenant the process serves, and each tenant process 
 The answer is a short code and the log says where it stopped, never what the provider sent.
 
 - `invalid_login` (400): the state, the attempt cookie, or the `iss` did not match, the code was refused, or the ID token did not verify. The log line has `reason` or `step`, such as `state`, `exchange: invalid_grant`, or `id_token`. Check the issuer, the client id, the client secret, and that the redirect URI is registered exactly.
+- `invalid_request` (400, 415): the start of a sign-in with an invitation did not carry one JSON object `{"token":"..."}` with a content type of `application/json`, or was over 1 KiB.
 - `login_refused` (400): the provider sent an error, such as `access_denied`.
-- `unknown_login` (403): bind the issuer and subject in the answer.
+- `unknown_login` (403): the person has no invitation and no bound login. Invite them, or bind the issuer and subject in the answer.
+- `unknown_invitation` (403): the invitation was used, revoked or has expired, or the link is not whole. The token is never in the answer or the log. Make a new invitation.
 - `forbidden` (403): the login belongs to an agent.
 - `rate_limited` (429): too many sign-ins or lookups on this process. Wait for `Retry-After`.
 
@@ -88,5 +105,5 @@ CI proves the generic OpenID Connect path against Dex and each provider's quirks
 
 1. Open `{IPSO_PUBLIC_URL}/auth/login/{id}` in a browser, sign in, and end up on `/`.
 2. Open `{IPSO_PUBLIC_URL}/v1/scopes` in the same browser and see 200 with JSON.
-3. Sign in with an account you did not bind and see 403 `unknown_login` and no session.
+3. Sign in with an account you did not bind and see 403 `unknown_login` and no session. Make an invitation, open its link in a private window, sign in with that account, and see the person bound, with the invitation gone.
 4. Sign out with `fetch('/auth/logout', {method: 'POST'})` from the console of that origin and see `/v1/scopes` answer 401.

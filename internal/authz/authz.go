@@ -25,7 +25,8 @@ type Action string
 
 // The actions of the policy. The routes of internal/api name the read actions and the writes of
 // IPSO-134 (ADR-0109), and the remote MCP tools name the read actions and proposal.create.
-// principal.manage and tenant.export are the writes that IPSO-137, IPSO-142 and IPSO-147 serve.
+// principal.manage is the invitations of IPSO-137 (ADR-0127) and, with IPSO-147, the roles of a person. tenant.export is the
+// export of IPSO-142.
 const (
 	// Member is what an unknown route and the MCP handshake ask: that the principal holds any role.
 	Member            Action = "member"

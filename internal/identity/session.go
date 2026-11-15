@@ -33,36 +33,157 @@ func StartSession(ctx context.Context, db *sql.DB, tenant uuid.UUID, issuer, sub
 	}
 	var expires time.Time
 	err := inTenantAt(ctx, db, tenant, sql.LevelReadCommitted, false, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `
-			DELETE FROM identity.session
-			WHERE tenant_id = ipso.current_tenant() AND expires_at <= clock_timestamp()`); err != nil {
+		if err := dropSessions(ctx, tx, previous); err != nil {
 			return err
 		}
-		if previous != nil {
-			if _, err := tx.ExecContext(ctx, `
-				DELETE FROM identity.session
-				WHERE tenant_id = ipso.current_tenant() AND token_sha256 = $1`, previous); err != nil {
-				return err
-			}
-		}
-		return tx.QueryRowContext(ctx, `
-			INSERT INTO identity.session (tenant_id, login_id, token_sha256)
-			SELECT tenant_id, id, $3::bytea
-			FROM identity.login
-			WHERE tenant_id = ipso.current_tenant() AND issuer = $1 AND subject = $2
-			RETURNING expires_at`, issuer, subject, hash).Scan(&expires)
+		var err error
+		expires, err = insertSession(ctx, tx, issuer, subject, hash)
+		return err
 	})
+	return expires, sessionError(err)
+}
+
+// AcceptInvitation is StartSession for a sign-in that carries an invitation (ADR-0127). A login the tenant
+// already bound signs in as it always did, and the invitation stays open for the person it was made for.
+// Otherwise it uses the invitation, and in the same transaction it writes the person the invitation names,
+// the login of this issuer and subject, the one role binding, the session, and last the entry of the action
+// log, so a sign-in that cannot be logged writes nothing. invitation is the hash of the token. A token the
+// tenant holds no open invitation for is ErrUnknownInvitation, and nothing is written. The tenant must be the
+// one this process serves, because AcceptInvitation trusts it.
+func AcceptInvitation(ctx context.Context, db *sql.DB, tenant uuid.UUID, issuer, subject string, invitation, hash, previous []byte) (time.Time, error) {
+	if tenant == uuid.Nil || issuer == "" || subject == "" || len(invitation) != TokenHashSize || len(hash) != TokenHashSize || (previous != nil && len(previous) != TokenHashSize) {
+		return time.Time{}, fmt.Errorf("%w: a tenant, an issuer, a subject, and two token hashes are required", ErrInvalidQuery)
+	}
+	expires, err := acceptInvitation(ctx, db, tenant, issuer, subject, invitation, hash, previous)
+	if !errors.Is(err, ErrUnknownInvitation) && !errors.Is(err, errLoginBound) {
+		return expires, err
+	}
+	// Another sign-in of this person was first: it used this invitation, or bound the same issuer and subject
+	// with another one, and its transaction has committed. Nothing of this one was written, so the person signs
+	// in as the login they now have. A person with no login is still one who came with an invitation that is not
+	// open, whichever way it went.
+	expires, err = StartSession(ctx, db, tenant, issuer, subject, hash, previous)
+	if errors.Is(err, ErrUnknownLogin) {
+		return time.Time{}, ErrUnknownInvitation
+	}
+	return expires, err
+}
+
+// errLoginBound is what acceptInvitation returns when the login it would write was bound by a sign-in that
+// committed first. The transaction is rolled back, so the invitation is not used.
+var errLoginBound = errors.New("the login was bound by another sign-in")
+
+func acceptInvitation(ctx context.Context, db *sql.DB, tenant uuid.UUID, issuer, subject string, invitation, hash, previous []byte) (time.Time, error) {
+	var expires time.Time
+	err := inTenantAt(ctx, db, tenant, sql.LevelReadCommitted, false, func(tx *sql.Tx) error {
+		if err := dropSessions(ctx, tx, previous); err != nil {
+			return err
+		}
+		var err error
+		if expires, err = insertSession(ctx, tx, issuer, subject, hash); !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		// Not bound yet. The delete is the use: a second sign-in with the same token finds no row, and two at
+		// once serialise on it, so the one that waits finds it gone.
+		var id uuid.UUID
+		var name, role string
+		err = tx.QueryRowContext(ctx, `
+			DELETE FROM identity.invitation
+			WHERE tenant_id = ipso.current_tenant() AND token_sha256 = $1 AND expires_at > clock_timestamp()
+			RETURNING id, name, role`, invitation).Scan(&id, &name, &role)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrUnknownInvitation
+		}
+		if err != nil {
+			return fmt.Errorf("use the invitation: %w", err)
+		}
+		var person uuid.UUID
+		if err := tx.QueryRowContext(ctx, `
+			INSERT INTO identity.principal (tenant_id, kind, name)
+			VALUES (ipso.current_tenant(), 'human', $1)
+			RETURNING id`, name).Scan(&person); err != nil {
+			return fmt.Errorf("write the person: %w", err)
+		}
+		bound, err := tx.ExecContext(ctx, `
+			INSERT INTO identity.login (tenant_id, principal_id, issuer, subject)
+			VALUES (ipso.current_tenant(), $1, $2, $3)
+			ON CONFLICT ON CONSTRAINT login_once DO NOTHING`, person, issuer, subject)
+		if err != nil {
+			return fmt.Errorf("write the login: %w", err)
+		}
+		if n, err := bound.RowsAffected(); err != nil || n == 0 {
+			if err != nil {
+				return fmt.Errorf("write the login: %w", err)
+			}
+			return errLoginBound
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO identity.role_binding (tenant_id, principal_id, role)
+			VALUES (ipso.current_tenant(), $1, $2)`, person, role); err != nil {
+			return fmt.Errorf("write the role binding: %w", err)
+		}
+		if expires, err = insertSession(ctx, tx, issuer, subject, hash); err != nil {
+			return err
+		}
+		// The entry is the last statement, because the chain holds a lock until the transaction ends (ADR-0126).
+		// It names the person who accepted and carries the invitation's id and role, never the token or the name.
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO identity.action_log (tenant_id, principal_id, responsible_id, action, subject)
+			VALUES (ipso.current_tenant(), $1, $1, $2, $3)`, person, acceptAction, "invitation "+id.String()+" role "+role); err != nil {
+			return fmt.Errorf("record the action: %w", err)
+		}
+		return nil
+	})
+	return expires, sessionError(err)
+}
+
+// dropSessions deletes the tenant's expired sessions and the one the browser held, so a sign-in leaves one
+// session for that browser.
+func dropSessions(ctx context.Context, tx *sql.Tx, previous []byte) error {
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM identity.session
+		WHERE tenant_id = ipso.current_tenant() AND expires_at <= clock_timestamp()`); err != nil {
+		return err
+	}
+	if previous != nil {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM identity.session
+			WHERE tenant_id = ipso.current_tenant() AND token_sha256 = $1`, previous); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// insertSession reads the login in the INSERT itself and returns when the session ends. A login the tenant
+// never bound is sql.ErrNoRows, and nothing is written.
+func insertSession(ctx context.Context, tx *sql.Tx, issuer, subject string, hash []byte) (time.Time, error) {
+	var expires time.Time
+	err := tx.QueryRowContext(ctx, `
+		INSERT INTO identity.session (tenant_id, login_id, token_sha256)
+		SELECT tenant_id, id, $3::bytea
+		FROM identity.login
+		WHERE tenant_id = ipso.current_tenant() AND issuer = $1 AND subject = $2
+		RETURNING expires_at`, issuer, subject, hash).Scan(&expires)
+	return expires, err
+}
+
+// sessionError turns what a session writer met into the errors callers know.
+func sessionError(err error) error {
+	if err == nil {
+		return nil
+	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return time.Time{}, ErrUnknownLogin
+		return ErrUnknownLogin
+	}
+	if errors.Is(err, ErrUnknownInvitation) {
+		return err
 	}
 	var pg *pgconn.PgError
-	if errors.As(err, &pg) && pg.Code == "23514" {
-		return time.Time{}, ErrNotHuman
+	if errors.As(err, &pg) && pg.Code == "23514" && pg.ConstraintName == "" {
+		return ErrNotHuman
 	}
-	if err != nil {
-		return time.Time{}, fmt.Errorf("start the session: %w", err)
-	}
-	return expires, nil
+	return fmt.Errorf("start the session: %w", err)
 }
 
 // SessionPrincipal returns the principal of the unexpired session with this token hash, and when the

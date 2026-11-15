@@ -81,7 +81,7 @@ func TestDocumentIsValidOpenAPI31(t *testing.T) {
 
 // allRoutes is every route the API can mount: the ones behind a person's token and the one behind a CI job's.
 func allRoutes() []route {
-	return slices.Concat(routes(nil, time.Now, nil), ciRoutes(nil, nil))
+	return slices.Concat(routes(nil, time.Now, nil, ""), ciRoutes(nil, nil))
 }
 
 // The document describes exactly the routes the API mounts, under the same operationIds, so a route
@@ -166,7 +166,7 @@ func TestEveryOperationIsAGetOrANamedWrite(t *testing.T) {
 func TestEveryWriteIsAPersonAction(t *testing.T) {
 	policy := testPolicy(t)
 	seen := 0
-	for _, rt := range routes(nil, time.Now, nil) {
+	for _, rt := range routes(nil, time.Now, nil, "") {
 		if !slices.Contains(writeOps, rt.op) {
 			continue
 		}
@@ -195,7 +195,7 @@ func TestEveryWriteIsAPersonAction(t *testing.T) {
 // A route whose action names scopes reads them from the request, and a route that reads them names such an
 // action, so a scoped write cannot be mounted with no way to say what it acts on (ADR-0109).
 func TestEveryScopedRouteReadsItsTargets(t *testing.T) {
-	for _, rt := range routes(nil, time.Now, nil) {
+	for _, rt := range routes(nil, time.Now, nil, "") {
 		if authz.Scoped(rt.action) != (rt.targets != nil) {
 			t.Errorf("%s: action %s scoped %v, targets set %v", rt.op, rt.action, authz.Scoped(rt.action), rt.targets != nil)
 		}
@@ -540,7 +540,7 @@ func TestLoggedSubjectIsOneBoundedLine(t *testing.T) {
 // decision to make, so this test fails first.
 func TestNoRouteRunsOrRecordsAnEvaluation(t *testing.T) {
 	people := map[string]bool{"clear_premise_reason": true, "allow_premise_host": true, "list_premise_reasons": true, "list_premise_hosts": true}
-	for _, rt := range routes(nil, time.Now, nil) {
+	for _, rt := range routes(nil, time.Now, nil, "") {
 		named := strings.ToLower(rt.pattern + " " + rt.op)
 		for _, word := range []string{"probe", "evaluation", "notice"} {
 			if strings.Contains(named, word) {
