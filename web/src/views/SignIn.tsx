@@ -4,7 +4,7 @@ import { Button, Mascot } from '../brand';
 import { Loading } from '../components/Loading';
 import { Page } from '../components/Page';
 
-function providerLabel(id: string, kind: string): string {
+export function providerLabel(id: string, kind: string): string {
   return kind === 'github' ? 'GitHub' : id;
 }
 

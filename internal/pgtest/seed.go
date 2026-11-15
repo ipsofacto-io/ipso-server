@@ -138,6 +138,9 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 		INSERT INTO identity.session (tenant_id, login_id, token_sha256)
 		SELECT tenant_id, id, sha256(convert_to('seeded session', 'UTF8')) FROM identity.login`)
 	mustExec(`
+		INSERT INTO identity.invitation (tenant_id, token_sha256, name, role, created_by)
+		VALUES ($1::uuid, sha256(convert_to('seeded invitation', 'UTF8')), 'Invited', 'viewer', $2::uuid)`, tenant, person)
+	mustExec(`
 		INSERT INTO identity.action_log (tenant_id, principal_id, responsible_id, action, subject)
 		VALUES ($1::uuid, $2::uuid, $2::uuid, 'api.read', 'registry')`, tenant, person)
 	mustExec(`INSERT INTO llm.usage (tenant_id, month, tokens) VALUES ($1::uuid, '2026-01-01', 1)`, tenant)

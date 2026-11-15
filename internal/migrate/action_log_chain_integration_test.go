@@ -57,7 +57,8 @@ func TestTheMigrationChainsTheEntriesThatExist(t *testing.T) {
 	insert(tenantA, ada, "018f0000-0000-7000-8000-000000000004", 4*time.Second, "api.record_baseline", `fourth of A "quoted" é`)
 	insert(tenantB, bea, "018f0000-0000-7000-8000-000000000001", 1*time.Second, "api.create_scope", "first of B")
 
-	applied, err := migrate.Run(ctx, db.DSN(pgtest.Migrate))
+	// Up to 00034 and no further, so a later migration does not change what this test applies.
+	applied, err := migrate.RunUpTo(ctx, db.DSN(pgtest.Migrate), 34)
 	if err != nil || len(applied) != 1 || applied[0] != "00034_action_log_chain.sql" {
 		t.Fatalf("%v %v", applied, err)
 	}

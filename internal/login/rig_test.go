@@ -36,14 +36,47 @@ type fakeStore struct {
 	now      func() time.Time
 	logins   map[[2]string]string
 	sessions map[string]time.Time
+	// invitations are the hashes of the open invitations, as the database keeps them.
+	invitations map[string]bool
 
-	starts, lookups int
-	previous        []byte
-	err             error
+	starts, lookups, checks int
+	previous                []byte
+	err                     error
 }
 
 func newFakeStore(now func() time.Time) *fakeStore {
-	return &fakeStore{now: now, logins: map[[2]string]string{}, sessions: map[string]time.Time{}}
+	return &fakeStore{now: now, logins: map[[2]string]string{}, sessions: map[string]time.Time{}, invitations: map[string]bool{}}
+}
+
+// open makes an invitation with this token open.
+func (f *fakeStore) open(token string) {
+	hash, ok := identity.InvitationHash(token)
+	if !ok {
+		panic("a token that does not read")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.invitations[string(hash)] = true
+}
+
+func (f *fakeStore) isOpen(token string) bool {
+	hash, _ := identity.InvitationHash(token)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.invitations[string(hash)]
+}
+
+func (f *fakeStore) check(_ context.Context, invitation []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checks++
+	if f.err != nil {
+		return f.err
+	}
+	if !f.invitations[string(invitation)] {
+		return identity.ErrUnknownInvitation
+	}
+	return nil
 }
 
 func (f *fakeStore) bind(issuer, subject, kind string) {
@@ -52,7 +85,7 @@ func (f *fakeStore) bind(issuer, subject, kind string) {
 	f.logins[[2]string{issuer, subject}] = kind
 }
 
-func (f *fakeStore) start(_ context.Context, issuer, subject string, hash, previous []byte) (time.Time, error) {
+func (f *fakeStore) start(_ context.Context, issuer, subject string, hash, previous, invitation []byte) (time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.starts++
@@ -62,7 +95,15 @@ func (f *fakeStore) start(_ context.Context, issuer, subject string, hash, previ
 	}
 	switch f.logins[[2]string{issuer, subject}] {
 	case "":
-		return time.Time{}, identity.ErrUnknownLogin
+		if invitation == nil {
+			return time.Time{}, identity.ErrUnknownLogin
+		}
+		// The invitation is used, and the person it names is bound to this issuer and subject.
+		if !f.invitations[string(invitation)] {
+			return time.Time{}, identity.ErrUnknownInvitation
+		}
+		delete(f.invitations, string(invitation))
+		f.logins[[2]string{issuer, subject}] = identity.KindHuman
 	case identity.KindAgent:
 		return time.Time{}, identity.ErrNotHuman
 	}
@@ -257,6 +298,47 @@ func (r *rig) start(provider string, cookies ...*http.Cookie) (*httptest.Respons
 	return rec, got
 }
 
+// invite posts the token of an invitation the way the page of the web app does.
+func (r *rig) invite(provider, body string, headers map[string]string) *httptest.ResponseRecorder {
+	r.t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/auth/invitation/"+provider, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	rec := httptest.NewRecorder()
+	r.handler.ServeHTTP(rec, req)
+	return rec
+}
+
+// invited is a sign-in that began with an invitation, as the browser holds it.
+func (r *rig) invited(token string) attemptOf {
+	r.t.Helper()
+	rec := r.invite("fake", `{"token":"`+token+`"}`, nil)
+	if rec.Code != http.StatusOK {
+		r.t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	var answer map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil {
+		r.t.Fatal(err)
+	}
+	var got attemptOf
+	got.cookie = cookieNamed(rec.Result().Cookies(), attemptCookieName)
+	loc, err := url.Parse(answer["location"])
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	got.location = loc
+	got.state = loc.Query().Get("state")
+	got.nonce = loc.Query().Get("nonce")
+	r.mu.Lock()
+	r.challenge = loc.Query().Get("code_challenge")
+	r.lastNonce = got.nonce
+	r.mu.Unlock()
+	return got
+}
+
 func (r *rig) callback(provider string, a attemptOf, query url.Values, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	r.t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/auth/callback/"+provider+"?"+query.Encode(), nil)
@@ -294,3 +376,10 @@ func bodyCode(t *testing.T, rec *httptest.ResponseRecorder) map[string]string {
 }
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
+
+// newRecorder serves a request that the helpers above do not build.
+func newRecorder(r *rig, req *http.Request) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	r.handler.ServeHTTP(rec, req)
+	return rec
+}

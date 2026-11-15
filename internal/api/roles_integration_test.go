@@ -59,8 +59,9 @@ func TestEveryOperationAsksTheRoleOfTheCaller(t *testing.T) {
 	operations := f.operations(t)
 	// The writes are called in writes_integration_test.go, each as every role.
 	// The export routes are called in exports_integration_test.go, as every role.
-	if len(operations)+len(writeOps)+len(exportOps) != len(mayCall) {
-		t.Fatalf("%d operations here, %d writes and %d export reads, %d in the matrix", len(operations), len(writeOps), len(exportOps), len(mayCall))
+	// The invitation routes are called in invitations_integration_test.go, as every role.
+	if len(operations)+len(writeOps)+len(exportOps)+len(invitationOps) != len(mayCall) {
+		t.Fatalf("%d operations here, %d writes, %d export reads and %d invitation reads, %d in the matrix", len(operations), len(writeOps), len(exportOps), len(invitationOps), len(mayCall))
 	}
 	contentType := func(o operation) string {
 		if o.body != nil {

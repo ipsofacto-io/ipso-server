@@ -16,6 +16,7 @@ import { DecisionDetailView } from './views/DecisionDetail';
 import { DecisionsView } from './views/Decisions';
 import { ExportView } from './views/Export';
 import { InboxView } from './views/Inbox';
+import { InvitationView } from './views/Invitation';
 import { PremisesView } from './views/Premises';
 import { RecordBaselineView } from './views/RecordBaseline';
 import { RecordSupersessionView } from './views/RecordSupersession';
@@ -55,6 +56,7 @@ export function AppRoutes() {
         <Route path="audit/supersessions" element={<AuditSupersessionsView />} />
         <Route path="audit/waivers" element={<AuditWaiversView />} />
         <Route path="signin" element={<SignInView />} />
+        <Route path="invitation" element={<InvitationView />} />
         <Route path="*" element={<NotFoundView />} />
       </Route>
     </Routes>

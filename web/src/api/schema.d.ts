@@ -513,6 +513,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/invitations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the invitations that are still open.
+         * @description Only an admin who is a person takes it (ADR-0108, ADR-0127). An invitation that was used, was revoked or has expired is not listed. The answer never holds a token or a hash.
+         */
+        get: operations["list_invitations"];
+        put?: never;
+        /**
+         * Invite a person by name and role, and get the link to hand to them.
+         * @description Only an admin who is a person takes it (ADR-0108, ADR-0127), so an agent receives 403. The answer holds the link once: the server keeps only the SHA-256 of the token, so a lost link cannot be read again and is revoked and made anew. The token is in the fragment of the link, so no server or proxy that carries the link sees it. An invitation lasts seven days, is used once, and belongs to this tenant. The person opens the link, signs in with an identity provider of this server, and that first sign-in binds their issuer and subject to a new principal with the name and the one role given, over the whole tenant. The role is one a person may hold, so `agent` is 400, and a name a principal could not have is 400. A tenant holds at most 1000 open invitations, and more is 409. It is 409 as well when browser sign-in is not configured, because no one could use the link. The request is logged with the person's id, the id of the invitation and its role, and never the name or the token.
+         */
+        post: operations["create_invitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/invitations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke an open invitation, so its link stops working.
+         * @description Only an admin who is a person takes it (ADR-0108, ADR-0127). An invitation that was used, was already revoked or has expired is 404, and so is an id the tenant does not have. The request is logged with the person's id and the id of the invitation.
+         */
+        delete: operations["revoke_invitation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/exports": {
         parameters: {
             query?: never;
@@ -990,6 +1034,57 @@ export interface components {
             bytes: number | null;
             /** @description The SHA-256 of the archive in lowercase hexadecimal, set when the export is ready. */
             sha256: string | null;
+        };
+        InvitationRequest: {
+            /** @description The name of the new person. It has no control character and no space at either end, and it is all the server knows of them, because it keeps no email address (ADR-0093). */
+            name: string;
+            /**
+             * @description The one role the person is bound to, over the whole tenant. Roles on a scope are changed afterwards (ADR-0108).
+             * @enum {string}
+             */
+            role: "viewer" | "contributor" | "decision-owner" | "approver" | "admin" | "auditor";
+        };
+        Invitation: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @enum {string} */
+            role: "viewer" | "contributor" | "decision-owner" | "approver" | "admin" | "auditor";
+            /**
+             * Format: uuid
+             * @description The admin who made it.
+             */
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Seven days after it was made. After this the link is refused and the row is deleted.
+             */
+            expires_at: string;
+        };
+        InvitationCreated: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @enum {string} */
+            role: "viewer" | "contributor" | "decision-owner" | "approver" | "admin" | "auditor";
+            /** Format: uuid */
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** @description 32 random bytes as unpadded base64url. It is shown once, it is a credential until the invitation is used or expires, and the server never logs it. */
+            token: string;
+            /**
+             * Format: uri
+             * @description The link to hand to the person, the public origin of this server and `/invitation#` and the token. The token is in the fragment, so a browser never sends it in a request.
+             */
+            url: string;
+        };
+        InvitationPage: {
+            invitations: components["schemas"]["Invitation"][];
         };
         /** @description One line of the audit log route, and exactly what its hash covers (ADR-0126). */
         AuditLogLine: {
@@ -2367,6 +2462,96 @@ export interface operations {
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Unavailable"];
+        };
+    };
+    list_invitations: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                /** @description The last id of the previous page. */
+                before?: components["parameters"]["Before"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the open invitations, by id from the highest. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationPage"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    create_invitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvitationRequest"];
+            };
+        };
+        responses: {
+            /** @description The invitation was stored. The token is in this answer and nowhere else. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationCreated"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    revoke_invitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The invitation was revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
         };
     };
     start_export: {

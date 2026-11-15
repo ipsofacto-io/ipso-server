@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import { ids, scopes } from './data.ts';
-import { EXPORT_BYTES, EXPORT_SHA256, newFixtureState, respond, SESSION_COOKIE, type FixtureRequest } from './server.ts';
+import { EXPORT_BYTES, EXPORT_SHA256, newFixtureState, OPEN_INVITATION, respond, SESSION_COOKIE, type FixtureRequest } from './server.ts';
 
 const NOW = new Date('2026-11-07T12:00:00Z');
 const cookie = `${SESSION_COOKIE}=1`;
@@ -372,5 +372,31 @@ describe('the verdict list of the fixtures server', () => {
       else expect(verdict.waiver?.expires_at).toBeNull();
     }
     expect(verdicts.filter((verdict) => verdict.waiver?.result === 'waived')).toHaveLength(2);
+  });
+});
+
+describe('the invitation start of the fixtures server (ADR-0127)', () => {
+  const start = (provider: string, body: unknown, extra: Partial<FixtureRequest> = {}) =>
+    respond({ method: 'POST', url: `/auth/invitation/${provider}`, cookie: '', contentType: 'application/json', body: JSON.stringify(body), ...extra }, NOW, newFixtureState());
+
+  it('needs no session and sends a person with the open token to the stand-in sign-in', () => {
+    const reply = start('dex', { token: OPEN_INVITATION });
+    expect(reply.status).toBe(200);
+    expect(reply.body).toEqual({ location: '/auth/login/dex' });
+  });
+
+  it('answers every other token the same, whether it is made up, malformed or missing', () => {
+    for (const token of ['x'.repeat(43), 'short', '', `${'o'.repeat(42)}=`, 42, null]) {
+      const reply = start('dex', { token });
+      expect([reply.status, reply.body]).toEqual([403, { error: 'unknown_invitation' }]);
+    }
+  });
+
+  it('wants a JSON body that holds the token and nothing else, and a provider it lists', () => {
+    expect(start('dex', { token: OPEN_INVITATION, tenant: 'x' }).status).toBe(400);
+    expect(start('dex', { token: OPEN_INVITATION }, { contentType: 'text/plain' }).status).toBe(415);
+    expect(start('dex', { token: OPEN_INVITATION }, { body: '{no' }).status).toBe(400);
+    expect(start('nobody', { token: OPEN_INVITATION }).status).toBe(404);
+    expect(respond({ method: 'GET', url: '/auth/invitation/dex', cookie: '' }, NOW, newFixtureState()).status).toBe(405);
   });
 });

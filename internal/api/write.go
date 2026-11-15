@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
@@ -102,8 +103,14 @@ func writeStoreError(w http.ResponseWriter, log *slog.Logger, op string, err err
 	case errors.Is(err, registry.ErrInvalidQuery):
 		writeError(w, http.StatusBadRequest, errInvalidQuery)
 		return
-	case errors.Is(err, registry.ErrNotFound):
+	case errors.Is(err, registry.ErrNotFound), errors.Is(err, identity.ErrUnknownInvitation):
 		writeError(w, http.StatusNotFound, errNotFound)
+		return
+	case errors.Is(err, identity.ErrInvalidInvitation):
+		writeError(w, http.StatusBadRequest, errInvalidQuery)
+		return
+	case errors.Is(err, identity.ErrTooManyInvitations):
+		writeError(w, http.StatusConflict, errConflict)
 		return
 	case errors.Is(err, registry.ErrBodyTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, errTooLarge)

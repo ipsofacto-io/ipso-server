@@ -74,7 +74,7 @@ func TestThePolicyLetsNothingInlineOrForeignRun(t *testing.T) {
 
 func TestEveryViewIsThePageAndIsNotCached(t *testing.T) {
 	h := newHandler(t)
-	for _, target := range []string{"/", "/index.html", "/decisions", "/decisions/use-postgresql", "/decisions/v1.2", "/audit/merges", "/inbox/", "/signin"} {
+	for _, target := range []string{"/", "/index.html", "/decisions", "/decisions/use-postgresql", "/decisions/v1.2", "/audit/merges", "/inbox/", "/signin", "/invitation"} {
 		rec := serve(t, h, http.MethodGet, target)
 		if rec.Code != http.StatusOK || rec.Body.String() != page {
 			t.Errorf("%s = %d %q", target, rec.Code, rec.Body.String())

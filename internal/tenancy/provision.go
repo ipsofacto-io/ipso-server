@@ -19,7 +19,7 @@ var (
 
 // Person is the first person of a tenant and the login that binds an identity provider's subject to them
 // (ADR-0093). The first person is the tenant's admin, so someone can grant the other roles (ADR-0108).
-// Later people are bound by IPSO-137.
+// Later people are invited by an admin (ADR-0127).
 type Person struct {
 	ID      uuid.UUID
 	Name    string

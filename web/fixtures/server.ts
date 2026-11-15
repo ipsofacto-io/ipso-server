@@ -60,6 +60,11 @@ export interface FixtureReply {
 
 export const SESSION_COOKIE = 'fixtures-session';
 
+/** The one invitation token that is open in the fixtures: 43 characters of unpadded base64url, like a real one. */
+export const OPEN_INVITATION = 'o'.repeat(43);
+const TOKEN = /^[A-Za-z0-9_-]{43}$/;
+const PROVIDERS = ['dex', 'github'];
+
 const json = (status: number, body: unknown, headers: Record<string, string> = {}): FixtureReply => ({ status, headers, body });
 const error = (status: number, code: string, headers: Record<string, string> = {}): FixtureReply => json(status, { error: code }, headers);
 
@@ -331,6 +336,20 @@ export function respond(request: FixtureRequest, now: Date = new Date(), state: 
   }
   if (path === '/auth/logout' && request.method === 'POST') {
     return { status: 204, headers: { 'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Max-Age=0` } };
+  }
+  // The start of a sign-in with an invitation (ADR-0127). Like the server, it needs no session, it asks for the token in a
+  // JSON body, and every token that is not open is one answer. The location is the stand-in sign-in of the fixtures.
+  const invitation = /^\/auth\/invitation\/([^/]+)$/.exec(path);
+  if (invitation) {
+    if (request.method !== 'POST') return error(405, 'method_not_allowed', { Allow: 'POST' });
+    const provider = decodeURIComponent(invitation[1] ?? '');
+    if (!PROVIDERS.includes(provider)) return error(404, 'not_found');
+    const parsed = parse(request, ['token']);
+    // The sign-in answers a request it cannot read with its own code, and 400 for a body over the cap.
+    if (!parsed.ok) return error(parsed.reply.status === 413 ? 400 : parsed.reply.status, 'invalid_request');
+    const { token } = parsed.fields;
+    if (typeof token !== 'string' || !TOKEN.test(token) || token !== OPEN_INVITATION) return error(403, 'unknown_invitation');
+    return json(200, { location: `/auth/login/${provider}` });
   }
   if (!path.startsWith('/v1/')) return error(404, 'not found');
   if (!signedIn) return error(401, 'unauthorized', { 'WWW-Authenticate': 'Bearer realm="ipso"' });

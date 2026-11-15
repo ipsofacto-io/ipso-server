@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
+	"mime"
 	"net/http"
 
 	"golang.org/x/oauth2"
@@ -19,26 +21,35 @@ import (
 const (
 	codeInvalidLogin = "invalid_login"
 	codeLoginRefused = "login_refused"
-	codeUnknownLogin = "unknown_login"
-	codeForbidden    = "forbidden"
-	codeRateLimited  = "rate_limited"
-	codeNotFound     = "not_found"
-	codeMethod       = "method_not_allowed"
-	codeInternal     = "internal"
+	// codeInvalidRequest is the answer to a request to start an invitation that is not one: another content type, a body
+	// that is not the one JSON object, a field it does not name, or one over the cap.
+	codeInvalidRequest = "invalid_request"
+	codeUnknownLogin   = "unknown_login"
+	// codeUnknownInvitation is the answer to a token the tenant holds no open invitation for: one it never made,
+	// one that was used or revoked, one that expired, and a string that is not a token (ADR-0127).
+	codeUnknownInvitation = "unknown_invitation"
+	codeForbidden         = "forbidden"
+	codeRateLimited       = "rate_limited"
+	codeNotFound          = "not_found"
+	codeMethod            = "method_not_allowed"
+	codeInternal          = "internal"
 
 	// maxState and maxCode bound what a callback may carry before anything reads it.
 	maxState = 256
 	maxCode  = 4096
+	// maxInvitationBody bounds the body of POST /auth/invitation/{provider}, which holds one 43 character token.
+	maxInvitationBody = 1024
 )
 
 // Handler serves GET /auth/providers, /auth/login/{provider}, /auth/callback/{provider}, and POST
-// /auth/logout. Every answer
+// /auth/invitation/{provider} and /auth/logout. Every answer
 // carries no-store and no-referrer: a callback URL holds a one-time code, and none of it should be
 // cached or sent on.
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/auth/providers", s.providerList)
 	mux.HandleFunc("/auth/login/{provider}", s.start)
+	mux.HandleFunc("/auth/invitation/{provider}", s.invite)
 	mux.HandleFunc("/auth/callback/{provider}", s.callback)
 	mux.HandleFunc("/auth/logout", s.logout)
 	mux.HandleFunc("/auth/", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusNotFound, codeNotFound) })
@@ -89,25 +100,106 @@ func (s *Service) start(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, codeNotFound)
 		return
 	}
+	location, ok := s.begin(w, r, id, p, "")
+	if !ok {
+		return
+	}
+	w.Header().Set("Location", location)
+	w.WriteHeader(http.StatusSeeOther)
+}
+
+// begin makes the state, nonce and PKCE challenge of one sign-in, keeps what it must remember in the attempt
+// cookie, and returns the address of the provider to send the browser to. invitation is the token of an
+// invitation the person came with, or empty. It writes the 500 itself when it cannot.
+func (s *Service) begin(w http.ResponseWriter, r *http.Request, id string, p provider, invitation string) (string, bool) {
 	state, err := randomText(32)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, codeInternal)
-		return
+		return "", false
 	}
 	nonce, err := randomText(32)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, codeInternal)
-		return
+		return "", false
 	}
 	verifier := oauth2.GenerateVerifier()
-	begun := attempt{Provider: id, State: state, Nonce: nonce, Verifier: verifier}
+	begun := attempt{Provider: id, State: state, Nonce: nonce, Verifier: verifier, Invitation: invitation}
 	// This request comes from a page of this site, so a session the browser holds is sent with it.
 	if held, err := authn.SessionToken(r); err == nil {
 		begun.Previous = base64.RawURLEncoding.EncodeToString(authn.SessionHash(held))
 	}
 	http.SetCookie(w, begun.cookie())
-	w.Header().Set("Location", p.authorizeURL(s.redirectURI(id), state, nonce, verifier))
-	w.WriteHeader(http.StatusSeeOther)
+	return p.authorizeURL(s.redirectURI(id), state, nonce, verifier), true
+}
+
+// invitationRequest is the body of POST /auth/invitation/{provider}.
+type invitationRequest struct {
+	Token string `json:"token"`
+}
+
+// invite starts a sign-in that carries an invitation (ADR-0127). The link an admin hands out holds the token in
+// its fragment, so no server or proxy sees it, and the page of the web app posts it here. It is a POST so the
+// token is never in a URL a log keeps, and a request from another site is refused before anything is read. It
+// answers where to send the browser, and not a redirect, because the policy of the app lets a form post only
+// to its own origin. A token the tenant holds no open invitation for is 403 and sets no cookie, so a link that
+// is used or has expired fails at once and not after a round trip to the provider. The attempt cookie keeps the
+// token for the callback, which is where the invitation is used.
+func (s *Service) invite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	if err := s.check.Check(r); err != nil {
+		writeJSON(w, http.StatusForbidden, codeForbidden)
+		return
+	}
+	id := r.PathValue("provider")
+	p, ok := s.providers[id]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, codeNotFound)
+		return
+	}
+	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
+		writeJSON(w, http.StatusUnsupportedMediaType, codeInvalidRequest)
+		return
+	}
+	var req invitationRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxInvitationBody))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, codeInvalidRequest)
+		return
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, codeInvalidRequest)
+		return
+	}
+	if wait, ok := s.invitations.Allow(s.tenant, s.now()); !ok {
+		w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
+		writeJSON(w, http.StatusTooManyRequests, codeRateLimited)
+		return
+	}
+	hash, ok := identity.InvitationHash(req.Token)
+	if !ok {
+		writeJSON(w, http.StatusForbidden, codeUnknownInvitation)
+		return
+	}
+	switch err := s.store.check(r.Context(), hash); {
+	case errors.Is(err, identity.ErrUnknownInvitation):
+		s.log.Info("an invitation link named an invitation the tenant holds no open one for", "provider", id)
+		writeJSON(w, http.StatusForbidden, codeUnknownInvitation)
+		return
+	case err != nil:
+		s.log.Warn("an invitation could not be read", "provider", id)
+		writeJSON(w, http.StatusInternalServerError, codeInternal)
+		return
+	}
+	location, ok := s.begin(w, r, id, p, req.Token)
+	if !ok {
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"location": location})
 }
 
 // callback finishes a sign-in. The checks that cost nothing come first, in the order that reveals
@@ -185,13 +277,26 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	previous := previousSession(r, a)
+	var invitation []byte
+	if a.Invitation != "" {
+		// Only this server sets the cookie, so a token that does not read is a defect, and no sign-in goes on.
+		if invitation, ok = identity.InvitationHash(a.Invitation); !ok {
+			refuse("invitation")
+			return
+		}
+	}
 	token, err := authn.NewSessionToken()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, codeInternal)
 		return
 	}
-	expires, err := s.store.start(ctx, who.issuer, who.subject, authn.SessionHash(token), previous)
+	expires, err := s.store.start(ctx, who.issuer, who.subject, authn.SessionHash(token), previous, invitation)
 	switch {
+	case errors.Is(err, identity.ErrUnknownInvitation):
+		// Nothing is written. The token is neither logged nor answered.
+		s.log.Info("a sign-in carried an invitation the tenant holds no open one for", "provider", id)
+		writeJSON(w, http.StatusForbidden, codeUnknownInvitation)
+		return
 	case errors.Is(err, identity.ErrUnknownLogin):
 		// The person gets the two values an operator binds, and nothing is written. The subject is
 		// theirs to see and is not logged.
