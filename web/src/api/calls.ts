@@ -24,6 +24,9 @@ import type {
   InvitationPage,
   InvitationRequest,
   InvitationStart,
+  RoleBinding,
+  RoleBindingPage,
+  RoleBindingRequest,
   PremiseHost,
   PremiseHostRequest,
   PremiseReason,
@@ -111,6 +114,11 @@ export function makeCalls(api: Api) {
     /** The answer holds the link once: the server keeps only the hash of the token, so it can never show it again. */
     createInvitation: (request: InvitationRequest, signal?: AbortSignal) => api.postJSON<InvitationCreated>('/v1/invitations', request, signal),
     revokeInvitation: (id: string, signal?: AbortSignal) => api.delete(`/v1/invitations/${encodeURIComponent(id)}`, signal),
+    /** The role bindings of the tenant, newest first. A null scope covers the whole tenant. Only an admin who is a person may read them (ADR-0128). */
+    listRoleBindings: (q: Paging = {}, signal?: AbortSignal) => api.getJSON<RoleBindingPage>('/v1/role-bindings', q, signal),
+    /** Grants one role. A binding is never updated: change a role by granting the new one and revoking the old one. */
+    grantRoleBinding: (request: RoleBindingRequest, signal?: AbortSignal) => api.postJSON<RoleBinding>('/v1/role-bindings', request, signal),
+    revokeRoleBinding: (id: string, signal?: AbortSignal) => api.delete(`/v1/role-bindings/${encodeURIComponent(id)}`, signal),
     providers: (signal?: AbortSignal) => api.getJSON<{ providers: ProviderInfo[] }>('/auth/providers', {}, signal),
     /**
      * Starts the sign-in of a person who came with an invitation and answers where to send the browser (ADR-0127). The

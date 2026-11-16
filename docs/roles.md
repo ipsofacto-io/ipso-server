@@ -16,7 +16,7 @@ A principal holds a role through a row of `identity.role_binding`. A principal w
 | `auditor` | yes | yes | | | | | |
 | `agent` | yes | | yes | | | | |
 
-The write routes of the table are served ([ADR-0109](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0109-control-plane-write-routes.md), and [ADR-0116](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0116-check-proposal-approval.md) for a drafted check), and the invitation routes ([ADR-0127](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0127-invitations.md)) for the people an admin adds, apart from changing and revoking the role of a person, which comes with IPSO-147, and so is the export ([ADR-0111]({adr})). The five `GET /v1/audit/*` routes and `GET /v1/audit-log` need `auditor` or `admin`. Every other read, and the MCP tools, need any role. Proposing over MCP needs `contributor`, `decision-owner`, `approver` or `agent`.
+The write routes of the table are served ([ADR-0109](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0109-control-plane-write-routes.md), and [ADR-0116](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0116-check-proposal-approval.md) for a drafted check), the invitation routes ([ADR-0127](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0127-invitations.md)) for the people an admin adds, and the role binding routes ([ADR-0128](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0128-role-bindings.md)) for changing and revoking a role. The export is [ADR-0111](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0111-tenant-export-through-the-api.md). The five `GET /v1/audit/*` routes and `GET /v1/audit-log` need `auditor` or `admin`. Every other read, and the MCP tools, need any role. Proposing over MCP needs `contributor`, `decision-owner`, `approver` or `agent`.
 
 An admin manages people and structure and does not approve or waive, so the person who grants a role is not the person who approves a decision.
 
@@ -76,7 +76,7 @@ Only an `admin` who is a person takes the action `principal.manage` ([ADR-0127](
 | `GET /v1/invitations` | `principal.manage` | admin |
 | `DELETE /v1/invitations/{id}` | `principal.manage` | admin |
 
-An invitation names the person and one role the person may hold, so never `agent`, over the whole tenant. A person who signs in with it is bound to that role, and a role on a scope is bound afterwards. Creating and revoking one is logged with the admin's id, and using one is logged with the new person's id: the subject holds the id of the invitation and its role and never the name or the token. How an invitation is made and used is in [docs/login.md](login.md#invite-a-person).
+An invitation names the person and one role the person may hold, so never `agent`, over the whole tenant. A person who signs in with it is bound to that role, and a role on a scope is bound afterwards ([below](#bind-and-revoke)). Creating and revoking one is logged with the admin's id, and using one is logged with the new person's id: the subject holds the id of the invitation and its role and never the name or the token. How an invitation is made and used is in [docs/login.md](login.md#invite-a-person).
 
 ## The audit log route
 
@@ -88,23 +88,18 @@ The action is the one of the five audit questions, so the same two roles hold it
 
 ## Bind and revoke
 
-`ipso-server tenant create --person …` binds the first person of a tenant as `admin` ([docs/tenants.md](tenants.md)). A person is added with an invitation ([docs/login.md](login.md#invite-a-person)), and until IPSO-147 adds the routes, an operator changes the role of a person and revokes one with SQL as the application role:
+`ipso-server tenant create --person …` binds the first person of a tenant as `admin` ([docs/tenants.md](tenants.md)). A person is added with an invitation ([docs/login.md](login.md#invite-a-person)). An admin changes the roles of a person or an agent through the API ([ADR-0128](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0128-role-bindings.md)).
 
-```sql
-BEGIN;
-SELECT set_config('ipso.tenant', '<tenant id>', true);
--- A role over the whole tenant.
-INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ('<tenant id>', '<principal id>', 'viewer');
--- A role on one scope and every scope below it.
-INSERT INTO identity.role_binding (tenant_id, principal_id, role, scope_id) VALUES ('<tenant id>', '<principal id>', 'approver', '<scope id>');
-COMMIT;
-```
+Only an `admin` who is a person takes these routes. The action is `principal.manage`, the same one as the invitations, so it is tenant-wide and an agent is refused with the same plain 403. A refusal stores nothing and logs nothing.
 
-```sql
-BEGIN;
-SELECT set_config('ipso.tenant', '<tenant id>', true);
-DELETE FROM identity.role_binding WHERE principal_id = '<principal id>' AND role = 'approver';
-COMMIT;
-```
+| Route | Action | Roles |
+| --- | --- | --- |
+| `POST /v1/role-bindings` | `principal.manage` | admin |
+| `GET /v1/role-bindings` | `principal.manage` | admin |
+| `DELETE /v1/role-bindings/{id}` | `principal.manage` | admin |
 
-A binding is never updated: change a role by removing one binding and adding another. The server reads the bindings on every request, so a change applies to the next call.
+A grant names the principal and one role, and a scope when the role may be bound to one. Omit the scope to cover the whole tenant. A principal or a scope of another tenant is 404. A role the principal's kind cannot hold, a scope on a `viewer`, an `auditor` or an `admin`, an unknown role, and a binding the tenant already has are a client error and store nothing. A binding is never updated: change a role by granting the new one and revoking the old one. The server reads the bindings on every request, so a change applies to the next call.
+
+A revoke of the only admin is 409 and the binding stays, so the API cannot leave a tenant with nobody who can grant a role. Grant `admin` to someone else first, and then revoke. `tenant create` binds an admin again when a tenant has none. Each grant and each revoke is logged with the admin's id. The subject names the principal, the binding, the role and the scope, and never a name.
+
+The application role can still insert and delete a binding with SQL. That path does not refuse to remove the last admin. The API is the one that does.

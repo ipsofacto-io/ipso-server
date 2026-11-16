@@ -144,7 +144,8 @@ func ensureKey(ctx context.Context, tx *sql.Tx, o ProvisionOptions) (bool, error
 // bindPerson inserts the person, the login and the person's admin binding, and reports whether it wrote
 // any of them. The admin binding is written only while the tenant has no admin, so a repeat writes
 // nothing, a revoke of this person is kept while another admin exists, and a tenant left with no admin
-// gets one again from create, the one way back in until IPSO-147.
+// gets one again from create. The API refuses to remove the last admin (ADR-0128), and create
+// remains the way back when a tenant has none.
 func bindPerson(ctx context.Context, tx *sql.Tx, tenant uuid.UUID, p Person) (bool, error) {
 	if p.ID == uuid.Nil || p.Name == "" || p.Issuer == "" || p.Subject == "" {
 		return false, errors.New("provision: a person needs an id, a name, an issuer and a subject")

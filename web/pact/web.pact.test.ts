@@ -1299,3 +1299,123 @@ describe('the premises page of the web app', () => {
     );
   });
 });
+
+// The role bindings (IPSO-147, ADR-0128). There is no roles screen. The pact covers the three routes the way the web
+// app covers every route: the methods of calls.ts play them. A list of one row is a tenant-wide binding, so scope_id
+// is null. A grant and a revoke name the row the provider state seeded.
+const ONE_BINDING = 'tenant A holds one role binding, and the session belongs to an admin';
+const GRANT_BINDING = 'tenant A holds a person with no such binding, and the session belongs to an admin';
+const REVOKE_BINDING = 'tenant A holds a role binding that can be revoked, and the session belongs to an admin';
+const LAST_ADMIN = 'tenant A holds one admin, and the session belongs to an admin';
+const ADMIN = 'the session belongs to an admin of tenant A';
+const PRINCIPAL = '0194f2a0-0000-7000-8000-000000000c01';
+const BINDING = '0194f2a0-0000-7000-8000-000000000c02';
+const NO_SUCH_BINDING = '0194f2a0-0000-7000-8000-000000000cff';
+const BINDING_ROLE = regex('^(viewer|contributor|decision-owner|approver|admin|auditor|agent)$', 'viewer');
+const roleBinding = {
+  id: uuid(),
+  principal_id: uuid(),
+  role: BINDING_ROLE,
+  scope_id: nullValue(),
+};
+const bindingPath = fromProviderState('/v1/role-bindings/${bindingId}', `/v1/role-bindings/${BINDING}`);
+
+describe('the role bindings of the web app', () => {
+  it('lists the role bindings, a tenant-wide one with a null scope', async () => {
+    await interact(
+      {
+        description: 'a request for the role bindings',
+        state: ONE_BINDING,
+        path: '/v1/role-bindings',
+        query: { limit: '1' },
+        status: 200,
+        body: { role_bindings: eachLike(roleBinding) },
+      },
+      async (calls) => {
+        const page = await calls.listRoleBindings({ limit: 1 });
+        expect(page.role_bindings[0]).toMatchObject({ role: 'viewer', scope_id: null });
+      },
+    );
+  });
+
+  it('is refused the role bindings by the role policy for a viewer', async () => {
+    await interact(
+      {
+        description: 'a request for one role binding from a viewer',
+        state: VIEWER,
+        path: '/v1/role-bindings',
+        query: { limit: '1' },
+        status: 403,
+        body: { error: 'forbidden' },
+      },
+      async (calls) => {
+        await expect(calls.listRoleBindings({ limit: 1 })).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+      },
+    );
+  });
+
+  it('grants a role over the whole tenant', async () => {
+    await interact(
+      {
+        description: 'a request to grant a role',
+        state: GRANT_BINDING,
+        method: 'POST',
+        path: '/v1/role-bindings',
+        requestBody: { principal_id: fromProviderState('${principalId}', PRINCIPAL), role: 'viewer' },
+        status: 201,
+        body: roleBinding,
+      },
+      async (calls) => {
+        const made = await calls.grantRoleBinding({ principal_id: PRINCIPAL, role: 'viewer' });
+        expect(made).toMatchObject({ role: 'viewer', scope_id: null });
+      },
+    );
+  });
+
+  it('revokes a role binding', async () => {
+    await interact(
+      {
+        description: 'a request to revoke a role binding',
+        state: REVOKE_BINDING,
+        method: 'DELETE',
+        path: bindingPath,
+        status: 204,
+      },
+      async (calls) => {
+        await expect(calls.revokeRoleBinding(BINDING)).resolves.toBeUndefined();
+      },
+    );
+  });
+
+  it('refuses to revoke the only admin', async () => {
+    await interact(
+      {
+        description: 'a request to revoke the only admin',
+        state: LAST_ADMIN,
+        method: 'DELETE',
+        path: bindingPath,
+        status: 409,
+        body: { error: 'conflict' },
+      },
+      async (calls) => {
+        await expect(calls.revokeRoleBinding(BINDING)).rejects.toMatchObject({ status: 409, code: 'conflict' });
+      },
+    );
+  });
+
+  it('reads a role binding that is gone as a 404', async () => {
+    await interact(
+      {
+        description: 'a request to revoke a role binding that does not exist',
+        state: ADMIN,
+        method: 'DELETE',
+        path: `/v1/role-bindings/${NO_SUCH_BINDING}`,
+        status: 404,
+        body: { error: 'not found' },
+      },
+      async (calls) => {
+        await expect(calls.revokeRoleBinding(NO_SUCH_BINDING)).rejects.toMatchObject({ status: 404, code: 'not found' });
+      },
+    );
+  });
+});

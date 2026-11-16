@@ -557,6 +557,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/role-bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the role bindings of the tenant.
+         * @description Only an admin who is a person takes it (ADR-0108, ADR-0128). The answer is every binding of this tenant, by id from the highest. `scope_id` is null when the binding covers the whole tenant.
+         */
+        get: operations["list_role_bindings"];
+        put?: never;
+        /**
+         * Grant one role to a principal, over the whole tenant or over one scope.
+         * @description Only an admin who is a person takes it (ADR-0108, ADR-0128), so an agent receives 403. The binding names a principal of this tenant and, when `scope_id` is set, a scope of this tenant. A missing principal or scope is 404. A role the principal's kind cannot hold, a scope on `viewer`, `auditor` or `admin`, an unknown role and a binding this tenant already has are a client error, 400 or 409, and store nothing. The answer never carries the text of a database error. The request is logged with the admin's id. The subject names the principal, the binding, the role and the scope, and never a name. A binding is never updated: change a role by granting the new one and revoking the old one.
+         */
+        post: operations["grant_role_binding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/role-bindings/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke one role binding.
+         * @description Only an admin who is a person takes it (ADR-0108, ADR-0128). An id this tenant does not have is 404. A revoke that would leave the tenant with no admin is 409, and the binding stays. The request is logged with the admin's id. The subject names the principal, the binding, the role and the scope, and never a name.
+         */
+        delete: operations["revoke_role_binding"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/exports": {
         parameters: {
             query?: never;
@@ -1085,6 +1129,39 @@ export interface components {
         };
         InvitationPage: {
             invitations: components["schemas"]["Invitation"][];
+        };
+        RoleBindingRequest: {
+            /**
+             * Format: uuid
+             * @description The person or agent this tenant already holds. A principal of another tenant is 404.
+             */
+            principal_id: string;
+            /**
+             * @description One of the seven roles. An agent holds only `agent`, and a person never holds it.
+             * @enum {string}
+             */
+            role: "viewer" | "contributor" | "decision-owner" | "approver" | "admin" | "auditor" | "agent";
+            /**
+             * Format: uuid
+             * @description The scope the binding covers, and every scope below it. Omit it to cover the whole tenant. Only `contributor`, `decision-owner`, `approver` and `agent` may name a scope.
+             */
+            scope_id?: string;
+        };
+        RoleBinding: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            principal_id: string;
+            /** @enum {string} */
+            role: "viewer" | "contributor" | "decision-owner" | "approver" | "admin" | "auditor" | "agent";
+            /**
+             * Format: uuid
+             * @description The scope the binding covers, and every scope below it. Null covers the whole tenant.
+             */
+            scope_id: string | null;
+        };
+        RoleBindingPage: {
+            role_bindings: components["schemas"]["RoleBinding"][];
         };
         /** @description One line of the audit log route, and exactly what its hash covers (ADR-0126). */
         AuditLogLine: {
@@ -2549,6 +2626,98 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    list_role_bindings: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                /** @description The last id of the previous page. */
+                before?: components["parameters"]["Before"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the role bindings, by id from the highest. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleBindingPage"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    grant_role_binding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleBindingRequest"];
+            };
+        };
+        responses: {
+            /** @description The binding was stored. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleBinding"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    revoke_role_binding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The binding was revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Timeout"];

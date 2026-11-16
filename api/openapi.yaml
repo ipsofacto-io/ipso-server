@@ -7,7 +7,7 @@ info:
     The routes that write (ADR-0109) are actions only a person takes: each asks the role policy, which must cover
     every scope the request names, and an agent gets 403. A waiver and an approval take the approver from the
     session or the token and never from the body, and each write is logged with the principal in the same
-    transaction. A repeat, and a change the registry refuses because of what it already holds, is 409. The three export routes (ADR-0111) let an admin ask for the export of the tenant and download it. The three invitation routes (ADR-0127) let an admin invite a person, list the open invitations and revoke one. The one
+    transaction. A repeat, and a change the registry refuses because of what it already holds, is 409. The three export routes (ADR-0111) let an admin ask for the export of the tenant and download it. The three invitation routes (ADR-0127) let an admin invite a person, list the open invitations and revoke one. The three role binding routes (ADR-0128) let an admin list, grant and revoke the roles of the tenant's people and agents, and a revoke that would leave the tenant with no admin is 409. The one
     route no person calls is POST /v1/verdicts, which a CI job calls with its own GitHub
     Actions token and which stores the verdicts of one run (ADR-0102). Every other route asks the role policy
     before it runs, and a principal no role of which allows the route gets 403 (ADR-0108). The five audit
@@ -37,7 +37,7 @@ tags:
   - name: export
     description: The export of the whole tenant that an admin asks for and downloads (ADR-0111).
   - name: identity
-    description: The invitations an admin makes so that a person can sign in for the first time (ADR-0127).
+    description: The invitations an admin makes so that a person can sign in for the first time (ADR-0127), and the role bindings an admin grants and revokes (ADR-0128).
   - name: audit-log
     description: The hash chain of the tenant's action log, as JSON lines (ADR-0126).
 paths:
@@ -1361,6 +1361,116 @@ paths:
           $ref: '#/components/responses/Internal'
         '503':
           $ref: '#/components/responses/Timeout'
+  /v1/role-bindings:
+    post:
+      operationId: grant_role_binding
+      tags: [identity]
+      summary: Grant one role to a principal, over the whole tenant or over one scope.
+      description: >-
+        Only an admin who is a person takes it (ADR-0108, ADR-0128), so an agent receives 403. The binding names a
+        principal of this tenant and, when `scope_id` is set, a scope of this tenant. A missing principal or scope is
+        404. A role the principal's kind cannot hold, a scope on `viewer`, `auditor` or `admin`, an unknown role and a
+        binding this tenant already has are a client error, 400 or 409, and store nothing. The answer never carries
+        the text of a database error. The request is logged with the admin's id. The subject names the principal, the
+        binding, the role and the scope, and never a name. A binding is never updated: change a role by granting the
+        new one and revoking the old one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleBindingRequest'
+      responses:
+        '201':
+          description: The binding was stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleBinding'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+    get:
+      operationId: list_role_bindings
+      tags: [identity]
+      summary: List the role bindings of the tenant.
+      description: >-
+        Only an admin who is a person takes it (ADR-0108, ADR-0128). The answer is every binding of this tenant, by id
+        from the highest. `scope_id` is null when the binding covers the whole tenant.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of the role bindings, by id from the highest.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleBindingPage'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/role-bindings/{id}:
+    delete:
+      operationId: revoke_role_binding
+      tags: [identity]
+      summary: Revoke one role binding.
+      description: >-
+        Only an admin who is a person takes it (ADR-0108, ADR-0128). An id this tenant does not have is 404. A revoke
+        that would leave the tenant with no admin is 409, and the binding stays. The request is logged with the
+        admin's id. The subject names the principal, the binding, the role and the scope, and never a name.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: The binding was revoked.
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
   /v1/exports:
     post:
       operationId: start_export
@@ -2608,6 +2718,50 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Invitation'
+    RoleBindingRequest:
+      type: object
+      additionalProperties: false
+      required: [principal_id, role]
+      properties:
+        principal_id:
+          type: string
+          format: uuid
+          description: The person or agent this tenant already holds. A principal of another tenant is 404.
+        role:
+          type: string
+          enum: [viewer, contributor, decision-owner, approver, admin, auditor, agent]
+          description: One of the seven roles. An agent holds only `agent`, and a person never holds it.
+        scope_id:
+          type: string
+          format: uuid
+          description: The scope the binding covers, and every scope below it. Omit it to cover the whole tenant. Only `contributor`, `decision-owner`, `approver` and `agent` may name a scope.
+    RoleBinding:
+      type: object
+      additionalProperties: false
+      required: [id, principal_id, role, scope_id]
+      properties:
+        id:
+          type: string
+          format: uuid
+        principal_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [viewer, contributor, decision-owner, approver, admin, auditor, agent]
+        scope_id:
+          type: [string, 'null']
+          format: uuid
+          description: The scope the binding covers, and every scope below it. Null covers the whole tenant.
+    RoleBindingPage:
+      type: object
+      additionalProperties: false
+      required: [role_bindings]
+      properties:
+        role_bindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleBinding'
     AuditLogLine:
       type: object
       additionalProperties: false
