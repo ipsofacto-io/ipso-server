@@ -14,15 +14,28 @@ interface AppValue {
    */
   canExport: boolean | null;
   setCanExport(value: boolean | null): void;
+  /** The same for the Invitations entry, which follows the read of the open invitations (ADR-0127). */
+  canInvite: boolean | null;
+  setCanInvite(value: boolean | null): void;
 }
 
-const idle: AppValue = { signedIn: null, setSignedIn: () => {}, busy: false, begin: () => () => {}, canExport: null, setCanExport: () => {} };
+const idle: AppValue = {
+  signedIn: null,
+  setSignedIn: () => {},
+  busy: false,
+  begin: () => () => {},
+  canExport: null,
+  setCanExport: () => {},
+  canInvite: null,
+  setCanInvite: () => {},
+};
 
 const AppContext = createContext<AppValue>(idle);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [signedIn, setSignedIn] = useState<boolean | null>(null);
   const [canExport, setCanExport] = useState<boolean | null>(null);
+  const [canInvite, setCanInvite] = useState<boolean | null>(null);
   const [inFlight, setInFlight] = useState(0);
   const begin = useCallback(() => {
     let ended = false;
@@ -34,7 +47,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     };
   }, []);
-  const value = useMemo<AppValue>(() => ({ signedIn, setSignedIn, busy: inFlight > 0, begin, canExport, setCanExport }), [signedIn, inFlight, begin, canExport]);
+  const value = useMemo<AppValue>(
+    () => ({ signedIn, setSignedIn, busy: inFlight > 0, begin, canExport, setCanExport, canInvite, setCanInvite }),
+    [signedIn, inFlight, begin, canExport, canInvite],
+  );
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 

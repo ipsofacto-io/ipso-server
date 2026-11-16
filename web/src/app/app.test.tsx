@@ -163,6 +163,46 @@ describe('the theme', () => {
   });
 });
 
+describe('the invitations entry of the menu', () => {
+  const current = (status: number, body: unknown) => ({ override: ({ url }: { url: string }) => (url.startsWith('/v1/invitations') ? { status, headers: {}, body } : undefined) });
+
+  it('is there when the server answers the read, even with none open', async () => {
+    stubFetch();
+    renderApp('/decisions');
+    expect(await screen.findByRole('link', { name: 'Invitations' })).toHaveAttribute('href', '/invitations');
+  });
+
+  it('is left out when the server refuses the read, and the app copies no policy', async () => {
+    const stub = stubFetch(current(403, { error: 'forbidden' }));
+    renderApp('/decisions');
+    await waitFor(() => expect(stub.requests).toContain('GET /v1/invitations?limit=1'));
+    await screen.findByRole('link', { name: 'Decisions' });
+    expect(screen.queryByRole('link', { name: 'Invitations' })).not.toBeInTheDocument();
+  });
+
+  it('stays when the read fails for a reason that is not a refusal', async () => {
+    const stub = stubFetch(current(503, { error: 'timeout' }));
+    renderApp('/decisions');
+    await waitFor(() => expect(stub.requests).toContain('GET /v1/invitations?limit=1'));
+    expect(await screen.findByRole('link', { name: 'Invitations' })).toBeInTheDocument();
+  });
+
+  it('is left out when no one is signed in', async () => {
+    const stub = stubFetch({ signedIn: false });
+    renderApp('/decisions');
+    await screen.findByRole('heading', { name: 'Sign in to ipso' });
+    expect(screen.queryByRole('link', { name: 'Invitations' })).not.toBeInTheDocument();
+    expect(stub.requests.some((request) => request.startsWith('GET /v1/invitations'))).toBe(false);
+  });
+
+  it('follows its own read: an export that is refused does not hide it', async () => {
+    stubFetch({ override: ({ url }) => (url === '/v1/exports/current' ? { status: 403, headers: {}, body: { error: 'forbidden' } } : undefined) });
+    renderApp('/decisions');
+    expect(await screen.findByRole('link', { name: 'Invitations' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Export' })).not.toBeInTheDocument();
+  });
+});
+
 describe('the export entry of the menu', () => {
   const current = (status: number, body: unknown) => ({ override: ({ url }: { url: string }) => (url === '/v1/exports/current' ? { status, headers: {}, body } : undefined) });
 

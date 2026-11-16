@@ -54,6 +54,13 @@ export type ClearanceRequest = Schemas['ClearanceRequest'];
 export type Export = Schemas['Export'];
 export type ExportRequest = Schemas['ExportRequest'];
 
+// The invitations of the tenant (ADR-0127). An open invitation never holds its token: only the answer to create does.
+export type Invitation = Schemas['Invitation'];
+export type InvitationPage = Schemas['InvitationPage'];
+export type InvitationRequest = Schemas['InvitationRequest'];
+export type InvitationCreated = Schemas['InvitationCreated'];
+export type InvitationRole = InvitationRequest['role'];
+
 /** A sign-in provider the page may link to (GET /auth/providers). */
 export interface ProviderInfo {
   id: string;

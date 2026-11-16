@@ -19,8 +19,8 @@ export function checkRecipient(value: string): RecipientCheck {
   return { ok: true, recipient };
 }
 
-/** True when a read of the export was not refused: only a 401 or a 403 hides the menu entry, a busy server does not. */
-export const exportNotRefused = (status: number): boolean => status !== 401 && status !== 403;
+/** True when the read that decides a menu entry (the export, the invitations) was not refused: only a 401 or a 403 hides it, a busy server does not. */
+export const notRefused = (status: number): boolean => status !== 401 && status !== 403;
 
 /** An export that is pending or running is being made, and a request while it is would be a 409. */
 export function isUnderWay(held: Export | null): boolean {

@@ -185,6 +185,61 @@
       "type": "Synchronous/HTTP"
     },
     {
+      "description": "a request for one open invitation from a viewer",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "the session belongs to a viewer of tenant A"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/invitations",
+        "query": {
+          "limit": [
+            "1"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "error": "forbidden"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": 403
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
       "description": "a request for the allowlist",
       "pending": false,
       "providerStates": [
@@ -1839,6 +1894,146 @@
               "matchers": [
                 {
                   "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the open invitations",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds one open invitation, and the session belongs to an admin"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/invitations",
+        "query": {
+          "limit": [
+            "25"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "invitations": [
+              {
+                "created_at": "2026-11-01T00:00:00Z",
+                "created_by": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "name": "Ada",
+                "role": "viewer"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.invitations[*].created_by": {
+              "type": "Uuid"
+            },
+            "$.invitations[*].id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.invitations": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.invitations[*].created_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.invitations[*].created_by": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.invitations[*].expires_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.invitations[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.invitations[*].name": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.invitations[*].role": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^(viewer|contributor|decision-owner|approver|admin|auditor)$"
                 }
               ]
             }
@@ -5030,6 +5225,220 @@
       "type": "Synchronous/HTTP"
     },
     {
+      "description": "a request to invite a person",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds no open invitation, and the session belongs to an admin"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "name": "Ada",
+            "role": "viewer"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/v1/invitations"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "created_at": "2026-11-01T00:00:00Z",
+            "created_by": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "name": "Ada",
+            "role": "viewer",
+            "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "url": "https://ipso.example.test/invitation#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.created_by": {
+              "type": "Uuid"
+            },
+            "$.id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.created_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.created_by": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.expires_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.name": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.role": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^(viewer|contributor|decision-owner|approver|admin|auditor)$"
+                }
+              ]
+            },
+            "$.token": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            },
+            "$.url": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^https://ipso\\.example\\.test/invitation#[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to invite a person when 1000 invitations are open",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds 1000 open invitations, and the session belongs to an admin"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "name": "Ada",
+            "role": "viewer"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/v1/invitations"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "error": "conflict"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": 409
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
       "description": "a request to record a supersession",
       "pending": false,
       "providerStates": [
@@ -5958,6 +6367,113 @@
           }
         },
         "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to revoke an invitation that is not open",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds no open invitation, and the session belongs to an admin"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "DELETE",
+        "path": "/v1/invitations/0194f2a0-0000-7000-8000-000000000bff"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "error": "not found"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": 404
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to revoke an open invitation",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds one open invitation, and the session belongs to an admin"
+        }
+      ],
+      "request": {
+        "generators": {
+          "path": {
+            "expression": "/v1/invitations/${invitationId}",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          },
+          "path": {
+            "combine": "AND",
+            "matchers": [
+              {
+                "match": "type"
+              }
+            ]
+          }
+        },
+        "method": "DELETE",
+        "path": "/v1/invitations/0194f2a0-0000-7000-8000-000000000b01"
+      },
+      "response": {
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": 204
       },
       "type": "Synchronous/HTTP"
     },

@@ -36,7 +36,7 @@ Sign-in asks for no scope other than `openid`, and GitHub for none at all.
 
 A sign-in becomes a session only for a login the tenant has bound to a person ([ADR-0093](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0093-single-tenant-token-mapping.md)). `ipso-server tenant create` binds the first person of a tenant ([docs/tenants.md](tenants.md)), and an admin invites everyone after that ([ADR-0127](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0127-invitations.md)).
 
-An admin who is a person makes an invitation with a name and one role, over the whole tenant:
+An admin who is a person makes an invitation with a name and one role, over the whole tenant. The web app does the same from its Invitations page ([docs/web-app.md](web-app.md#the-invitations)), and the three calls below are the ones it makes:
 
 ```sh
 curl -sS -X POST "$IPSO/v1/invitations" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"name":"Ada","role":"viewer"}'

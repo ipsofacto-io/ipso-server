@@ -9,8 +9,8 @@ import { AppProvider } from '../app/AppContext';
 import { NOW, renderApp, stubFetch } from '../test/render';
 
 
-/** The layout also reads the export once a person is signed in, to decide whether the menu has the Export entry (ADR-0115). */
-const MENU_READ = 'GET /v1/exports/current';
+/** The layout also reads the export and the invitations once a person is signed in, to decide whether the menu has those entries (ADR-0115, ADR-0127). */
+const MENU_READS = ['GET /v1/exports/current', 'GET /v1/invitations?limit=1'];
 // The commit of the verdicts in the fixtures.
 const COMMIT = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
 beforeEach(() => {
@@ -287,7 +287,7 @@ describe('the audit', () => {
     await user.type(screen.getByLabelText('Repository'), 'acme/payments');
     await user.click(screen.getByRole('button', { name: 'Ask' }));
     expect(await screen.findByRole('table', { name: 'Decisions that applied' })).toBeInTheDocument();
-    expect(stub.requests).toEqual(['GET /v1/audit/decisions?repo=acme%2Fpayments&valid=2026-11-07T12%3A00%3A00Z&known=2026-11-07T12%3A00%3A00Z', MENU_READ]);
+    expect(stub.requests).toEqual(['GET /v1/audit/decisions?repo=acme%2Fpayments&valid=2026-11-07T12%3A00%3A00Z&known=2026-11-07T12%3A00%3A00Z', ...MENU_READS]);
   });
 
   it('answers Q2 with what was added, removed and changed', async () => {
@@ -302,7 +302,7 @@ describe('the audit', () => {
   it('answers Q3 for the time a change merged and the commit that merged, with the verdicts of its runs', async () => {
     const stub = renderAndStub(`/audit/merges?repo=acme/payments&sha=${COMMIT}&at=2026-11-01T00:00:00Z`);
     expect(await screen.findByRole('table', { name: 'Decisions at the merge' })).toBeInTheDocument();
-    expect(stub.requests).toEqual([`GET /v1/audit/merges?repo=acme%2Fpayments&sha=${COMMIT}&at=2026-11-01T00%3A00%3A00Z`, MENU_READ]);
+    expect(stub.requests).toEqual([`GET /v1/audit/merges?repo=acme%2Fpayments&sha=${COMMIT}&at=2026-11-01T00%3A00%3A00Z`, ...MENU_READS]);
     const verdicts = await screen.findByRole('table', { name: 'Verdicts of the runs on the commit' });
     const rows = within(verdicts).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(6);
@@ -360,7 +360,7 @@ describe('the audit', () => {
   it('answers Q5 and ignores a key in the address that the question does not take', async () => {
     const stub = renderAndStub('/audit/waivers?known=2026-11-07T12:00:00Z&now=2026-11-07T12:00:00Z&tenant=other');
     expect(await screen.findByRole('table', { name: 'Waivers ending soon' })).toBeInTheDocument();
-    expect(stub.requests).toEqual(['GET /v1/audit/waivers?known=2026-11-07T12%3A00%3A00Z&now=2026-11-07T12%3A00%3A00Z', MENU_READ]);
+    expect(stub.requests).toEqual(['GET /v1/audit/waivers?known=2026-11-07T12%3A00%3A00Z&now=2026-11-07T12%3A00%3A00Z', ...MENU_READS]);
   });
 
   it('says a question is too wide when the answer is over the cap', async () => {

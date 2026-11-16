@@ -73,6 +73,16 @@ const READY_EXPORT = 'tenant A holds a ready export, and the session belongs to 
 const AGE_RECIPIENT = 'age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p';
 const EXPORT = '0194f2a0-0000-7000-8000-000000000a01';
 
+// The states of the invitations (ADR-0127). Each one clears the open invitations of tenant A first, because the list and
+// the cap of 1000 read them, and then seeds what it names. The session is the admin's: only an admin who is a person
+// takes the invitation routes (ADR-0108).
+const NO_INVITATION = 'tenant A holds no open invitation, and the session belongs to an admin';
+const ONE_INVITATION = 'tenant A holds one open invitation, and the session belongs to an admin';
+const FULL_INVITATIONS = 'tenant A holds 1000 open invitations, and the session belongs to an admin';
+const INVITATION = '0194f2a0-0000-7000-8000-000000000b01';
+// An id that no state seeds, so a revoke of it is a 404.
+const NO_SUCH_INVITATION = '0194f2a0-0000-7000-8000-000000000bff';
+
 const COOKIE_NAME = '__Host-ipso-session';
 const COOKIE_EXAMPLE = `${COOKIE_NAME}=${'A'.repeat(43)}`;
 const cookie = regex(`^${COOKIE_NAME}=[A-Za-z0-9_-]{43}$`, COOKIE_EXAMPLE);
@@ -112,7 +122,7 @@ interface Interaction {
   description: string;
   state?: string;
   /** GET unless it says otherwise. */
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'DELETE';
   path: Path;
   query?: Record<string, string>;
   /** The JSON a write sends. The request then names its content type, as the app's own calls do. */
@@ -121,7 +131,8 @@ interface Interaction {
   session?: boolean;
   status: number;
   headers?: Record<string, unknown>;
-  body: unknown;
+  /** The JSON the server answers with. A 204 has none, and the interaction then leaves it out. */
+  body?: unknown;
 }
 
 /** Plays one interaction: `run` makes the app's own call against the mock server. */
@@ -142,7 +153,7 @@ async function interact(spec: Interaction, run: (calls: Calls) => Promise<void>)
     })
     .willRespondWith(spec.status, (response) => {
       response.headers({ 'Content-Type': 'application/json', ...spec.headers });
-      response.jsonBody(spec.body);
+      if (spec.body !== undefined) response.jsonBody(spec.body);
     })
     .executeTest(async (server) => {
       const api = createApi({ base: server.url, headers: session ? { Cookie: COOKIE_EXAMPLE } : {} });
@@ -1045,6 +1056,127 @@ describe('the writes of the web app', () => {
       });
   });
 
+});
+
+// The invitations screen (IPSO-166, ADR-0127). The list never holds a token. The answer to create is the one place a token
+// and its link exist, so the pact matches their form and holds no secret.
+const ROLE = regex('^(viewer|contributor|decision-owner|approver|admin|auditor)$', 'viewer');
+const invitation = {
+  id: uuid(),
+  name: like('Ada'),
+  role: ROLE,
+  created_by: uuid(),
+  created_at: timestamp(KNOWN),
+  expires_at: timestamp(LATER),
+};
+const TOKEN_EXAMPLE = 'A'.repeat(43);
+const invitationPath = fromProviderState('/v1/invitations/${invitationId}', `/v1/invitations/${INVITATION}`);
+
+describe('the invitations screen of the web app', () => {
+  it('lists the open invitations, which hold no token', async () => {
+    await interact(
+      {
+        description: 'a request for the open invitations',
+        state: ONE_INVITATION,
+        path: '/v1/invitations',
+        query: { limit: '25' },
+        status: 200,
+        body: { invitations: eachLike(invitation) },
+      },
+      async (calls) => {
+        const page = await calls.listInvitations({ limit: 25 });
+        expect(page.invitations[0]).toMatchObject({ name: 'Ada', role: 'viewer' });
+        expect(page.invitations[0]).not.toHaveProperty('token');
+      },
+    );
+  });
+
+  it('is refused the invitations by the role policy for a viewer, which is what the menu reads', async () => {
+    await interact(
+      {
+        description: 'a request for one open invitation from a viewer',
+        state: VIEWER,
+        path: '/v1/invitations',
+        query: { limit: '1' },
+        status: 403,
+        body: { error: 'forbidden' },
+      },
+      async (calls) => {
+        await expect(calls.listInvitations({ limit: 1 })).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+      },
+    );
+  });
+
+  it('invites a person by name and role and gets the link once', async () => {
+    await interact(
+      {
+        description: 'a request to invite a person',
+        state: NO_INVITATION,
+        method: 'POST',
+        path: '/v1/invitations',
+        requestBody: { name: 'Ada', role: 'viewer' },
+        status: 201,
+        body: {
+          ...invitation,
+          token: regex('^[A-Za-z0-9_-]{43}$', TOKEN_EXAMPLE),
+          url: regex('^https://ipso\\.example\\.test/invitation#[A-Za-z0-9_-]{43}$', `https://ipso.example.test/invitation#${TOKEN_EXAMPLE}`),
+        },
+      },
+      async (calls) => {
+        const made = await calls.createInvitation({ name: 'Ada', role: 'viewer' });
+        expect(made).toMatchObject({ name: 'Ada', role: 'viewer' });
+        expect(made.url).toBe(`${new URL(made.url).origin}/invitation#${made.token}`);
+      },
+    );
+  });
+
+  it('is refused an invitation when the tenant already holds 1000', async () => {
+    await interact(
+      {
+        description: 'a request to invite a person when 1000 invitations are open',
+        state: FULL_INVITATIONS,
+        method: 'POST',
+        path: '/v1/invitations',
+        requestBody: { name: 'Ada', role: 'viewer' },
+        status: 409,
+        body: { error: 'conflict' },
+      },
+      async (calls) => {
+        await expect(calls.createInvitation({ name: 'Ada', role: 'viewer' })).rejects.toMatchObject({ status: 409, code: 'conflict' });
+      },
+    );
+  });
+
+  it('revokes an open invitation', async () => {
+    await interact(
+      {
+        description: 'a request to revoke an open invitation',
+        state: ONE_INVITATION,
+        method: 'DELETE',
+        path: invitationPath,
+        status: 204,
+      },
+      async (calls) => {
+        await expect(calls.revokeInvitation(INVITATION)).resolves.toBeUndefined();
+      },
+    );
+  });
+
+  it('reads an invitation that is gone as a 404', async () => {
+    await interact(
+      {
+        description: 'a request to revoke an invitation that is not open',
+        state: NO_INVITATION,
+        method: 'DELETE',
+        path: `/v1/invitations/${NO_SUCH_INVITATION}`,
+        status: 404,
+        body: { error: 'not found' },
+      },
+      async (calls) => {
+        await expect(calls.revokeInvitation(NO_SUCH_INVITATION)).rejects.toMatchObject({ status: 404, code: 'not found' });
+      },
+    );
+  });
 });
 
 // The premises page (IPSO-155, ADR-0119). Each interaction plays the app's own call with the request its own helpers build.

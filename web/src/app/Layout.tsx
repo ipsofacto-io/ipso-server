@@ -4,7 +4,7 @@ import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react
 import { calls } from '../api/calls';
 import { toApiError } from '../api/client';
 import { Button, Wordmark } from '../brand';
-import { exportNotRefused } from '../state/export';
+import { notRefused } from '../state/export';
 import { useApp } from './AppContext';
 
 const NAV = [
@@ -17,32 +17,40 @@ const NAV = [
 ] as const;
 
 /**
- * Decides whether the menu has the export entry. No route says what role a person holds (ADR-0110), so the entry
- * follows the answer of the read the export screen makes (ADR-0115). The layout makes it once when a session
- * starts, unless the export page is open: the page makes the same read and reports what it found.
+ * Decides whether the menu has an entry that only some roles take. No route says what role a person holds
+ * (ADR-0110), so the entry follows the answer of the read its screen makes (ADR-0115, ADR-0127). The layout makes
+ * the read once when a session starts, unless the page is open: the page makes the same read and reports what it
+ * found.
  */
-function useExportEntry(signedIn: boolean | null, onExportPage: boolean): boolean {
-  const { canExport, setCanExport } = useApp();
-  const onPage = useRef(onExportPage);
-  onPage.current = onExportPage;
+function useMenuEntry(
+  signedIn: boolean | null,
+  onItsPage: boolean,
+  read: (signal: AbortSignal) => Promise<unknown>,
+  shown: boolean | null,
+  setShown: (value: boolean | null) => void,
+): boolean {
+  const onPage = useRef(onItsPage);
+  onPage.current = onItsPage;
+  const readRef = useRef(read);
+  readRef.current = read;
   useEffect(() => {
     if (signedIn !== true) {
-      setCanExport(null);
+      setShown(null);
       return;
     }
     if (onPage.current) return;
     const controller = new AbortController();
-    calls.currentExport(controller.signal).then(
+    readRef.current(controller.signal).then(
       () => {
-        if (!controller.signal.aborted) setCanExport(true);
+        if (!controller.signal.aborted) setShown(true);
       },
       (cause: unknown) => {
-        if (!controller.signal.aborted) setCanExport(exportNotRefused(toApiError(cause).status));
+        if (!controller.signal.aborted) setShown(notRefused(toApiError(cause).status));
       },
     );
     return () => controller.abort();
-  }, [signedIn, setCanExport]);
-  return canExport === true;
+  }, [signedIn, setShown]);
+  return shown === true;
 }
 
 function SignOut() {
@@ -76,10 +84,17 @@ function SignOut() {
 }
 
 export function Layout() {
-  const { signedIn, busy } = useApp();
+  const { signedIn, busy, canExport, setCanExport, canInvite, setCanInvite } = useApp();
   const location = useLocation();
-  const canExport = useExportEntry(signedIn, location.pathname === '/export');
-  const nav = canExport ? [...NAV, { to: '/export', label: 'Export' }] : NAV;
+  const showExport = useMenuEntry(signedIn, location.pathname === '/export', (signal) => calls.currentExport(signal), canExport, setCanExport);
+  const showInvitations = useMenuEntry(
+    signedIn,
+    location.pathname === '/invitations',
+    (signal) => calls.listInvitations({ limit: 1 }, signal),
+    canInvite,
+    setCanInvite,
+  );
+  const nav = [...NAV, ...(showInvitations ? [{ to: '/invitations', label: 'Invitations' }] : []), ...(showExport ? [{ to: '/export', label: 'Export' }] : [])];
   const main = useRef<HTMLElement>(null);
   const first = useRef(true);
 

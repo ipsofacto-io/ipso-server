@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
+import type { ApiError } from '../api/client';
 import { usePages } from '../api/hooks';
 import type { Report } from './Confirm';
 import { ErrorNotice } from './ErrorNotice';
@@ -20,6 +21,7 @@ export function Queue<T extends { id: string }>({
   empty,
   load,
   head,
+  onRead,
   children,
 }: {
   title: string;
@@ -28,10 +30,17 @@ export function Queue<T extends { id: string }>({
   load: (before: string | undefined, signal: AbortSignal) => Promise<T[]>;
   /** Shown above the list once the first page was read, such as the form that adds a row. It reports like a row does. */
   head?: (report: (report: Report) => void) => ReactNode;
+  /** Told what the latest read found: null when it was answered, or the error when it was not. A menu entry follows it. */
+  onRead?: (refusal: ApiError | null) => void;
   children: (item: T, report: (report: Report) => void) => ReactNode;
 }) {
   const pages = usePages(load, QUEUE_PAGE, []);
-  const { reload } = pages;
+  const { reload, status, error } = pages;
+  const read = useRef(onRead);
+  read.current = onRead;
+  useEffect(() => {
+    if (status !== 'loading') read.current?.(error);
+  }, [status, error]);
   const [notice, setNotice] = useState<Report | null>(null);
   const noticeRef = useRef<HTMLDivElement>(null);
   // A write says what happened above the cards and reads the queue again: the card that was answered is gone
