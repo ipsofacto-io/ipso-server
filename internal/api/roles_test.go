@@ -69,6 +69,11 @@ var mayCall = func() map[string][]string {
 		"create_invitation": {identity.RoleAdmin},
 		"list_invitations":  {identity.RoleAdmin},
 		"revoke_invitation": {identity.RoleAdmin},
+
+		// The role bindings of ADR-0128: the same action, so only an admin who is a person.
+		"grant_role_binding":  {identity.RoleAdmin},
+		"list_role_bindings":  {identity.RoleAdmin},
+		"revoke_role_binding": {identity.RoleAdmin},
 	}
 }()
 
@@ -77,6 +82,7 @@ var writeOps = []string{
 	"create_scope", "reparent_scope", "retire_scope", "record_supersession", "record_grandfather_period",
 	"record_baseline", "record_waiver", "clear_premise_reason", "allow_premise_host", "approve_proposal",
 	"approve_agent_proposal", "approve_check_proposal", "start_export", "create_invitation", "revoke_invitation",
+	"grant_role_binding", "revoke_role_binding",
 }
 
 // exportOps are the reads of the export (ADR-0111, and current_export of ADR-0115), which only an admin takes.
@@ -86,6 +92,10 @@ var exportOps = []string{"current_export", "get_export", "download_export"}
 // invitationOps is the read of the invitations (ADR-0127), which only an admin takes. The other two operations are the
 // writes create_invitation and revoke_invitation, which are in writeOps.
 var invitationOps = []string{"list_invitations"}
+
+// roleBindingOps is the read of the role bindings (ADR-0128), which only an admin takes. The other two operations are
+// the writes grant_role_binding and revoke_role_binding, which are in writeOps.
+var roleBindingOps = []string{"list_role_bindings"}
 
 // the routes that ask for audit.read: the five audit questions of ADR-0055 and the audit log of ADR-0126.
 var auditOps = []string{"audit_decisions", "audit_beliefs", "audit_merges", "audit_supersessions", "audit_waivers", "read_audit_log"}

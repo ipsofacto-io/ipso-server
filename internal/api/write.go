@@ -100,11 +100,15 @@ func writeStoreError(w http.ResponseWriter, log *slog.Logger, op string, err err
 		return
 	}
 	switch {
-	case errors.Is(err, registry.ErrInvalidQuery):
+	case errors.Is(err, registry.ErrInvalidQuery), errors.Is(err, identity.ErrInvalidQuery):
 		writeError(w, http.StatusBadRequest, errInvalidQuery)
 		return
-	case errors.Is(err, registry.ErrNotFound), errors.Is(err, identity.ErrUnknownInvitation):
+	case errors.Is(err, registry.ErrNotFound), errors.Is(err, identity.ErrUnknownInvitation),
+		errors.Is(err, identity.ErrUnknownPrincipal), errors.Is(err, identity.ErrUnknownScope), errors.Is(err, identity.ErrUnknownBinding):
 		writeError(w, http.StatusNotFound, errNotFound)
+		return
+	case errors.Is(err, identity.ErrLastAdmin):
+		writeError(w, http.StatusConflict, errConflict)
 		return
 	case errors.Is(err, identity.ErrInvalidInvitation):
 		writeError(w, http.StatusBadRequest, errInvalidQuery)

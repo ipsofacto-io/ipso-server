@@ -255,7 +255,7 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 	t.Run("every operation is covered", func(t *testing.T) {
 		// 18 are called above as a person, the writes in writes_integration_test.go, and the two reads of the export
 		// in exports_integration_test.go. upload_verdicts is called as a CI job in upload_integration_test.go.
-		if got, want := 18+len(writeOps)+len(exportOps)+len(invitationOps)+1, len(operations(t, loadDocument(t))); got != want {
+		if got, want := 18+len(writeOps)+len(exportOps)+len(invitationOps)+len(roleBindingOps)+1, len(operations(t, loadDocument(t))); got != want {
 			t.Fatalf("%d operations covered, the document has %d", got, want)
 		}
 	})

@@ -98,6 +98,18 @@ const (
 	stateFullInvitations = "tenant A holds 1000 open invitations, and the session belongs to an admin"
 )
 
+// The states of the role bindings (IPSO-147, ADR-0128). A list state inserts one tenant-wide binding so the newest row
+// has no scope. A grant state removes that binding first, so the request is not a duplicate. A revoke state inserts
+// one binding and hands its id back. The last-admin state hands back the admin binding and does not delete it. The
+// session is the admin's, except the viewer state, which is the one the invitations already use.
+const (
+	stateOneBinding    = "tenant A holds one role binding, and the session belongs to an admin"
+	stateGrantBinding  = "tenant A holds a person with no such binding, and the session belongs to an admin"
+	stateRevokeBinding = "tenant A holds a role binding that can be revoked, and the session belongs to an admin"
+	stateLastAdmin     = "tenant A holds one admin, and the session belongs to an admin"
+	stateAdminSession  = "the session belongs to an admin of tenant A"
+)
+
 // The states of the premises page (IPSO-155, ADR-0119). A reason state seeds a decision and a fail on one of its premises,
 // recorded the way the worker records it, and the cleared state clears that reason too. The session is a decision owner
 // over the whole tenant, so it covers every scope of the decision. The host state seeds a row of the allowlist, and the
@@ -181,6 +193,36 @@ func (f *fixture) seedInvitations(ctx context.Context, n int) (uuid.UUID, error)
 		return uuid.Nil, fmt.Errorf("seed %d invitations: %w", n, err)
 	}
 	return first, nil
+}
+
+// seedRoleBinding deletes any tenant-wide binding of this principal and role, inserts one, and returns its id.
+// The insert is the newest binding of the tenant, so a list of one row reads it.
+func (f *fixture) seedRoleBinding(ctx context.Context, principal uuid.UUID, role string) (uuid.UUID, error) {
+	if _, err := pgtest.Exec(ctx, f.db, tenantA.String(), `
+		DELETE FROM identity.role_binding
+		WHERE tenant_id = $1 AND principal_id = $2 AND role = $3 AND scope_id IS NULL`,
+		tenantA, principal, role); err != nil {
+		return uuid.Nil, fmt.Errorf("clear a role binding: %w", err)
+	}
+	var id uuid.UUID
+	if err := pgtest.Scan(ctx, f.db, tenantA.String(), `
+		INSERT INTO identity.role_binding (tenant_id, principal_id, role)
+		VALUES ($1, $2, $3) RETURNING id`,
+		[]any{tenantA, principal, role}, &id); err != nil {
+		return uuid.Nil, fmt.Errorf("seed a role binding: %w", err)
+	}
+	return id, nil
+}
+
+// clearRoleBinding deletes a tenant-wide binding so a grant of the same role is not a duplicate.
+func (f *fixture) clearRoleBinding(ctx context.Context, principal uuid.UUID, role string) error {
+	if _, err := pgtest.Exec(ctx, f.db, tenantA.String(), `
+		DELETE FROM identity.role_binding
+		WHERE tenant_id = $1 AND principal_id = $2 AND role = $3 AND scope_id IS NULL`,
+		tenantA, principal, role); err != nil {
+		return fmt.Errorf("clear a role binding: %w", err)
+	}
+	return nil
 }
 
 // seedProposal adds a pending pull request proposal and returns its id. n makes the pull request, and so the
@@ -490,6 +532,37 @@ func TestPactProviderIpsoServer(t *testing.T) {
 			stateNoInvitation:    seeds(personA, invitations(0)),
 			stateOneInvitation:   seeds(personA, invitations(1)),
 			stateFullInvitations: seeds(personA, invitations(identity.MaxOpenInvitations)),
+
+			stateOneBinding: seeds(personA, func(ctx context.Context, _ int64) (models.ProviderStateResponse, error) {
+				if _, err := f.seedRoleBinding(ctx, f.callers[nobodyA].Principal, identity.RoleViewer); err != nil {
+					return nil, err
+				}
+				return nil, nil
+			}),
+			stateGrantBinding: seeds(personA, func(ctx context.Context, _ int64) (models.ProviderStateResponse, error) {
+				if err := f.clearRoleBinding(ctx, f.callers[nobodyA].Principal, identity.RoleViewer); err != nil {
+					return nil, err
+				}
+				return models.ProviderStateResponse{"principalId": f.callers[nobodyA].Principal.String()}, nil
+			}),
+			stateRevokeBinding: seeds(personA, func(ctx context.Context, _ int64) (models.ProviderStateResponse, error) {
+				id, err := f.seedRoleBinding(ctx, f.callers[nobodyA].Principal, identity.RoleAuditor)
+				if err != nil {
+					return nil, err
+				}
+				return models.ProviderStateResponse{"bindingId": id.String()}, nil
+			}),
+			stateLastAdmin: seeds(personA, func(ctx context.Context, _ int64) (models.ProviderStateResponse, error) {
+				var id uuid.UUID
+				if err := pgtest.Scan(ctx, f.db, tenantA.String(), `
+					SELECT id FROM identity.role_binding
+					WHERE tenant_id = $1 AND principal_id = $2 AND role = 'admin' AND scope_id IS NULL`,
+					[]any{tenantA, f.callers[personA].Principal}, &id); err != nil {
+					return nil, fmt.Errorf("read the admin binding: %w", err)
+				}
+				return models.ProviderStateResponse{"bindingId": id.String()}, nil
+			}),
+			stateAdminSession: as(personA),
 		},
 		RequestFilter: func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

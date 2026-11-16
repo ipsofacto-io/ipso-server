@@ -61,6 +61,11 @@ export type InvitationRequest = Schemas['InvitationRequest'];
 export type InvitationCreated = Schemas['InvitationCreated'];
 export type InvitationRole = InvitationRequest['role'];
 
+// The role bindings of the tenant (ADR-0128). scope_id is null when the binding covers the whole tenant.
+export type RoleBinding = Schemas['RoleBinding'];
+export type RoleBindingPage = Schemas['RoleBindingPage'];
+export type RoleBindingRequest = Schemas['RoleBindingRequest'];
+
 /** A sign-in provider the page may link to (GET /auth/providers). */
 export interface ProviderInfo {
   id: string;

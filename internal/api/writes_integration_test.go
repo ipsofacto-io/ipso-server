@@ -210,6 +210,11 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 		t.Fatalf("the invitation answered %v", invited)
 	}
 	s.expect(http.StatusNoContent, personA, http.MethodDelete, "/v1/invitations/"+idOf(t, invited, "id").String(), nil)
+	granted := s.expect(http.StatusCreated, personA, http.MethodPost, "/v1/role-bindings", map[string]any{"principal_id": f.callers[viewerA].Principal, "role": "contributor"})
+	if granted["role"] != "contributor" || idOf(t, granted, "principal_id") != f.callers[viewerA].Principal {
+		t.Fatalf("the grant answered %v", granted)
+	}
+	s.expect(http.StatusNoContent, personA, http.MethodDelete, "/v1/role-bindings/"+idOf(t, granted, "id").String(), nil)
 
 	// The waiver names the person who recorded it, taken from the session and not from the body.
 	var approverID uuid.UUID
@@ -253,8 +258,8 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 		byAction["api.allow_premise_host"].Principal != f.callers[personA].Principal {
 		t.Errorf("the log names the wrong people: %+v", byAction)
 	}
-	if len(s.logged()) != before+7 {
-		t.Errorf("%d entries after the clearance, host, agent approval, check approval, export request, invitation and its revocation, from %d", len(s.logged()), before)
+	if len(s.logged()) != before+9 {
+		t.Errorf("%d entries after the clearance, host, agent approval, check approval, export request, invitation and its revocation, role grant and its revocation, from %d", len(s.logged()), before)
 	}
 }
 
@@ -290,6 +295,10 @@ func TestAWriteTheRoleDoesNotAllowStoresAndLogsNothing(t *testing.T) {
 			return http.MethodPost, "/v1/invitations", map[string]any{"name": "Denied", "role": "viewer"}
 		case "revoke_invitation":
 			return http.MethodDelete, "/v1/invitations/" + f.prod.String(), nil
+		case "grant_role_binding":
+			return http.MethodPost, "/v1/role-bindings", map[string]any{"principal_id": f.callers[viewerA].Principal, "role": "contributor"}
+		case "revoke_role_binding":
+			return http.MethodDelete, "/v1/role-bindings/" + f.prod.String(), nil
 		case "approve_proposal":
 			return http.MethodPost, "/v1/proposals/" + f.proposal.String() + "/approval", approval("denied", []uuid.UUID{f.org})
 		case "approve_check_proposal":
@@ -303,8 +312,9 @@ func TestAWriteTheRoleDoesNotAllowStoresAndLogsNothing(t *testing.T) {
 		+ (SELECT count(*) FROM registry.waiver WHERE tenant_id = $1) + (SELECT count(*) FROM registry.premise_host_allow WHERE tenant_id = $1)
 		+ (SELECT count(*) FROM registry.decision_version WHERE tenant_id = $1) + (SELECT count(*) FROM proposals.approval WHERE tenant_id = $1)
 		+ (SELECT count(*) FROM proposals.agent_approval WHERE tenant_id = $1) + (SELECT count(*) FROM identity.action_log WHERE tenant_id = $1)
-		+ (SELECT count(*) FROM proposals.check_approval WHERE tenant_id = $1) + (SELECT count(*) FROM tenancy.export WHERE tenant_id = $1)
-		+ (SELECT count(*) FROM identity.invitation WHERE tenant_id = $1)`
+		+ (SELECT count(*) FROM proposals.check_approval WHERE tenant_id = $1) 		+ (SELECT count(*) FROM tenancy.export WHERE tenant_id = $1)
+		+ (SELECT count(*) FROM identity.invitation WHERE tenant_id = $1)
+		+ (SELECT count(*) FROM identity.role_binding WHERE tenant_id = $1)`
 	rows := s.count(tenantA, `SELECT `+tables)
 	roleOf := map[string]string{agentA: identity.RoleAgent, viewerA: identity.RoleViewer, auditorA: identity.RoleAuditor, contributorA: identity.RoleContributor, nobodyA: ""}
 	for subject, role := range roleOf {

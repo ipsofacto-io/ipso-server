@@ -31,4 +31,19 @@ func TestInvalidArgumentsTouchNoDatabase(t *testing.T) {
 	if _, err := Actions(ctx, nil, uuid.Nil, 1); !errors.Is(err, ErrInvalidQuery) {
 		t.Errorf("Actions with no tenant: %v", err)
 	}
+	if _, err := GrantRoleBinding(ctx, nil, uuid.Nil, RoleViewer, uuid.Nil); !errors.Is(err, ErrInvalidQuery) {
+		t.Errorf("GrantRoleBinding with no principal: %v", err)
+	}
+	if _, err := GrantRoleBinding(ctx, nil, id, "", uuid.Nil); !errors.Is(err, ErrInvalidQuery) {
+		t.Errorf("GrantRoleBinding with no role: %v", err)
+	}
+	if _, err := RevokeRoleBinding(ctx, nil, uuid.Nil); !errors.Is(err, ErrInvalidQuery) {
+		t.Errorf("RevokeRoleBinding with no binding: %v", err)
+	}
+	if _, err := ListRoleBindings(ctx, nil, uuid.Nil, uuid.Nil, 1); !errors.Is(err, ErrInvalidQuery) {
+		t.Errorf("ListRoleBindings with no tenant: %v", err)
+	}
+	if _, err := ListRoleBindings(ctx, nil, id, uuid.Nil, 0); !errors.Is(err, ErrInvalidQuery) {
+		t.Errorf("ListRoleBindings with no limit: %v", err)
+	}
 }
