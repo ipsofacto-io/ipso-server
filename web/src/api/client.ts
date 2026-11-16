@@ -27,6 +27,8 @@ export interface Api {
   getJSON<T>(path: string, query?: Query, signal?: AbortSignal): Promise<T>;
   /** An unsafe call with no body, such as POST /auth/logout. */
   post(path: string, signal?: AbortSignal): Promise<void>;
+  /** An unsafe call that removes what the path names and answers 204 with no body, such as DELETE /v1/invitations/{id}. */
+  delete(path: string, signal?: AbortSignal): Promise<void>;
   /**
    * An unsafe call with a JSON body, and the JSON the server answered with. The body holds only what the person
    * wrote: the tenant and the principal come from the session cookie, never from the request (ADR-0099).
@@ -42,7 +44,7 @@ export interface ApiOptions {
 }
 
 export function createApi({ base = '', headers = {} }: ApiOptions = {}): Api {
-  async function send(method: 'GET' | 'POST', path: string, query: Query, signal?: AbortSignal, body?: unknown): Promise<Response> {
+  async function send(method: 'GET' | 'POST' | 'DELETE', path: string, query: Query, signal?: AbortSignal, body?: unknown): Promise<Response> {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(query)) {
       if (value !== undefined && value !== '') params.set(key, String(value));
@@ -78,6 +80,9 @@ export function createApi({ base = '', headers = {} }: ApiOptions = {}): Api {
     },
     async post(path: string, signal?: AbortSignal): Promise<void> {
       await send('POST', path, {}, signal);
+    },
+    async delete(path: string, signal?: AbortSignal): Promise<void> {
+      await send('DELETE', path, {}, signal);
     },
     async postJSON<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
       const response = await send('POST', path, {}, signal, body);

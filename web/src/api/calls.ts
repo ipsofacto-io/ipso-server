@@ -20,6 +20,9 @@ import type {
   ExportRequest,
   GrandfatherPeriod,
   GrandfatherRequest,
+  InvitationCreated,
+  InvitationPage,
+  InvitationRequest,
   InvitationStart,
   PremiseHost,
   PremiseHostRequest,
@@ -103,6 +106,11 @@ export function makeCalls(api: Api) {
     /** The export the tenant holds, 404 when there is none. Only an admin who is a person may ask (ADR-0115). */
     currentExport: (signal?: AbortSignal) => api.getJSON<Export>('/v1/exports/current', {}, signal),
     startExport: (request: ExportRequest, signal?: AbortSignal) => api.postJSON<Export>('/v1/exports', request, signal),
+    /** The open invitations, newest first, with no token. Only an admin who is a person may read them (ADR-0127). */
+    listInvitations: (q: Paging = {}, signal?: AbortSignal) => api.getJSON<InvitationPage>('/v1/invitations', q, signal),
+    /** The answer holds the link once: the server keeps only the hash of the token, so it can never show it again. */
+    createInvitation: (request: InvitationRequest, signal?: AbortSignal) => api.postJSON<InvitationCreated>('/v1/invitations', request, signal),
+    revokeInvitation: (id: string, signal?: AbortSignal) => api.delete(`/v1/invitations/${encodeURIComponent(id)}`, signal),
     providers: (signal?: AbortSignal) => api.getJSON<{ providers: ProviderInfo[] }>('/auth/providers', {}, signal),
     /**
      * Starts the sign-in of a person who came with an invitation and answers where to send the browser (ADR-0127). The

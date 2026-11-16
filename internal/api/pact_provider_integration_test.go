@@ -21,6 +21,7 @@ import (
 	"github.com/pact-foundation/pact-go/v2/provider"
 
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
+	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
 )
@@ -88,6 +89,15 @@ const (
 	stateReadyExport   = "tenant A holds a ready export, and the session belongs to an admin"
 )
 
+// The states of the invitations screen (IPSO-166, ADR-0127). Each one clears the open invitations of tenant A first,
+// because the list and the cap of MaxOpenInvitations read them, and then seeds what it names. The session is the admin's:
+// only an admin who is a person takes the invitation routes (ADR-0108).
+const (
+	stateNoInvitation    = "tenant A holds no open invitation, and the session belongs to an admin"
+	stateOneInvitation   = "tenant A holds one open invitation, and the session belongs to an admin"
+	stateFullInvitations = "tenant A holds 1000 open invitations, and the session belongs to an admin"
+)
+
 // The states of the premises page (IPSO-155, ADR-0119). A reason state seeds a decision and a fail on one of its premises,
 // recorded the way the worker records it, and the cleared state clears that reason too. The session is a decision owner
 // over the whole tenant, so it covers every scope of the decision. The host state seeds a row of the allowlist, and the
@@ -145,6 +155,32 @@ func (f *fixture) seedExport(ctx context.Context, ready bool) (uuid.UUID, error)
 		return uuid.Nil, fmt.Errorf("seed the part of an export: %w", err)
 	}
 	return id, nil
+}
+
+// seedInvitations deletes every invitation of tenant A through the admin connection and adds n open ones, made by the
+// admin of tenant A. The token of each is the hash of a synthetic text, so no token the pact names opens anything.
+// The first of them is named "Ada" and is the one the invitation states hand back.
+func (f *fixture) seedInvitations(ctx context.Context, n int) (uuid.UUID, error) {
+	if _, err := f.admin.ExecContext(ctx, `DELETE FROM identity.invitation WHERE tenant_id = $1`, tenantA); err != nil {
+		return uuid.Nil, fmt.Errorf("clear the invitations of tenant A: %w", err)
+	}
+	if n == 0 {
+		return uuid.Nil, nil
+	}
+	var first uuid.UUID
+	err := f.admin.QueryRowContext(ctx, `
+		WITH made AS (
+			INSERT INTO identity.invitation (tenant_id, token_sha256, name, role, created_by)
+			SELECT $1::uuid, sha256(convert_to('pact-invitation-' || i, 'UTF8')), CASE WHEN i = 1 THEN 'Ada' ELSE 'Person ' || i END, 'viewer', $3::uuid
+			FROM generate_series(1, $2::int) AS i
+			RETURNING id, name
+		)
+		SELECT id FROM made WHERE name = 'Ada'`,
+		tenantA, n, f.callers[personA].Principal).Scan(&first)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("seed %d invitations: %w", n, err)
+	}
+	return first, nil
 }
 
 // seedProposal adds a pending pull request proposal and returns its id. n makes the pull request, and so the
@@ -409,6 +445,19 @@ func TestPactProviderIpsoServer(t *testing.T) {
 		}
 	}
 
+	invitations := func(n int) func(context.Context, int64) (models.ProviderStateResponse, error) {
+		return func(ctx context.Context, _ int64) (models.ProviderStateResponse, error) {
+			id, err := f.seedInvitations(ctx, n)
+			if err != nil {
+				return nil, err
+			}
+			if n == 0 {
+				return nil, nil
+			}
+			return models.ProviderStateResponse{"invitationId": id.String()}, nil
+		}
+	}
+
 	err = provider.NewVerifier().VerifyProvider(t, provider.VerifyRequest{
 		Provider:           "ipso-server",
 		ProviderBaseURL:    served.URL,
@@ -437,6 +486,10 @@ func TestPactProviderIpsoServer(t *testing.T) {
 			stateNoExport:      seeds(personA, noExport),
 			statePendingExport: seeds(personA, exportOf(false)),
 			stateReadyExport:   seeds(personA, exportOf(true)),
+
+			stateNoInvitation:    seeds(personA, invitations(0)),
+			stateOneInvitation:   seeds(personA, invitations(1)),
+			stateFullInvitations: seeds(personA, invitations(identity.MaxOpenInvitations)),
 		},
 		RequestFilter: func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

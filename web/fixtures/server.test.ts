@@ -318,6 +318,131 @@ describe('the export routes of the fixtures server', () => {
   });
 });
 
+describe('the invitation routes of the fixtures server (ADR-0127)', () => {
+  const TOKEN_LINK = /^https:\/\/ipso\.example\.test\/invitation#([A-Za-z0-9_-]{43})$/;
+  type Made = { id: string; name: string; role: string; created_by: string; created_at: string; expires_at: string; token: string; url: string };
+  const days = (n: number) => new Date(NOW.getTime() + n * 24 * 60 * 60 * 1000);
+  const create = (body: unknown, state = newFixtureState(), when = NOW, extra: Partial<FixtureRequest> = {}) =>
+    ({ reply: respond({ method: 'POST', url: '/v1/invitations', cookie, contentType: 'application/json', body: JSON.stringify(body), ...extra }, when, state), state });
+  const list = (state: ReturnType<typeof newFixtureState>, query = '', when = NOW, signedIn = true) =>
+    respond({ method: 'GET', url: `/v1/invitations${query}`, cookie: signedIn ? cookie : '' }, when, state);
+  const revoke = (state: ReturnType<typeof newFixtureState>, id: string, when = NOW, signedIn = true) =>
+    respond({ method: 'DELETE', url: `/v1/invitations/${id}`, cookie: signedIn ? cookie : '' }, when, state);
+
+  it('needs a session on all three routes', () => {
+    const state = newFixtureState();
+    expect(create({ name: 'Ada', role: 'viewer' }, state, NOW, { cookie: '' }).reply.status).toBe(401);
+    expect(list(state, '', NOW, false).status).toBe(401);
+    expect(revoke(state, '0194f2a0-0000-7000-8000-000000001001', NOW, false).status).toBe(401);
+  });
+
+  it('answers 201 with the invitation and a link whose token is in the fragment, and nowhere else', () => {
+    const { reply } = create({ name: 'Ada', role: 'approver' });
+    expect(reply.status).toBe(201);
+    const made = reply.body as Made;
+    expect(made).toMatchObject({ name: 'Ada', role: 'approver', created_at: NOW.toISOString(), expires_at: days(7).toISOString() });
+    expect(made.url.match(TOKEN_LINK)?.[1]).toBe(made.token);
+  });
+
+  it('makes a new token for each invitation', () => {
+    const state = newFixtureState();
+    const first = create({ name: 'Ada', role: 'viewer' }, state).reply.body as Made;
+    const second = create({ name: 'Grace', role: 'viewer' }, state).reply.body as Made;
+    expect(first.token).not.toBe(second.token);
+  });
+
+  it('lists the open invitations newest first and never a token', () => {
+    const state = newFixtureState();
+    create({ name: 'Ada', role: 'viewer' }, state);
+    create({ name: 'Grace', role: 'admin' }, state);
+    const body = list(state).body as { invitations: Record<string, unknown>[] };
+    expect(body.invitations.map((invitation) => invitation.name)).toEqual(['Grace', 'Ada']);
+    for (const invitation of body.invitations) {
+      expect(Object.keys(invitation).sort()).toEqual(['created_at', 'created_by', 'expires_at', 'id', 'name', 'role']);
+    }
+    expect(JSON.stringify(body)).not.toMatch(/token|invitation#/);
+  });
+
+  it('pages by id from the highest and takes no other key', () => {
+    const state = newFixtureState();
+    for (const name of ['A', 'B', 'C']) create({ name, role: 'viewer' }, state);
+    const first = (list(state, '?limit=2').body as { invitations: { id: string; name: string }[] }).invitations;
+    expect(first.map((invitation) => invitation.name)).toEqual(['C', 'B']);
+    const next = (list(state, `?limit=2&before=${first[1]?.id}`).body as { invitations: { name: string }[] }).invitations;
+    expect(next.map((invitation) => invitation.name)).toEqual(['A']);
+    expect(list(state, '?tenant=x').status).toBe(400);
+  });
+
+  it('wants a name and one of the six roles and nothing else', () => {
+    for (const roles of ['viewer', 'contributor', 'decision-owner', 'approver', 'admin', 'auditor']) {
+      expect(create({ name: 'Ada', role: roles }).reply.status, roles).toBe(201);
+    }
+    for (const body of [
+      {},
+      { name: 'Ada' },
+      { role: 'viewer' },
+      { name: 'Ada', role: 'agent' },
+      { name: 'Ada', role: 'owner' },
+      { name: 'Ada', role: 7 },
+      { name: 7, role: 'viewer' },
+      { name: 'Ada', role: 'viewer', created_by: '0194f2a0-0000-7000-8000-0000000000a1' },
+      { name: 'Ada', role: 'viewer', tenant: 'x' },
+    ]) {
+      expect(create(body).reply.status, JSON.stringify(body)).toBe(400);
+    }
+  });
+
+  it('holds the name to the rule of a principal: 1 to 200 characters, trimmed, no control character', () => {
+    for (const name of ['', ' Ada', 'Ada ', 'Ada\tLovelace', 'a'.repeat(201)]) {
+      expect(create({ name, role: 'viewer' }).reply.status, JSON.stringify(name)).toBe(400);
+    }
+    expect(create({ name: 'a'.repeat(200), role: 'viewer' }).reply.status).toBe(201);
+    expect(create({ name: 'Zoë 山田', role: 'viewer' }).reply.status).toBe(201);
+  });
+
+  it('wants a JSON content type and a body under 1 MiB', () => {
+    expect(create({ name: 'Ada', role: 'viewer' }, newFixtureState(), NOW, { contentType: 'text/plain' }).reply.status).toBe(415);
+    expect(create({ name: 'Ada', role: 'viewer' }, newFixtureState(), NOW, { body: '{no' }).reply.status).toBe(400);
+    expect(create({ name: 'Ada', role: 'viewer' }, newFixtureState(), NOW, { body: 'x'.repeat((1 << 20) + 1) }).reply.status).toBe(413);
+  });
+
+  it('refuses the 1001st open invitation with a 409, and a revoke makes room', () => {
+    const state = newFixtureState();
+    let last = '';
+    for (let n = 0; n < 1000; n += 1) last = (create({ name: `P${n}`, role: 'viewer' }, state).reply.body as Made).id;
+    expect(create({ name: 'One too many', role: 'viewer' }, state).reply.status).toBe(409);
+    expect(revoke(state, last).status).toBe(204);
+    expect(create({ name: 'Now there is room', role: 'viewer' }, state).reply.status).toBe(201);
+  });
+
+  it('revokes one invitation with a 204 and no body, and it leaves the list', () => {
+    const state = newFixtureState();
+    const ada = create({ name: 'Ada', role: 'viewer' }, state).reply.body as Made;
+    create({ name: 'Grace', role: 'viewer' }, state);
+    const gone = revoke(state, ada.id);
+    expect(gone).toMatchObject({ status: 204 });
+    expect(gone.body).toBeUndefined();
+    expect((list(state).body as { invitations: { name: string }[] }).invitations.map((invitation) => invitation.name)).toEqual(['Grace']);
+  });
+
+  it('answers 404 for one that is gone or never was, and 400 for an id that is not a UUID', () => {
+    const state = newFixtureState();
+    const ada = create({ name: 'Ada', role: 'viewer' }, state).reply.body as Made;
+    expect(revoke(state, ada.id).status).toBe(204);
+    expect(revoke(state, ada.id).status).toBe(404);
+    expect(revoke(state, '0194f2a0-0000-7000-8000-000000009999').status).toBe(404);
+    expect(revoke(state, 'not-an-id').status).toBe(400);
+  });
+
+  it('lets an invitation expire after seven days: it is not listed and cannot be revoked', () => {
+    const state = newFixtureState();
+    const ada = create({ name: 'Ada', role: 'viewer' }, state).reply.body as Made;
+    expect((list(state, '', new Date(days(7).getTime() - 1)).body as { invitations: unknown[] }).invitations).toHaveLength(1);
+    expect((list(state, '', days(7)).body as { invitations: unknown[] }).invitations).toHaveLength(0);
+    expect(revoke(state, ada.id, days(7)).status).toBe(404);
+  });
+});
+
 describe('audit question Q3 of the fixtures server', () => {
   const get = (path: string) => respond({ method: 'GET', url: path, cookie }, NOW, newFixtureState());
   const merge = (sha: string) => get(`/v1/audit/merges?repo=acme%2Fpayments&at=2026-11-01T00:00:00Z&sha=${sha}`);

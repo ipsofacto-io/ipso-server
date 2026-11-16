@@ -36,6 +36,18 @@ export interface FixtureState {
   cleared: Set<string>;
   /** The rows added to the allowlist, after those of the data. The latest row of a host decides. */
   hosts: PremiseHost[];
+  /** The invitations an admin made and nobody used or revoked yet (ADR-0127). A token is never kept: the link is the answer to create. */
+  invitations: FixtureInvitation[];
+}
+
+/** An invitation of the stand-in, as the list shows it. It holds no token, like the table of the server. */
+export interface FixtureInvitation {
+  id: string;
+  name: string;
+  role: string;
+  created_by: string;
+  created_at: string;
+  expires_at: string;
 }
 
 /** An export asked for through POST /v1/exports. Its state follows the time since it was asked. */
@@ -47,7 +59,7 @@ export interface FixtureExport {
 }
 
 export function newFixtureState(): FixtureState {
-  return { answered: new Set(), decisions: [], waivers: [], superseded: new Set([ids.legacyFtp]), terms: new Set(), baselined: new Set(), sequence: 1000, held: null, cleared: new Set(), hosts: [] };
+  return { answered: new Set(), decisions: [], waivers: [], superseded: new Set([ids.legacyFtp]), terms: new Set(), baselined: new Set(), sequence: 1000, held: null, cleared: new Set(), hosts: [], invitations: [] };
 }
 
 export interface FixtureReply {
@@ -64,6 +76,20 @@ export const SESSION_COOKIE = 'fixtures-session';
 export const OPEN_INVITATION = 'o'.repeat(43);
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
 const PROVIDERS = ['dex', 'github'];
+
+// The invitations of the stand-in (ADR-0127): the six roles a person may hold, an invitation that lasts seven days, at
+// most 1000 open at once, and a link made of the public origin, /invitation and the token in the fragment.
+const INVITATION_ROLES = ['viewer', 'contributor', 'decision-owner', 'approver', 'admin', 'auditor'];
+const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_OPEN_INVITATIONS = 1000;
+const INVITATION_ORIGIN = 'https://ipso.example.test';
+const INVITER = '0194f2a0-0000-7000-8000-0000000000a1';
+
+/** 32 random bytes as unpadded base64url, like the token of the server. */
+function newToken(): string {
+  const raw = globalThis.crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...raw)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}): FixtureReply => ({ status, headers, body });
 const error = (status: number, code: string, headers: Record<string, string> = {}): FixtureReply => json(status, { error: code }, headers);
@@ -175,6 +201,21 @@ function latestHosts(rows: PremiseHost[]): PremiseHost[] {
 
 const fresh = (state: FixtureState): string => `0194f2a0-0000-7000-8000-${String(++state.sequence).padStart(12, '0')}`;
 
+/** The invitations that have not expired: past its seven days an invitation is refused and is no longer listed. */
+const open = (state: FixtureState, now: Date): FixtureInvitation[] => state.invitations.filter((invitation) => Date.parse(invitation.expires_at) > now.getTime());
+
+/** Revokes an open invitation: 204, or 404 for one that was used, revoked or has expired, and for an id the tenant does not have. */
+function remove(path: string, now: Date, state: FixtureState): FixtureReply {
+  const found = /^\/v1\/invitations\/([^/]+)$/.exec(path);
+  if (!found) return error(404, 'not found');
+  const id = decodeURIComponent(found[1] ?? '');
+  if (!isUuid(id)) return error(400, 'invalid query');
+  const live = open(state, now);
+  if (!live.some((invitation) => invitation.id === id)) return error(404, 'not found');
+  state.invitations = live.filter((invitation) => invitation.id !== id);
+  return { status: 204, headers: {} };
+}
+
 function write(request: FixtureRequest, path: string, now: Date, state: FixtureState): FixtureReply {
   const known = (id: string) => [...decisions, ...state.decisions].some((decision) => decision.id === id);
   const bad = error(400, 'invalid query');
@@ -249,6 +290,27 @@ function write(request: FixtureRequest, path: string, now: Date, state: FixtureS
     const row: PremiseHost = { id: fresh(state), host: name, allowed };
     state.hosts.push(row);
     return json(201, row);
+  }
+
+  // An invitation: the name and the one role. An expired invitation is gone, so it is dropped when one is made.
+  if (path === '/v1/invitations') {
+    const parsed = parse(request, ['name', 'role']);
+    if (!parsed.ok) return parsed.reply;
+    const { name, role } = parsed.fields;
+    if (!isText(name, 200) || typeof role !== 'string' || !INVITATION_ROLES.includes(role)) return bad;
+    state.invitations = open(state, now);
+    if (state.invitations.length >= MAX_OPEN_INVITATIONS) return error(409, 'conflict');
+    const made: FixtureInvitation = {
+      id: fresh(state),
+      name,
+      role,
+      created_by: INVITER,
+      created_at: now.toISOString(),
+      expires_at: new Date(now.getTime() + INVITATION_TTL_MS).toISOString(),
+    };
+    state.invitations.push(made);
+    const token = newToken();
+    return json(201, { ...made, token, url: `${INVITATION_ORIGIN}/invitation#${token}` });
   }
 
   if (path === '/v1/exports') {
@@ -354,6 +416,7 @@ export function respond(request: FixtureRequest, now: Date = new Date(), state: 
   if (!path.startsWith('/v1/')) return error(404, 'not found');
   if (!signedIn) return error(401, 'unauthorized', { 'WWW-Authenticate': 'Bearer realm="ipso"' });
   if (request.method === 'POST') return write(request, path, now, state);
+  if (request.method === 'DELETE') return remove(path, now, state);
   if (request.method !== 'GET') return error(404, 'not found');
   const everyDecision = [...decisions, ...state.decisions];
 
@@ -402,6 +465,7 @@ export function respond(request: FixtureRequest, now: Date = new Date(), state: 
     const current = exportBody(state.held, now);
     return current && current.id === decodeURIComponent(one[1] ?? '') ? json(200, current) : error(404, 'not found');
   }
+  if (path === '/v1/invitations') return allow(...PAGED) ?? json(200, { invitations: page(open(state, now), query) });
   if (path === '/v1/scopes') return allow('known', ...PAGED) ?? json(200, { known: echo.known, scopes: page(scopes, query) });
   if (path === '/v1/waivers') return allow(...TIMES, ...PAGED) ?? json(200, { ...echo, waivers: page([...waivers(now), ...state.waivers], query) });
   if (path === '/v1/proposals') return allow(...PAGED) ?? json(200, { proposals: page(proposals(now).filter((p) => !state.answered.has(p.id)), query) });

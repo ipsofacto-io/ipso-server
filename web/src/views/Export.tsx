@@ -11,7 +11,7 @@ import { Loading } from '../components/Loading';
 import { Notice } from '../components/Notice';
 import { Page } from '../components/Page';
 import { formatBytes, formatTime } from '../lib/format';
-import { canDownload, checkRecipient, exportNotRefused, isUnderWay } from '../state/export';
+import { canDownload, checkRecipient, isUnderWay, notRefused } from '../state/export';
 
 const TITLE = 'Export';
 const POLL_MS = 5000;
@@ -53,7 +53,7 @@ function useCurrentExport() {
         (cause: unknown) => {
           if (controller.signal.aborted) return;
           const error = toApiError(cause);
-          setCanExport(exportNotRefused(error.status));
+          setCanExport(notRefused(error.status));
           if (error.status === 404) {
             setSignedIn(true);
             setHeld({ status: 'ready', export: null });

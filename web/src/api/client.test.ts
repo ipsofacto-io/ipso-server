@@ -77,6 +77,25 @@ describe('createApi', () => {
     expect(init.headers).not.toHaveProperty('Content-Type');
   });
 
+  it('deletes with no body and no query, and takes the 204 as done', async () => {
+    const fetch = answer(204, undefined);
+    vi.stubGlobal('fetch', fetch);
+    await expect(createApi({ headers: { Cookie: 'a=b' } }).delete('/v1/invitations/0194f2a0-0000-7000-8000-000000001001')).resolves.toBeUndefined();
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('/v1/invitations/0194f2a0-0000-7000-8000-000000001001');
+    expect(init).toMatchObject({ method: 'DELETE', cache: 'no-store', credentials: 'same-origin', redirect: 'error' });
+    expect(init.body).toBeUndefined();
+    expect(init.headers).toMatchObject({ Accept: 'application/json', Cookie: 'a=b' });
+    expect(init.headers).not.toHaveProperty('Content-Type');
+  });
+
+  it('turns a refused delete into an ApiError', async () => {
+    vi.stubGlobal('fetch', answer(404, { error: 'not found' }));
+    await expect(createApi().delete('/v1/invitations/x')).rejects.toMatchObject({ name: 'ApiError', status: 404, code: 'not found' });
+    vi.stubGlobal('fetch', answer(403, { error: 'forbidden' }));
+    await expect(createApi().delete('/v1/invitations/x')).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+  });
+
   it('posts a JSON body with its content type, and reads the JSON the server wrote', async () => {
     const fetch = answer(201, { id: 'a1' });
     vi.stubGlobal('fetch', fetch);
