@@ -424,7 +424,7 @@ func (s *Service) metadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/samlmetadata+xml")
-	_, _ = w.Write(body)
+	_, _ = io.Copy(w, strings.NewReader(string(body)))
 }
 
 // previousSession is the hash of the session this browser holds, which the new one replaces: the one on
