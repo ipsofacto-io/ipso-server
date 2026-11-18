@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	// loginTTL is how long a found login is kept. A login is insert-only today, so it cannot change,
-	// and this is also the delay before a revocation would take effect once one exists (ADR-0093).
+	// loginTTL is how long a found login is kept. A closed login is unknown on the next database
+	// read. This cache may still return the principal id for a minute, and it does not keep a role
+	// (ADR-0131).
 	loginTTL = time.Minute
 	// maxKnownLogins bounds the cache.
 	maxKnownLogins = 4096

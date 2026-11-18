@@ -15,14 +15,16 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/time/rate"
 
+	"github.com/ipsofacto-io/ipso-server/eehooks"
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 )
 
 const (
-	// sessionTTL is how long a session found in the database is kept in memory. It is also the delay
-	// before a logout on another process, or a future revocation of a login, takes effect (ADR-0093).
+	// sessionTTL is how long a session found in the database is kept in memory. A closed login is
+	// unknown on the next database read. The cache may still name the principal for this long, and
+	// it does not keep a role (ADR-0131).
 	sessionTTL = time.Minute
 	// maxKnownSessions bounds the cache. A full cache is emptied, which only costs lookups.
 	maxKnownSessions = 4096
@@ -165,6 +167,25 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 	providers := map[string]provider{}
 	listed := make([]listedProvider, 0, len(opts.Providers))
 	for _, cfg := range opts.Providers {
+		if factory, ok := eehooks.LookupKind(cfg.Kind); ok {
+			if !eehooks.Allow(eehooks.FeatureSAML) {
+				opts.Log.Warn("sso.saml is not granted, so the provider is not mounted", "provider", cfg.ID)
+				continue
+			}
+			browser, err := factory(ctx, eehooks.KindConfig{
+				ID:          cfg.ID,
+				MetadataURL: cfg.MetadataURL,
+				ACS:         fmt.Sprintf("%s/auth/callback/%s", origin, cfg.ID),
+				EntityID:    cfg.ClientID,
+				Client:      &client,
+			})
+			if err != nil {
+				return nil, err
+			}
+			providers[cfg.ID] = newSAML(browser)
+			listed = append(listed, listedProvider{ID: cfg.ID, Kind: cfg.Kind})
+			continue
+		}
 		secret := opts.Secret(cfg.ClientSecretEnv)
 		switch cfg.Kind {
 		case KindOIDC:
@@ -246,6 +267,25 @@ func minTime(a, b time.Time) time.Time {
 		return b
 	}
 	return a
+}
+
+// EnterpriseIssuer is the issuer of the one mounted SAML provider. Zero or several means SCIM
+// stays unmounted (ADR-0131).
+func (s *Service) EnterpriseIssuer() (string, bool) {
+	var issuer string
+	n := 0
+	for _, p := range s.providers {
+		posted, ok := p.(postedLogin)
+		if !ok {
+			continue
+		}
+		n++
+		issuer = posted.idpIssuer()
+	}
+	if n != 1 || issuer == "" {
+		return "", false
+	}
+	return issuer, true
 }
 
 func (s *Service) redirectURI(id string) string {

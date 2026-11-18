@@ -163,8 +163,8 @@ func insertSession(ctx context.Context, tx *sql.Tx, issuer, subject string, hash
 		INSERT INTO identity.session (tenant_id, login_id, token_sha256)
 		SELECT tenant_id, id, $3::bytea
 		FROM identity.login
-		WHERE tenant_id = ipso.current_tenant() AND issuer = $1 AND subject = $2
-		RETURNING expires_at`, issuer, subject, hash).Scan(&expires)
+			WHERE tenant_id = ipso.current_tenant() AND issuer = $1 AND subject = $2 AND closed_at IS NULL
+			RETURNING expires_at`, issuer, subject, hash).Scan(&expires)
 	return expires, err
 }
 
@@ -202,7 +202,8 @@ func SessionPrincipal(ctx context.Context, db *sql.DB, tenant uuid.UUID, hash []
 			JOIN identity.login l ON l.tenant_id = s.tenant_id AND l.id = s.login_id
 			WHERE s.tenant_id = ipso.current_tenant()
 			  AND s.token_sha256 = $1
-			  AND s.expires_at > clock_timestamp()`, hash).Scan(&principal, &expires)
+			  AND s.expires_at > clock_timestamp()
+			  AND l.closed_at IS NULL`, hash).Scan(&principal, &expires)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return uuid.Nil, time.Time{}, ErrUnknownSession

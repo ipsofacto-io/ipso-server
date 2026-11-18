@@ -21,6 +21,7 @@ import (
 
 	"github.com/ipsofacto-io/ipso/pkg/mcptools"
 
+	"github.com/ipsofacto-io/ipso-server/eehooks"
 	"github.com/ipsofacto-io/ipso-server/internal/api"
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/authz"
@@ -135,6 +136,7 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		}
 		sessions = &api.Sessions{Origin: signIn.Origin(), Lookup: sessionCaller(signIn, cfg.Tenant)}
 	}
+	installDirectory(cfg, signIn)
 	var uploads *api.Uploads
 	if cfg.CIAudience != "" {
 		if cfg.CIIssuer == "" {
@@ -177,6 +179,7 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 	}
 
 	mux := http.NewServeMux()
+	eehooks.Mount(eehooks.MountContext{Mux: mux, Log: cfg.Log})
 	mux.HandleFunc("GET /healthz", svc.health)
 	// Every route of the API is under /v1. It answers 401 before it says whether a route exists.
 	mux.Handle("/v1/", apiHandler)
@@ -335,7 +338,8 @@ func newService(db *sql.DB, tenant uuid.UUID, log *slog.Logger, limits api.Limit
 // principal is the only way a token becomes a caller: the principal this tenant bound to the token's
 // issuer and subject. The tenant is the process's, never the token's or the request's.
 //
-// A login never changes once written, so a found one is kept for loginTTL. Every other lookup is
+// A closed login is unknown on the next database read. A found one is kept for loginTTL, which does
+// not keep a role (ADR-0131). Every other lookup is
 // charged to a bucket of the tenant before it reaches the database, so a stream of valid tokens for
 // subjects the tenant never bound costs the database no more than that bucket allows. While the
 // bucket is empty, a login not yet kept is refused like an unbound one.

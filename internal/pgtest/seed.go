@@ -141,6 +141,21 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 		INSERT INTO identity.invitation (tenant_id, token_sha256, name, role, created_by)
 		VALUES ($1::uuid, sha256(convert_to('seeded invitation', 'UTF8')), 'Invited', 'viewer', $2::uuid)`, tenant, person)
 	mustExec(`
+		INSERT INTO identity.scim_user (tenant_id, principal_id, external_id, user_name)
+		VALUES ($1::uuid, $2::uuid, 'subject-1', 'ada@example.test')`, tenant, person)
+	mustExec(`
+		INSERT INTO identity.scim_token (tenant_id, token_sha256)
+		VALUES ($1::uuid, sha256(convert_to('seeded scim token', 'UTF8')))`, tenant)
+	mustExec(`
+		INSERT INTO identity.scim_group (tenant_id, group_ref)
+		VALUES ($1::uuid, 'engineering')`, tenant)
+	mustExec(`
+		INSERT INTO identity.scim_membership (tenant_id, group_id, principal_id)
+		SELECT $1::uuid, id, $2::uuid FROM identity.scim_group WHERE tenant_id = $1::uuid`, tenant, person)
+	mustExec(`
+		INSERT INTO identity.idp_group_role (tenant_id, group_ref, role)
+		VALUES ($1::uuid, 'engineering', 'viewer')`, tenant)
+	mustExec(`
 		INSERT INTO identity.action_log (tenant_id, principal_id, responsible_id, action, subject)
 		VALUES ($1::uuid, $2::uuid, $2::uuid, 'api.read', 'registry')`, tenant, person)
 	mustExec(`INSERT INTO llm.usage (tenant_id, month, tokens) VALUES ($1::uuid, '2026-01-01', 1)`, tenant)

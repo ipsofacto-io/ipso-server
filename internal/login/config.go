@@ -14,6 +14,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/ipsofacto-io/ipso-server/eehooks"
 )
 
 const (
@@ -41,14 +43,19 @@ var (
 type ProviderConfig struct {
 	// ID is the name in the redirect URI: /auth/callback/{id}.
 	ID string `json:"id"`
-	// Kind is KindOIDC or KindGitHub.
+	// Kind is KindOIDC, KindGitHub, or a kind the enterprise binary registered.
 	Kind string `json:"kind"`
 	// Issuer is the https issuer of an OIDC provider. GitHub has a fixed one and takes none.
+	// A registered kind takes its issuer from metadata and leaves this empty.
 	Issuer string `json:"issuer"`
-	// ClientID is the id of the application registered with the provider.
+	// ClientID is the id of the application registered with the provider. For a registered kind it
+	// is the entity id of this service provider.
 	ClientID string `json:"client_id"`
-	// ClientSecretEnv names the environment variable that holds the client secret.
+	// ClientSecretEnv names the environment variable that holds the client secret. A registered
+	// kind has none.
 	ClientSecretEnv string `json:"client_secret_env"`
+	// MetadataURL is the https metadata of a registered kind, fetched once at start.
+	MetadataURL string `json:"metadata_url,omitempty"`
 }
 
 // ParseProviders reads the providers strictly: an unknown field is an error.
@@ -90,8 +97,19 @@ func validate(providers []ProviderConfig, forbidden []string, secret func(string
 			return fmt.Errorf("%s: the id is used twice", where)
 		}
 		ids[p.ID] = true
-		switch p.Kind {
-		case KindOIDC:
+		_, registered := eehooks.LookupKind(p.Kind)
+		switch {
+		case registered:
+			if p.Issuer != "" || p.ClientSecretEnv != "" {
+				return fmt.Errorf("%s: this kind takes a metadata URL and no issuer or client secret", where)
+			}
+			if err := httpsMetadata(p.MetadataURL); err != nil {
+				return fmt.Errorf("%s: %w", where, err)
+			}
+		case p.Kind == KindOIDC:
+			if p.MetadataURL != "" {
+				return fmt.Errorf("%s: metadata_url is only for a registered kind", where)
+			}
 			parsed, err := url.Parse(p.Issuer)
 			if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 				return fmt.Errorf("%s: the issuer must be an https URL", where)
@@ -103,7 +121,10 @@ func validate(providers []ProviderConfig, forbidden []string, secret func(string
 				return fmt.Errorf("%s: the issuer is used twice", where)
 			}
 			issuers[p.Issuer] = true
-		case KindGitHub:
+		case p.Kind == KindGitHub:
+			if p.MetadataURL != "" {
+				return fmt.Errorf("%s: metadata_url is only for a registered kind", where)
+			}
 			if p.Issuer != "" {
 				return fmt.Errorf("%s: GitHub has a fixed issuer and takes none", where)
 			}
@@ -122,6 +143,9 @@ func validate(providers []ProviderConfig, forbidden []string, secret func(string
 				return fmt.Errorf("%s: client_id equals the audience of the API or of remote MCP", where)
 			}
 		}
+		if registered {
+			continue
+		}
 		if !secretEnvVar.MatchString(p.ClientSecretEnv) || p.ClientSecretEnv == ProvidersEnv {
 			return fmt.Errorf("%s: client_secret_env must name an IPSO_LOGIN_ variable that holds a secret", where)
 		}
@@ -133,6 +157,14 @@ func validate(providers []ProviderConfig, forbidden []string, secret func(string
 }
 
 func isControl(r rune) bool { return r < 0x20 || r == 0x7f }
+
+func httpsMetadata(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("metadata_url must be an https URL")
+	}
+	return nil
+}
 
 // CanonicalOrigin returns the origin of a public URL: https, or http for a loopback host only, with
 // no user information, path, query, or fragment, a lowercase host, and no default port. The origin

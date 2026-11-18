@@ -41,6 +41,9 @@ var notRestored = map[string]bool{
 	"identity.session":   true,
 	// An invitation holds a credential hash and is used once, so it is never in an archive (ADR-0127).
 	"identity.invitation": true,
+	// A SCIM user holds the filter key, and a SCIM token holds a credential hash (ADR-0131).
+	"identity.scim_user":  true,
+	"identity.scim_token": true,
 	// A binding is unique across tenants, so a restore into a fresh tenant would find it taken (ADR-0101).
 	"tenancy.installation": true,
 	// The exports made through the API stay where they are made and are never in another archive (ADR-0111).

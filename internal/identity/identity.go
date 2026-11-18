@@ -112,7 +112,7 @@ func PrincipalFor(ctx context.Context, db *sql.DB, tenant uuid.UUID, issuer, sub
 		return tx.QueryRowContext(ctx, `
 			SELECT principal_id
 			FROM identity.login
-			WHERE tenant_id = $1 AND issuer = $2 AND subject = $3`, tenant, issuer, subject).Scan(&principal)
+			WHERE tenant_id = $1 AND issuer = $2 AND subject = $3 AND closed_at IS NULL`, tenant, issuer, subject).Scan(&principal)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return uuid.Nil, ErrUnknownLogin

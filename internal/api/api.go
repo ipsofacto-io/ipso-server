@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/time/rate"
 
+	"github.com/ipsofacto-io/ipso-server/eehooks"
 	"github.com/ipsofacto-io/ipso-server/internal/audit"
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/authz"
@@ -284,7 +285,33 @@ func routes(db *sql.DB, now func() time.Time, log *slog.Logger, origin string) [
 		{"GET /v1/audit/waivers", "audit_waivers", authz.AuditRead, []string{"known", "now"}, nil, audits},
 		{"GET /v1/verdicts", "list_verdicts", authz.VerdictsRead, []string{"repo", "decision", "known", "limit", "before"}, nil, http.HandlerFunc(verdicts.list)},
 	}
-	return slices.Concat(reads, writeRoutes(db, log), exportRoutes(db, log), invitationRoutes(db, log, origin), roleBindingRoutes(db, log), auditLogRoutes(db, log))
+	return slices.Concat(reads, writeRoutes(db, log), exportRoutes(db, log), invitationRoutes(db, log, origin), roleBindingRoutes(db, log), auditLogRoutes(db, log), enterpriseRoutes())
+}
+
+// enterpriseRoutes are the admin routes the enterprise binary registered. They are absent unless
+// sso.saml is allowed and a directory is installed, so the community document stays unchanged.
+func enterpriseRoutes() []route {
+	if !eehooks.Allow(eehooks.FeatureSAML) || eehooks.CurrentDirectory() == nil {
+		return nil
+	}
+	var out []route
+	for _, g := range eehooks.Guarded() {
+		serve := g.Serve
+		out = append(out, route{
+			pattern: g.Pattern,
+			op:      g.Op,
+			action:  authz.PrincipalManage,
+			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				caller, ok := r.Context().Value(callerKey{}).(Caller)
+				if !ok || caller.Principal == uuid.Nil {
+					writeError(w, http.StatusForbidden, errForbidden)
+					return
+				}
+				serve(w, r, caller.Principal)
+			}),
+		})
+	}
+	return out
 }
 
 // ciRoutes are the operations a CI job calls with its own OIDC token instead of a person's. They are
