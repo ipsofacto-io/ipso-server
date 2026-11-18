@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/ipsofacto-io/ipso-server/internal/identity"
 )
 
 var (
@@ -62,12 +64,14 @@ func Offboard(ctx context.Context, db *sql.DB, o OffboardOptions) (OffboardRepor
 	case o.Tenant == uuid.Nil:
 		return report, errors.New("offboard: a tenant id is required")
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return report, reduce("offboard: begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := setSession(ctx, tx, o.Tenant, true); err != nil {
+	// Triggers stay on until the purge, so the offboard entry can be stamped. The delete below turns
+	// them off, which is what lets it remove the append-only log (ADR-0129).
+	if err := setSession(ctx, tx, o.Tenant, false); err != nil {
 		return report, err
 	}
 
@@ -99,13 +103,44 @@ func Offboard(ctx context.Context, db *sql.DB, o OffboardOptions) (OffboardRepor
 	if err := requirePolicies(ctx, tx, tables); err != nil {
 		return report, err
 	}
-	// The head is read before the delete, because the delete removes the log. The caller has stopped the api
-	// and the worker, so nothing is appended between this read and the delete.
+	jobs, err := jobArgs(o.Tenant)
+	if err != nil {
+		return report, err
+	}
+	// The first run appends the offboard entry before the delete, and the tombstone keeps that head. A
+	// repeat finds the log already gone and reports the head the first run stored (ADR-0129).
+	var predictedRows, predictedJobs int64
+	var predictedKey bool
+	if hasRow {
+		if err := identity.EnsureOperator(ctx, tx, o.Tenant); err != nil {
+			return report, reduce("offboard: record the command", err)
+		}
+		predictedRows, err = countedRows(ctx, tx, tables, o.Tenant)
+		if err != nil {
+			return report, err
+		}
+		predictedRows++ // the entry written next, which the delete then removes
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM river.river_job WHERE args @> $1::jsonb`, jobs).Scan(&predictedJobs); err != nil {
+			return report, reduce("offboard: count the jobs", err)
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM tenancy.tenant_key WHERE tenant_id = $1)`, o.Tenant).Scan(&predictedKey); err != nil {
+			return report, reduce("offboard: count the key", err)
+		}
+		subject := fmt.Sprintf("rows %d jobs %d key %t", predictedRows, predictedJobs, predictedKey)
+		if err := identity.AppendOperator(ctx, tx, o.Tenant, identity.ActionOffboard, subject); err != nil {
+			return report, reduce("offboard: record the command", err)
+		}
+	}
+	// The head is read before the delete, because the delete removes the log. On the first run it is the
+	// offboard entry. The caller has stopped the api and the worker.
 	head, err := logHead(ctx, tx, o.Tenant)
 	if err != nil {
 		return report, err
 	}
 	report.LogSeq, report.LogHash = head.seq, head.hash
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('session_replication_role', 'replica', true)`); err != nil {
+		return report, reduce("offboard: skip triggers", err)
+	}
 	for _, t := range tables {
 		res, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE tenant_id = $1`, t.ident()), o.Tenant)
 		if err != nil {
@@ -120,15 +155,14 @@ func Offboard(ctx context.Context, db *sql.DB, o OffboardOptions) (OffboardRepor
 			report.KeyDestroyed = n > 0
 		}
 	}
-	jobs, err := jobArgs(o.Tenant)
-	if err != nil {
-		return report, err
-	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM river.river_job WHERE args @> $1::jsonb`, jobs)
 	if err != nil {
 		return report, reduce("offboard: delete the jobs", err)
 	}
 	report.DeletedJobs, _ = res.RowsAffected()
+	if hasRow && (report.DeletedRows != predictedRows || report.DeletedJobs != predictedJobs || report.KeyDestroyed != predictedKey) {
+		return report, fmt.Errorf("offboard: %w: the counts changed during the delete", ErrNotVerified)
+	}
 
 	left, err := remaining(ctx, tx, tables, o.Tenant)
 	if err != nil {
@@ -198,6 +232,19 @@ func (h chainHead) hashArg() any {
 	}
 	raw, _ := hex.DecodeString(h.hash)
 	return raw
+}
+
+// countedRows is the number of tenant rows the purge will delete, across every purgeable table.
+func countedRows(ctx context.Context, q queryer, tables []Table, tenant uuid.UUID) (int64, error) {
+	var total int64
+	for _, t := range tables {
+		var n int64
+		if err := q.QueryRowContext(ctx, fmt.Sprintf(`SELECT count(*) FROM %s WHERE tenant_id = $1`, t.ident()), tenant).Scan(&n); err != nil {
+			return 0, reduce("offboard: count "+t.String(), err)
+		}
+		total += n
+	}
+	return total, nil
 }
 
 // logHead reads the head of the chain of the tenant's action log. It repeats the query of identity's chain

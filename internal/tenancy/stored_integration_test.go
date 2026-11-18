@@ -97,8 +97,12 @@ func (l *lifecycle) ready(t *testing.T, tenant, recipient string) tenancy.Stored
 	if err != nil {
 		t.Fatal(err)
 	}
+	logs, people := l.count(t, "identity.action_log", tenant), l.count(t, "identity.principal", tenant)
 	if _, err := tenancy.RunStoredExport(t.Context(), l.app, uuid.MustParse(tenant), e.ID); err != nil {
 		t.Fatal(err)
+	}
+	if l.count(t, "identity.action_log", tenant) != logs || l.count(t, "identity.principal", tenant) != people {
+		t.Fatal("a stored export wrote an operator entry")
 	}
 	e, err = l.get(t, tenant, e.ID)
 	if err != nil || e.State != tenancy.ExportReady {
@@ -172,7 +176,11 @@ func TestAStoredExportIsTheArchiveThatRestoreReads(t *testing.T) {
 		if notRestored[table] {
 			continue
 		}
-		if got, want := l.rows(t, table, tenantC), l.rows(t, table, tenantA); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		got, want := l.rows(t, table, tenantC), l.rows(t, table, tenantA)
+		if table == "identity.principal" || table == "identity.action_log" {
+			got, want = withoutOperator(got), withoutOperator(want)
+		}
+		if strings.Join(got, "\n") != strings.Join(want, "\n") {
 			t.Errorf("%s differs after the restore:\n got  %v\n want %v", table, got, want)
 		}
 	}

@@ -115,7 +115,32 @@ func (l *lifecycle) count(t *testing.T, table, tenant string) int {
 	return n
 }
 
-// countAs counts the rows a role sees when ipso.tenant is the tenant.
+// lastEntry is the newest action log row of a tenant.
+func (l *lifecycle) lastEntry(t *testing.T, tenant string) (principal, responsible uuid.UUID, action, subject string) {
+	t.Helper()
+	err := l.admin.QueryRowContext(t.Context(), `
+		SELECT principal_id, responsible_id, action, subject
+		FROM identity.action_log WHERE tenant_id = $1::uuid
+		ORDER BY seq DESC LIMIT 1`, tenant).Scan(&principal, &responsible, &action, &subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return principal, responsible, action, subject
+}
+
+// withoutOperator drops the rows an operator command writes after the snapshot, so a restore can be
+// compared with the source on the rows the archive carried (ADR-0129).
+func withoutOperator(rows []string) []string {
+	id := chain.OperatorPrincipal.String()
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if !strings.Contains(row, id) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
 // logged adds n entries to the action log of the tenant as its seeded person, so the chain is longer than the
 // one entry the seed leaves, and returns what the check says about it.
 func (l *lifecycle) logged(t *testing.T, tenant string, n int) chain.LogReport {
@@ -136,6 +161,7 @@ func (l *lifecycle) logged(t *testing.T, tenant string, n int) chain.LogReport {
 	return report
 }
 
+// countAs counts the rows a role sees when ipso.tenant is the tenant.
 func (l *lifecycle) countAs(t *testing.T, db *sql.DB, table, tenant string) int {
 	t.Helper()
 	var n int
@@ -189,7 +215,7 @@ func (l *lifecycle) jobs(t *testing.T, tenant string) int {
 func (l *lifecycle) export(t *testing.T, tenant string, id *age.X25519Identity) ([]byte, tenancy.ExportReport) {
 	t.Helper()
 	var out bytes.Buffer
-	report, err := tenancy.Export(t.Context(), l.app, tenancy.ExportOptions{Tenant: uuid.MustParse(tenant), Recipients: []age.Recipient{id.Recipient()}, Out: &out})
+	report, err := tenancy.Export(t.Context(), l.app, tenancy.ExportOptions{Tenant: uuid.MustParse(tenant), Recipients: []age.Recipient{id.Recipient()}, Out: &out, Command: true})
 	if err != nil {
 		t.Fatalf("export %s: %v", tenant, err)
 	}
@@ -308,6 +334,7 @@ func TestProvisionRefusesOtherAttributesAndAnotherKey(t *testing.T) {
 		"another person name":        {Tenant: uuid.MustParse(tenantA), Name: "acme", Person: &other, KEK: l.kek},
 		"a login of someone else":    {Tenant: uuid.MustParse(tenantA), Name: "acme", Person: &otherLogin, KEK: l.kek},
 		"another key encryption key": {Tenant: uuid.MustParse(tenantA), Name: "acme", Person: person, KEK: otherKEK},
+		"the operator id":            {Tenant: uuid.MustParse(tenantA), Name: "acme", Person: &tenancy.Person{ID: chain.OperatorPrincipal, Name: "Ada", Issuer: "https://idp.example.test", Subject: "sub-1"}, KEK: l.kek},
 	} {
 		_, err := tenancy.Provision(t.Context(), l.app, opts)
 		switch name {
@@ -338,14 +365,16 @@ func TestExportThenRestoreReproducesTheTenantInAFreshOne(t *testing.T) {
 	archive, exported := l.export(t, tenantA, id)
 
 	// The archive holds this tenant's rows and nobody else's, and is not readable without the key.
+	// The operator principal and the export entry are written after the snapshot, so the live tables
+	// hold two rows the archive does not (ADR-0129).
 	want := 0
 	for _, table := range l.tables(t) {
 		if !notRestored[table] || table == "tenancy.tenant" {
 			want += l.count(t, table, tenantA)
 		}
 	}
-	if exported.Total != int64(want) {
-		t.Fatalf("export wrote %d rows, tenant A has %d in the exported tables", exported.Total, want)
+	if exported.Total != int64(want)-2 {
+		t.Fatalf("export wrote %d rows, tenant A has %d in the exported tables after the command's own entry", exported.Total, want)
 	}
 	if bytes.Contains(archive, []byte("synthetic tenant")) {
 		t.Fatal("the archive holds plaintext")
@@ -369,13 +398,34 @@ func TestExportThenRestoreReproducesTheTenantInAFreshOne(t *testing.T) {
 		if len(wantRows) == 0 {
 			t.Errorf("the seed left %s empty", table)
 		}
+		if table == "identity.principal" || table == "identity.action_log" {
+			// Each side has its own operator row, written after the snapshot. The copied rows match.
+			if strings.Join(withoutOperator(got), "\n") != strings.Join(withoutOperator(wantRows), "\n") {
+				t.Errorf("%s differs after the restore, apart from the operator rows:\n got  %v\n want %v", table, withoutOperator(got), withoutOperator(wantRows))
+			}
+			if len(got)-len(withoutOperator(got)) != 1 || len(wantRows)-len(withoutOperator(wantRows)) != 1 {
+				t.Errorf("%s has %d and %d operator rows, want one on each side", table, len(got)-len(withoutOperator(got)), len(wantRows)-len(withoutOperator(wantRows)))
+			}
+			continue
+		}
 		if strings.Join(got, "\n") != strings.Join(wantRows, "\n") {
 			t.Errorf("%s differs after the restore:\n got  %v\n want %v", table, got, wantRows)
 		}
 	}
-	// The chain verifies in the tenant it was restored into, and ends at the same hash: the tenant id is not in it.
-	if restored, err := chain.VerifyLog(t.Context(), l.app, uuid.MustParse(tenantC)); err != nil || !restored.Intact || restored.Entries != chained.Entries || restored.Head != chained.Head {
-		t.Errorf("the restored chain: %+v %v, want the head %s of %d entries", restored, err, chained.Head, chained.Entries)
+	principal, responsible, action, subject := l.lastEntry(t, tenantA)
+	if principal != chain.OperatorPrincipal || responsible != principal || action != chain.ActionExport || subject != fmt.Sprintf("rows %d files %d", exported.Total, exported.Files) || strings.Contains(subject, "age1") {
+		t.Fatalf("export entry = %s %s %q", principal, action, subject)
+	}
+	principal, responsible, action, subject = l.lastEntry(t, tenantC)
+	if principal != chain.OperatorPrincipal || responsible != principal || action != chain.ActionRestore || subject != fmt.Sprintf("source %s rows %d", tenantA, report.Total) {
+		t.Fatalf("restore entry = %s %s %q", principal, action, subject)
+	}
+	// The copied chain still verifies. The restore entry is the next position, and it is not the source's
+	// export entry, which was written after the snapshot. The tenant id is not in the hash.
+	restored, err := chain.VerifyLog(t.Context(), l.app, uuid.MustParse(tenantC))
+	source, sourceErr := chain.VerifyLog(t.Context(), l.app, uuid.MustParse(tenantA))
+	if err != nil || sourceErr != nil || !restored.Intact || !source.Intact || restored.Entries != chained.Entries+1 || source.Entries != chained.Entries+1 || restored.Head == source.Head || restored.Head == chained.Head {
+		t.Errorf("restored %+v (%v), source %+v (%v), archive head %s of %d entries", restored, err, source, sourceErr, chained.Head, chained.Entries)
 	}
 	// What a restore must not carry: sessions, the source's key, the source's name.
 	if n := l.count(t, "identity.session", tenantC); n != 0 {
@@ -400,9 +450,13 @@ func TestExportThenRestoreReproducesTheTenantInAFreshOne(t *testing.T) {
 	if got := l.countAs(t, l.app, "registry.scope", tenantC); got != l.count(t, "registry.scope", tenantA) {
 		t.Errorf("tenant C sees %d scopes, want %d", got, l.count(t, "registry.scope", tenantA))
 	}
-	// A tenant that has rows is not a target.
+	// A tenant that has rows is not a target, and the refusal writes no further entry.
+	logC := l.count(t, "identity.action_log", tenantC)
 	if _, err := l.restore(archive, tenantC, id, t); !errors.Is(err, tenancy.ErrNotFresh) {
 		t.Errorf("second restore = %v, want ErrNotFresh", err)
+	}
+	if l.count(t, "identity.action_log", tenantC) != logC {
+		t.Error("a refused restore wrote an entry")
 	}
 	if _, err := l.restore(archive, tenantB, id, t); !errors.Is(err, tenancy.ErrNotFresh) {
 		t.Errorf("restore into tenant B = %v, want ErrNotFresh", err)
@@ -751,15 +805,21 @@ func TestOffboardDeletesEverythingAndVerifiesIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("offboard: %v", err)
 	}
-	if !report.Verified || report.Repeat || !report.KeyDestroyed || report.DeletedRows != int64(totalA) || report.DeletedJobs != 1 {
-		t.Fatalf("report = %+v, want %d rows, 1 job, key destroyed, verified", report, totalA)
+	// The command appends the operator principal and the offboard entry, then deletes both with the tenant.
+	const added = 2
+	if !report.Verified || report.Repeat || !report.KeyDestroyed || report.DeletedRows != int64(totalA)+added || report.DeletedJobs != 1 {
+		t.Fatalf("report = %+v, want %d rows, 1 job, key destroyed, verified", report, totalA+added)
 	}
-	if report.LogSeq != head.HeadSeq || report.LogHash != head.Head {
-		t.Fatalf("the report holds the head %d %s, the chain ended at %d %s", report.LogSeq, report.LogHash, head.HeadSeq, head.Head)
+	if report.LogSeq != head.HeadSeq+1 || report.LogHash == "" || report.LogHash == head.Head {
+		t.Fatalf("the report holds the head %d %s, the chain ended at %d %s before the offboard entry", report.LogSeq, report.LogHash, head.HeadSeq, head.Head)
 	}
 	for table, n := range beforeA {
-		if report.Rows[table] != int64(n) {
-			t.Errorf("report says %d rows deleted from %s, there were %d", report.Rows[table], table, n)
+		wantDeleted := int64(n)
+		if table == "identity.principal" || table == "identity.action_log" {
+			wantDeleted++
+		}
+		if report.Rows[table] != wantDeleted {
+			t.Errorf("report says %d rows deleted from %s, there were %d and the command adds its own", report.Rows[table], table, n)
 		}
 		if got := l.count(t, table, tenantA); got != 0 {
 			t.Errorf("%d rows of tenant A remain in %s", got, table)
@@ -778,18 +838,17 @@ func TestOffboardDeletesEverythingAndVerifiesIt(t *testing.T) {
 	if err := l.admin.QueryRowContext(t.Context(), `SELECT deleted_rows, deleted_jobs, key_destroyed FROM tenancy.offboarding WHERE tenant_id = $1::uuid`, tenantA).Scan(&rows, &jobs, &destroyed); err != nil {
 		t.Fatal(err)
 	}
-	if rows != int64(totalA) || jobs != 1 || !destroyed {
+	if rows != int64(totalA)+added || jobs != 1 || !destroyed {
 		t.Errorf("tombstone = %d rows, %d jobs, destroyed %v", rows, jobs, destroyed)
 	}
-	// It also keeps the head of the chain of the log that was deleted with the tenant, so that a copy held
-	// elsewhere can still be checked (ADR-0126).
+	// The tombstone keeps the head of the offboard entry, which was deleted with the log (ADR-0129).
 	var logSeq int64
 	var logHash []byte
 	if err := l.admin.QueryRowContext(t.Context(), `SELECT log_seq, log_hash FROM tenancy.offboarding WHERE tenant_id = $1::uuid`, tenantA).Scan(&logSeq, &logHash); err != nil {
 		t.Fatal(err)
 	}
-	if logSeq != head.HeadSeq || hex.EncodeToString(logHash) != head.Head {
-		t.Errorf("the tombstone holds the head %d %x, the chain ended at %d %s", logSeq, logHash, head.HeadSeq, head.Head)
+	if logSeq != report.LogSeq || hex.EncodeToString(logHash) != report.LogHash {
+		t.Errorf("the tombstone holds the head %d %x, the report holds %d %s", logSeq, logHash, report.LogSeq, report.LogHash)
 	}
 	if l.count(t, tombstone, tenantB) != 0 {
 		t.Error("tenant B has a tombstone")
@@ -814,11 +873,11 @@ func TestOffboardDeletesEverythingAndVerifiesIt(t *testing.T) {
 	if !again.Repeat || !again.Verified || again.DeletedJobs != 1 || again.DeletedRows != 0 || l.jobs(t, tenantA) != 0 {
 		t.Errorf("repeat = %+v", again)
 	}
-	// The log is gone, so a repeat reports the head the first run kept.
-	if again.LogSeq != head.HeadSeq || again.LogHash != head.Head {
-		t.Errorf("a repeat reports the head %d %s, want %d %s", again.LogSeq, again.LogHash, head.HeadSeq, head.Head)
+	// The log is gone, so a repeat reports the head the first run kept and writes no second entry.
+	if again.LogSeq != report.LogSeq || again.LogHash != report.LogHash {
+		t.Errorf("a repeat reports the head %d %s, want %d %s", again.LogSeq, again.LogHash, report.LogSeq, report.LogHash)
 	}
-	if err := l.admin.QueryRowContext(t.Context(), `SELECT deleted_rows FROM tenancy.offboarding WHERE tenant_id = $1::uuid`, tenantA).Scan(&rows); err != nil || rows != int64(totalA) {
+	if err := l.admin.QueryRowContext(t.Context(), `SELECT deleted_rows FROM tenancy.offboarding WHERE tenant_id = $1::uuid`, tenantA).Scan(&rows); err != nil || rows != int64(totalA)+added {
 		t.Errorf("tombstone after a repeat = %d, %v", rows, err)
 	}
 
@@ -873,5 +932,69 @@ func TestOffboardRefusesATableTheMigrationRoleHasNoPolicyFor(t *testing.T) {
 	}
 	if l.count(t, tombstone, tenantA) != 0 {
 		t.Error("a refused offboarding wrote a tombstone")
+	}
+}
+
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+func TestAFailedExportWritesNoEntry(t *testing.T) {
+	l := newLifecycle(t)
+	l.provision(t, tenantA, "acme", nil)
+	_, err := tenancy.Export(t.Context(), l.app, tenancy.ExportOptions{
+		Tenant: uuid.MustParse(tenantA), Recipients: []age.Recipient{identity(t).Recipient()}, Out: failWriter{}, Command: true,
+	})
+	if err == nil {
+		t.Fatal("export succeeded")
+	}
+	if l.count(t, "identity.action_log", tenantA) != 0 || l.count(t, "identity.principal", tenantA) != 0 {
+		t.Error("a failed export wrote an entry")
+	}
+}
+
+func TestAnOperatorCommandRefusesAReservedIdHeldBySomeoneElse(t *testing.T) {
+	l := newLifecycle(t)
+	l.provision(t, tenantA, "acme", nil)
+	if _, err := l.admin.ExecContext(t.Context(), `
+		INSERT INTO identity.principal (tenant_id, id, kind, name) VALUES ($1, $2, 'human', 'Ada')`,
+		tenantA, chain.OperatorPrincipal); err == nil {
+		t.Fatal("a person took the operator id")
+	}
+	if l.count(t, "identity.action_log", tenantA) != 0 || l.count(t, "identity.principal", tenantA) != 0 {
+		t.Error("the refused insert left rows")
+	}
+}
+
+func TestRestoreRefusesAnArchiveThatTakesTheOperatorId(t *testing.T) {
+	l := newLifecycle(t)
+	pgtest.SeedEveryTable(t, l.app, tenantA)
+	l.provision(t, tenantC, "restored", nil)
+	id := identity(t)
+	archive, _ := l.export(t, tenantA, id)
+	p := open(t, archive, id)
+	changed := false
+	for i, r := range p.rows {
+		if r.Table != "identity.principal" {
+			continue
+		}
+		var row map[string]any
+		if err := json.Unmarshal(r.Row, &row); err != nil {
+			t.Fatal(err)
+		}
+		row["id"] = chain.OperatorPrincipal.String()
+		row["kind"] = "human"
+		p.rows[i].Row, _ = json.Marshal(row)
+		changed = true
+		break
+	}
+	if !changed {
+		t.Fatal("the archive has no principal")
+	}
+	if _, err := l.restore(seal(t, p, id), tenantC, id, t); err == nil {
+		t.Fatal("restore planted the operator id")
+	}
+	if l.count(t, "identity.principal", tenantC) != 0 || l.count(t, "identity.action_log", tenantC) != 0 {
+		t.Error("a refused restore left rows")
 	}
 }

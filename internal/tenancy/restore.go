@@ -13,6 +13,8 @@ import (
 	"filippo.io/age"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/ipsofacto-io/ipso-server/internal/identity"
 )
 
 var (
@@ -65,7 +67,7 @@ func Restore(ctx context.Context, db *sql.DB, o RestoreOptions) (RestoreReport, 
 	case o.In == nil:
 		return report, errors.New("restore: an archive is required")
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return report, reduce("restore: begin", err)
 	}
@@ -150,6 +152,15 @@ func Restore(ctx context.Context, db *sql.DB, o RestoreOptions) (RestoreReport, 
 		if orphans > 0 {
 			return report, fmt.Errorf("restore: %w: %s on %s", ErrOrphan, fk.name, fk.child)
 		}
+	}
+	// The copy skipped triggers. The entry is stamped with them back on, as the next position of the
+	// chain the archive carried (ADR-0129).
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('session_replication_role', 'origin', true)`); err != nil {
+		return report, reduce("restore: restore triggers", err)
+	}
+	subject := fmt.Sprintf("source %s rows %d", report.Source, report.Total)
+	if err := identity.AppendOperator(ctx, tx, o.Tenant, identity.ActionRestore, subject); err != nil {
+		return report, reduce("restore: record the command", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return report, reduce("restore: commit", err)

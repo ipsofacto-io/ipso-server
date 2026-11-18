@@ -1,6 +1,7 @@
 // Package identity reads who acts and records what they did. An agent is a principal with a human
-// sponsor, and the action log always names a person (ADR-0076). The rules live in the database, so
-// this package cannot be the one place that forgets them.
+// sponsor, and the action log names the person responsible, the sponsor for an agent (ADR-0076).
+// An operator command names the reserved operator principal (ADR-0129). The rules live in the
+// database, so this package cannot be the one place that forgets them.
 package identity
 
 import (
@@ -15,8 +16,24 @@ import (
 
 // Kinds of principal.
 const (
-	KindHuman = "human"
-	KindAgent = "agent"
+	KindHuman    = "human"
+	KindAgent    = "agent"
+	KindOperator = "operator"
+)
+
+// OperatorPrincipal is the principal an operator command names (ADR-0129). The id is reserved in every
+// tenant. It is not a person and holds no login and no role.
+var OperatorPrincipal = uuid.MustParse("01900000-0000-7000-8000-000000000001")
+
+// OperatorName is the name of OperatorPrincipal. It is a closed word, not a person's name.
+const OperatorName = "operator"
+
+// Actions an operator command writes. The subject is ids and counts, never a row.
+const (
+	ActionExport           = "operator.export"
+	ActionRestore          = "operator.restore"
+	ActionOffboard         = "operator.offboard"
+	ActionBindInstallation = "operator.bind_installation"
 )
 
 // Roles a binding can give, section 13.2 of the specification and ADR-0108.
@@ -38,6 +55,9 @@ var ErrInvalidQuery = errors.New("invalid query")
 
 // ErrUnknownPrincipal is returned when the tenant has no such principal.
 var ErrUnknownPrincipal = errors.New("unknown principal")
+
+// ErrOperatorPrincipal is returned when the reserved operator id belongs to another kind.
+var ErrOperatorPrincipal = errors.New("the operator principal is reserved")
 
 // ErrUnknownLogin is returned when the tenant has no login for the issuer and subject.
 var ErrUnknownLogin = errors.New("unknown login")

@@ -115,7 +115,7 @@ ipso-server tenant offboard --tenant <id> --confirm acme
 
 `--confirm` must be the name of the tenant, so a pasted id alone deletes nothing. In one transaction the command deletes every row of the tenant from every table that has a `tenant_id`, the wrapped data key and the installation bindings included, and the River jobs that name the tenant. It counts again, writes the tombstone, and commits. Then, in a new transaction, it looks a second time and exits non-zero if any row is left. A repeat removes what appeared since, such as a job a worker inserted while it was still running.
 
-The tombstone, `tenancy.offboarding`, holds the tenant id, the row and job counts, whether a key was destroyed, the head of the hash chain of the action log that was deleted with the tenant (`log_seq` and `log_hash`, empty when the log was empty), and the time. It is the record that the tenant was offboarded, and it outlives the tenant. Nothing deletes it. The head lets a customer who kept a copy of the log show that it was complete and unaltered ([docs/audit-log.md](audit-log.md#retention-and-offboarding)).
+The tombstone, `tenancy.offboarding`, holds the tenant id, the row and job counts, whether a key was destroyed, the head of the hash chain of the action log that was deleted with the tenant (`log_seq` and `log_hash`, empty when the log was empty), and the time. It is the record that the tenant was offboarded, and it outlives the tenant. Nothing deletes it. The head is the `operator.offboard` entry, which the command appends and then deletes with the log, so a copy kept from an export verifies on its own and ends one entry before that head ([docs/audit-log.md](audit-log.md#retention-and-offboarding)).
 
 ### What the deletion covers
 
