@@ -156,6 +156,12 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 		INSERT INTO identity.idp_group_role (tenant_id, group_ref, role)
 		VALUES ($1::uuid, 'engineering', 'viewer')`, tenant)
 	mustExec(`
+		INSERT INTO identity.idp_group_owner (tenant_id, group_ref, owner_ref)
+		VALUES ($1::uuid, 'engineering', 'team:platform')`, tenant)
+	mustExec(`
+		INSERT INTO identity.principal_owner (tenant_id, principal_id, owner_ref)
+		VALUES ($1::uuid, $2::uuid, 'team:platform')`, tenant, person)
+	mustExec(`
 		INSERT INTO identity.action_log (tenant_id, principal_id, responsible_id, action, subject)
 		VALUES ($1::uuid, $2::uuid, $2::uuid, 'api.read', 'registry')`, tenant, person)
 	mustExec(`INSERT INTO llm.usage (tenant_id, month, tokens) VALUES ($1::uuid, '2026-01-01', 1)`, tenant)

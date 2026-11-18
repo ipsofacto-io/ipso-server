@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -14,8 +15,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// SCIM is the enterprise exception that creates a person and assigns IdP roles (ADR-0131). A SAML
-// sign-in still does not. These functions run as the application role in the process tenant.
+// SCIM is the enterprise exception that creates a person, assigns IdP roles, and records owner
+// teams (ADR-0131, ADR-0132). A SAML sign-in still does not. These functions run as the application
+// role in the process tenant.
 
 // ErrSCIMConflict is returned when user_name or external_id is already in use.
 var ErrSCIMConflict = errors.New("scim conflict")
@@ -33,6 +35,13 @@ type SCIMUser struct {
 type SCIMGroup struct {
 	ID  uuid.UUID
 	Ref string
+}
+
+// IDPGroupOwner is one mapping from a group ref to an owner team.
+type IDPGroupOwner struct {
+	ID       uuid.UUID
+	GroupRef string
+	OwnerRef string
 }
 
 // IDPGroupRole is one mapping from a group ref to a role.
@@ -382,9 +391,9 @@ func SCIMGroupMembers(ctx context.Context, db *sql.DB, tenant, groupID uuid.UUID
 	return ids, nil
 }
 
-// ReplaceSCIMGroupMembers replaces the members of one group and recomputes IdP role bindings for
-// everyone who was a member or is one now. Hand bindings stay. The last tenant-wide admin is not
-// removed, and then nothing is written.
+// ReplaceSCIMGroupMembers replaces the members of one group and recomputes IdP role bindings and
+// owner teams for everyone who was a member or is one now. Hand bindings and hand owner teams stay.
+// The last tenant-wide admin is not removed, and then nothing is written.
 func ReplaceSCIMGroupMembers(ctx context.Context, db *sql.DB, tenant, groupID uuid.UUID, members []uuid.UUID) error {
 	if tenant == uuid.Nil || groupID == uuid.Nil || len(members) > maxSCIMMembers {
 		return fmt.Errorf("%w: a group and at most %d members are required", ErrInvalidQuery, maxSCIMMembers)
@@ -453,6 +462,9 @@ func ReplaceSCIMGroupMembers(ctx context.Context, db *sql.DB, tenant, groupID uu
 		if err := syncIDPRoles(ctx, tx, people); err != nil {
 			return err
 		}
+		if err := syncIDPOwners(ctx, tx, people); err != nil {
+			return err
+		}
 		for _, id := range people {
 			if err := insertAction(ctx, tx, id, "scim.groups", id.String()); err != nil {
 				return err
@@ -490,6 +502,9 @@ func DeleteSCIMGroup(ctx context.Context, db *sql.DB, tenant, groupID uuid.UUID)
 			return ErrUnknownPrincipal
 		}
 		if err := syncIDPRoles(ctx, tx, old); err != nil {
+			return err
+		}
+		if err := syncIDPOwners(ctx, tx, old); err != nil {
 			return err
 		}
 		for _, id := range old {
@@ -662,6 +677,106 @@ func DeleteIDPGroupRole(ctx context.Context, db *sql.DB, tenant, actor, id uuid.
 	return scimErr(err)
 }
 
+// PutIDPGroupOwner inserts a mapping and recomputes the members of that group.
+func PutIDPGroupOwner(ctx context.Context, db *sql.DB, tenant, actor uuid.UUID, groupRef, ownerRef string) (IDPGroupOwner, error) {
+	if tenant == uuid.Nil || actor == uuid.Nil || !validText(groupRef, 200) || !ownerTeamOK(ownerRef) {
+		return IDPGroupOwner{}, fmt.Errorf("%w: a group and an owner team are required", ErrInvalidQuery)
+	}
+	var row IDPGroupOwner
+	err := inTenantAt(ctx, db, tenant, sql.LevelReadCommitted, false, func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx, `
+			INSERT INTO identity.idp_group_owner (tenant_id, group_ref, owner_ref)
+			VALUES (ipso.current_tenant(), $1, $2)
+			RETURNING id, group_ref, owner_ref`, groupRef, ownerRef).Scan(
+			&row.ID, &row.GroupRef, &row.OwnerRef)
+		if err != nil {
+			return err
+		}
+		people, err := membersOfRef(ctx, tx, groupRef)
+		if err != nil {
+			return err
+		}
+		if err := syncIDPOwners(ctx, tx, people); err != nil {
+			return err
+		}
+		for _, id := range people {
+			if err := insertAction(ctx, tx, id, "scim.group_owner", id.String()); err != nil {
+				return err
+			}
+		}
+		return insertAction(ctx, tx, actor, "scim.group_owner", row.ID.String())
+	})
+	if err != nil {
+		return IDPGroupOwner{}, scimErr(err)
+	}
+	return row, nil
+}
+
+// ListIDPGroupOwners returns every owner-team mapping in the tenant.
+func ListIDPGroupOwners(ctx context.Context, db *sql.DB, tenant uuid.UUID) ([]IDPGroupOwner, error) {
+	if tenant == uuid.Nil {
+		return nil, fmt.Errorf("%w: a tenant is required", ErrInvalidQuery)
+	}
+	var rowsOut []IDPGroupOwner
+	err := inTenant(ctx, db, tenant, true, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id, group_ref, owner_ref
+			FROM identity.idp_group_owner
+			WHERE tenant_id = ipso.current_tenant()
+			ORDER BY group_ref, owner_ref`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var row IDPGroupOwner
+			if err := rows.Scan(&row.ID, &row.GroupRef, &row.OwnerRef); err != nil {
+				return err
+			}
+			rowsOut = append(rowsOut, row)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, scimErr(err)
+	}
+	return rowsOut, nil
+}
+
+// DeleteIDPGroupOwner removes one mapping and recomputes the members of that group.
+func DeleteIDPGroupOwner(ctx context.Context, db *sql.DB, tenant, actor, id uuid.UUID) error {
+	if tenant == uuid.Nil || actor == uuid.Nil || id == uuid.Nil {
+		return fmt.Errorf("%w: a mapping is required", ErrInvalidQuery)
+	}
+	err := inTenantAt(ctx, db, tenant, sql.LevelReadCommitted, false, func(tx *sql.Tx) error {
+		var ref string
+		err := tx.QueryRowContext(ctx, `
+			DELETE FROM identity.idp_group_owner
+			WHERE tenant_id = ipso.current_tenant() AND id = $1
+			RETURNING group_ref`, id).Scan(&ref)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrUnknownBinding
+		}
+		if err != nil {
+			return err
+		}
+		people, err := membersOfRef(ctx, tx, ref)
+		if err != nil {
+			return err
+		}
+		if err := syncIDPOwners(ctx, tx, people); err != nil {
+			return err
+		}
+		for _, principal := range people {
+			if err := insertAction(ctx, tx, principal, "scim.group_owner", principal.String()); err != nil {
+				return err
+			}
+		}
+		return insertAction(ctx, tx, actor, "scim.group_owner", id.String())
+	})
+	return scimErr(err)
+}
+
 func closePrincipal(ctx context.Context, tx *sql.Tx, principal uuid.UUID) error {
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM identity.session
@@ -673,6 +788,11 @@ func closePrincipal(ctx context.Context, tx *sql.Tx, principal uuid.UUID) error 
 	}
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM identity.role_binding
+		WHERE tenant_id = ipso.current_tenant() AND principal_id = $1`, principal); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM identity.principal_owner
 		WHERE tenant_id = ipso.current_tenant() AND principal_id = $1`, principal); err != nil {
 		return err
 	}
@@ -857,6 +977,89 @@ func idpRoles(ctx context.Context, tx *sql.Tx, principal uuid.UUID) (map[grantKe
 	return out, rows.Err()
 }
 
+func syncIDPOwners(ctx context.Context, tx *sql.Tx, people []uuid.UUID) error {
+	if len(people) == 0 {
+		return nil
+	}
+	for _, id := range people {
+		want, err := desiredOwners(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		current, err := idpOwners(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		for team := range current {
+			if _, keep := want[team]; keep {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `
+				DELETE FROM identity.principal_owner
+				WHERE tenant_id = ipso.current_tenant() AND principal_id = $1
+				  AND owner_ref = $2 AND source = 'idp'`, id, team); err != nil {
+				return err
+			}
+		}
+		for team := range want {
+			if _, have := current[team]; have {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO identity.principal_owner (tenant_id, principal_id, owner_ref, source)
+				SELECT ipso.current_tenant(), $1, $2, 'idp'
+				WHERE NOT EXISTS (
+				    SELECT 1 FROM identity.principal_owner
+				    WHERE tenant_id = ipso.current_tenant() AND principal_id = $1
+				      AND owner_ref = $2)`, id, team); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func desiredOwners(ctx context.Context, tx *sql.Tx, principal uuid.UUID) (map[string]struct{}, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT r.owner_ref
+		FROM identity.scim_membership m
+		JOIN identity.scim_group g ON g.tenant_id = m.tenant_id AND g.id = m.group_id
+		JOIN identity.idp_group_owner r ON r.tenant_id = m.tenant_id AND r.group_ref = g.group_ref
+		WHERE m.tenant_id = ipso.current_tenant() AND m.principal_id = $1`, principal)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var team string
+		if err := rows.Scan(&team); err != nil {
+			return nil, err
+		}
+		out[team] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+func idpOwners(ctx context.Context, tx *sql.Tx, principal uuid.UUID) (map[string]struct{}, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT owner_ref FROM identity.principal_owner
+		WHERE tenant_id = ipso.current_tenant() AND principal_id = $1 AND source = 'idp'`, principal)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var team string
+		if err := rows.Scan(&team); err != nil {
+			return nil, err
+		}
+		out[team] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
 func memberIDs(ctx context.Context, tx *sql.Tx, groupID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT principal_id FROM identity.scim_membership
@@ -909,6 +1112,12 @@ func validSCIMIdentity(issuer, externalID, userName, name string) error {
 		return fmt.Errorf("%w: an issuer, an external id, a user name, and a name are required", ErrInvalidQuery)
 	}
 	return nil
+}
+
+var ownerTeam = regexp.MustCompile(`^team:[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
+
+func ownerTeamOK(value string) bool {
+	return validText(value, 200) && ownerTeam.MatchString(value)
 }
 
 func validText(value string, max int) bool {
