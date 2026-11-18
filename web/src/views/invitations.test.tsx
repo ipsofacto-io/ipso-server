@@ -282,7 +282,7 @@ describe('what the server refuses', () => {
     stubFetch(refuse('GET', 503, 'timeout'));
     renderApp('/invitations');
     expect(await screen.findByText('The request took too long.')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Invitations' })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Invitations' })).toBeInTheDocument();
   });
 });
 
