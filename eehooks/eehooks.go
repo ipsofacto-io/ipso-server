@@ -1,19 +1,25 @@
-// Package eehooks is the registration point the enterprise binary uses to add SAML and SCIM
-// without the community binary importing it (ADR-0131). The default gate denies sso.saml.
+// Package eehooks is the registration point the enterprise binary uses to add SAML, SCIM,
+// and paid tracker connectors without the community binary importing them (ADR-0131, ADR-0133).
+// The default gate denies every key.
 package eehooks
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 // FeatureSAML is the feature key that gates SAML sign-in and SCIM together (ADR-0018).
 const FeatureSAML = "sso.saml"
+
+// FeatureTrackers is the feature key that gates Jira, Linear, and GitHub Issues (ADR-0133).
+const FeatureTrackers = "connectors.trackers"
 
 // Gate says whether a feature key is allowed for this process.
 type Gate interface {
@@ -203,13 +209,16 @@ func Guarded() []GuardedRoute {
 	return out
 }
 
-// MountContext is the mux the enterprise binary may attach /scim/v2 to.
+// MountContext is what an enterprise mount may attach to the control plane.
 type MountContext struct {
-	Mux *http.ServeMux
-	Log *slog.Logger
+	Mux    *http.ServeMux
+	Log    *slog.Logger
+	DB     *sql.DB
+	Tenant uuid.UUID
 }
 
-// MountFunc attaches routes. It runs only when sso.saml is allowed.
+// MountFunc attaches routes. SAML mounts run when sso.saml is allowed.
+// Tracker mounts run when connectors.trackers is allowed.
 type MountFunc func(MountContext)
 
 var mounts []MountFunc
@@ -223,21 +232,180 @@ func RegisterMount(fn MountFunc) {
 	}
 }
 
-// Mount runs the registered mounts when sso.saml is allowed.
+// Mount runs the registered mounts. SAML mounts run when sso.saml is allowed and a directory is
+// installed. Tracker mounts run when connectors.trackers is allowed.
 func Mount(ctx MountContext) {
-	if !Allow(FeatureSAML) || ctx.Mux == nil || CurrentDirectory() == nil {
-		return
+	if Allow(FeatureSAML) && ctx.Mux != nil && CurrentDirectory() != nil {
+		mu.RLock()
+		fns := append([]MountFunc(nil), mounts...)
+		mu.RUnlock()
+		for _, fn := range fns {
+			fn(ctx)
+		}
 	}
-	mu.RLock()
-	fns := append([]MountFunc(nil), mounts...)
-	mu.RUnlock()
-	for _, fn := range fns {
-		fn(ctx)
+	if Allow(FeatureTrackers) && ctx.Mux != nil {
+		mu.RLock()
+		fns := append([]MountFunc(nil), trackerMounts...)
+		mu.RUnlock()
+		for _, fn := range fns {
+			fn(ctx)
+		}
 	}
 }
 
-// ResetForTest clears the gate, kinds, directory, routes, and mounts. A test that changes them
-// calls it from t.Cleanup.
+// TrackerAdmin replaces one tracker binding. The enterprise route calls it.
+type TrackerAdmin interface {
+	Put(ctx context.Context, actor uuid.UUID, connector, account, label, token, webhook string) (uuid.UUID, error)
+}
+
+// WaiverTicket is a ticket a tracker created before the waiver row is inserted.
+// Abandon comments on the ticket when the waiver is not recorded.
+type WaiverTicket struct {
+	Connector  string
+	ExternalID string
+	URL        string
+	Key        string
+	Abandon    func(context.Context)
+}
+
+// OpenWaiverFunc creates the waiver ticket. false means the caller must still require ticket_ref.
+type OpenWaiverFunc func(ctx context.Context, db *sql.DB, tenant uuid.UUID, reason string, from, until time.Time) (WaiverTicket, bool, error)
+
+// CloseDueFunc sets done on waiver tickets this server created once the 0-day notice is stored.
+type CloseDueFunc func(ctx context.Context, db *sql.DB, tenant uuid.UUID) error
+
+// CompleteFunc is one model call for a tenant. text and model are the answer.
+type CompleteFunc func(ctx context.Context, tenant uuid.UUID, system, user string, maxTokens int) (text, model string, err error)
+
+var (
+	trackerGuarded []GuardedRoute
+	trackerMounts  []MountFunc
+	trackerAdmin   TrackerAdmin
+	connectorKey   []byte
+	openWaiver     OpenWaiverFunc
+	closeDue       CloseDueFunc
+	complete       CompleteFunc
+)
+
+// RegisterTrackerGuarded appends admin routes mounted only when connectors.trackers is allowed.
+func RegisterTrackerGuarded(routes []GuardedRoute) {
+	mu.Lock()
+	defer mu.Unlock()
+	trackerGuarded = append(trackerGuarded, routes...)
+}
+
+// TrackerGuarded returns a copy of the tracker admin routes.
+func TrackerGuarded() []GuardedRoute {
+	mu.RLock()
+	defer mu.RUnlock()
+	out := make([]GuardedRoute, len(trackerGuarded))
+	copy(out, trackerGuarded)
+	return out
+}
+
+// RegisterTrackerMount appends a mount that runs when connectors.trackers is allowed.
+func RegisterTrackerMount(fn MountFunc) {
+	mu.Lock()
+	defer mu.Unlock()
+	if fn != nil {
+		trackerMounts = append(trackerMounts, fn)
+	}
+}
+
+// SetTrackerAdmin installs the binding writer. A nil admin clears it.
+func SetTrackerAdmin(admin TrackerAdmin) {
+	mu.Lock()
+	defer mu.Unlock()
+	trackerAdmin = admin
+}
+
+// CurrentTrackerAdmin returns the installed admin, or nil.
+func CurrentTrackerAdmin() TrackerAdmin {
+	mu.RLock()
+	defer mu.RUnlock()
+	return trackerAdmin
+}
+
+// SetConnectorKey installs the process connector key. A nil key clears it. The bytes are not logged.
+func SetConnectorKey(key []byte) {
+	mu.Lock()
+	defer mu.Unlock()
+	if len(key) == 0 {
+		connectorKey = nil
+		return
+	}
+	connectorKey = append([]byte(nil), key...)
+}
+
+// ConnectorKey returns a copy of the process connector key, or nil.
+func ConnectorKey() []byte {
+	mu.RLock()
+	defer mu.RUnlock()
+	if len(connectorKey) == 0 {
+		return nil
+	}
+	return append([]byte(nil), connectorKey...)
+}
+
+// SetOpenWaiver installs the waiver-ticket opener. A nil opener clears it.
+func SetOpenWaiver(fn OpenWaiverFunc) {
+	mu.Lock()
+	defer mu.Unlock()
+	openWaiver = fn
+}
+
+// OpenWaiver creates a ticket when the feature is allowed and an opener is installed.
+// Otherwise it reports that ticket_ref is still required.
+func OpenWaiver(ctx context.Context, db *sql.DB, tenant uuid.UUID, reason string, from, until time.Time) (WaiverTicket, bool, error) {
+	if !Allow(FeatureTrackers) {
+		return WaiverTicket{}, false, nil
+	}
+	mu.RLock()
+	fn := openWaiver
+	mu.RUnlock()
+	if fn == nil {
+		return WaiverTicket{}, false, nil
+	}
+	return fn(ctx, db, tenant, reason, from, until)
+}
+
+// SetCloseDue installs the closer used when a 0-day notice is stored.
+func SetCloseDue(fn CloseDueFunc) {
+	mu.Lock()
+	defer mu.Unlock()
+	closeDue = fn
+}
+
+// CloseDue asks the closer to finish waiver tickets. A denied feature or no closer does nothing.
+func CloseDue(ctx context.Context, db *sql.DB, tenant uuid.UUID) error {
+	if !Allow(FeatureTrackers) {
+		return nil
+	}
+	mu.RLock()
+	fn := closeDue
+	mu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn(ctx, db, tenant)
+}
+
+// SetComplete installs the model call used when a ticket is ingested. A nil call stores no proposal.
+func SetComplete(fn CompleteFunc) {
+	mu.Lock()
+	defer mu.Unlock()
+	complete = fn
+}
+
+// Complete returns the installed model call, or nil.
+func Complete() CompleteFunc {
+	mu.RLock()
+	defer mu.RUnlock()
+	return complete
+}
+
+// ResetForTest clears the gate, kinds, directory, routes, mounts, and tracker hooks. A test that
+// changes them calls it from t.Cleanup.
 func ResetForTest() {
 	mu.Lock()
 	defer mu.Unlock()
@@ -246,4 +414,11 @@ func ResetForTest() {
 	directory = nil
 	guarded = nil
 	mounts = nil
+	trackerGuarded = nil
+	trackerMounts = nil
+	trackerAdmin = nil
+	connectorKey = nil
+	openWaiver = nil
+	closeDue = nil
+	complete = nil
 }

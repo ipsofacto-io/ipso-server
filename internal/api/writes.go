@@ -8,15 +8,18 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/ipsofacto-io/ipso-server/eehooks"
 	"github.com/ipsofacto-io/ipso-server/internal/authz"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/proposals"
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
+	"github.com/ipsofacto-io/ipso-server/trackers"
 )
 
 // The write routes of ADR-0109. Every one is an action only a person takes. The guard has decided the role
@@ -313,18 +316,51 @@ func (h *writeHandlers) recordWaiver(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	h.write(w, r, "record_waiver", http.StatusCreated, func(ctx context.Context, tx *sql.Tx, caller Caller) (string, any, error) {
-		waiver, err := registry.RecordWaiver(ctx, tx, caller.Tenant, caller.Principal, registry.NewWaiver{
+	caller, ok := personOf(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return
+	}
+	var opened eehooks.WaiverTicket
+	if strings.TrimSpace(req.TicketRef) == "" {
+		ticket, openedOK, err := eehooks.OpenWaiver(r.Context(), h.db, caller.Tenant, req.Reason, req.ValidFrom, req.ExpiresAt)
+		if err != nil {
+			h.log.Info("a waiver ticket was not created", "op", "record_waiver")
+			writeError(w, http.StatusBadGateway, errUnavailable)
+			return
+		}
+		if !openedOK || strings.TrimSpace(ticket.Key) == "" {
+			writeError(w, http.StatusBadRequest, errInvalidQuery)
+			return
+		}
+		req.TicketRef = ticket.Key
+		opened = ticket
+	}
+	var answer any
+	err := identity.WithAction(r.Context(), h.db, caller.Tenant, caller.Principal, "api.record_waiver", func(tx *sql.Tx) (string, error) {
+		waiver, err := registry.RecordWaiver(r.Context(), tx, caller.Tenant, caller.Principal, registry.NewWaiver{
 			DecisionID: req.DecisionID, ScopeID: req.ScopeID, Reason: req.Reason, TicketRef: req.TicketRef,
 			ValidFrom: req.ValidFrom, ExpiresAt: req.ExpiresAt,
 		})
 		if err != nil {
-			return "", nil, err
+			return "", err
 		}
-		// The answer leaves out the reason and the approver, as the read does (ADR-0054).
-		return fmt.Sprintf("waiver %s of %s on %s", waiver.ID, waiver.DecisionID, waiver.ScopeID),
-			waiverJSON{ID: waiver.ID, DecisionID: waiver.DecisionID, ScopeID: waiver.ScopeID, TicketRef: waiver.TicketRef, ValidFrom: waiver.ValidFrom, ExpiresAt: waiver.ExpiresAt}, nil
+		if opened.ExternalID != "" {
+			if err := trackers.LinkWaiver(r.Context(), tx, caller.Tenant, opened.Connector, opened.ExternalID, opened.URL, waiver.ID); err != nil {
+				return "", err
+			}
+		}
+		answer = waiverJSON{ID: waiver.ID, DecisionID: waiver.DecisionID, ScopeID: waiver.ScopeID, TicketRef: waiver.TicketRef, ValidFrom: waiver.ValidFrom, ExpiresAt: waiver.ExpiresAt}
+		return fmt.Sprintf("waiver %s of %s on %s", waiver.ID, waiver.DecisionID, waiver.ScopeID), nil
 	})
+	if err != nil {
+		if opened.Abandon != nil {
+			opened.Abandon(r.Context())
+		}
+		writeStoreError(w, h.log, "record_waiver", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, answer)
 }
 
 type clearanceRequest struct{}
@@ -427,6 +463,65 @@ func (h *writeHandlers) approveProposal(w http.ResponseWriter, r *http.Request) 
 
 func (h *writeHandlers) approveAgentProposal(w http.ResponseWriter, r *http.Request) {
 	h.approve(w, r, "approve_agent_proposal", proposals.QueueAgentProposals)
+}
+
+func (h *writeHandlers) approveTrackerProposal(w http.ResponseWriter, r *http.Request) {
+	h.approve(w, r, "approve_tracker_proposal", proposals.QueueTrackerProposals)
+}
+
+// listTrackerProposals is the inbox for decision tickets. It is mounted only when connectors.trackers
+// is allowed, so it stays off the community document (ADR-0133).
+func (h *writeHandlers) listTrackerProposals(w http.ResponseWriter, r *http.Request) {
+	caller, ok := callerFrom(r)
+	if !ok {
+		writeError(w, http.StatusForbidden, errForbidden)
+		return
+	}
+	before, limit, ok := trackerPage(w, r)
+	if !ok {
+		return
+	}
+	items, err := trackers.Inbox(r.Context(), h.db, caller.Tenant, before, limit)
+	if err != nil {
+		h.log.Warn("tracker proposals could not be listed", "op", "list_tracker_proposals")
+		writeError(w, http.StatusInternalServerError, errInternal)
+		return
+	}
+	if items == nil {
+		items = []trackers.InboxItem{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tracker_proposals": items})
+}
+
+func callerFrom(r *http.Request) (Caller, bool) {
+	caller, ok := r.Context().Value(callerKey{}).(Caller)
+	if !ok || caller.Tenant == uuid.Nil {
+		return Caller{}, false
+	}
+	return caller, true
+}
+
+func trackerPage(w http.ResponseWriter, r *http.Request) (uuid.UUID, int, bool) {
+	query := r.URL.Query()
+	limit := 50
+	if raw := query.Get("limit"); raw != "" || query.Has("limit") {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeError(w, http.StatusBadRequest, errInvalidQuery)
+			return uuid.Nil, 0, false
+		}
+		limit = parsed
+	}
+	var before uuid.UUID
+	if raw := query.Get("before"); raw != "" || query.Has("before") {
+		parsed, err := uuid.Parse(raw)
+		if err != nil || parsed == uuid.Nil {
+			writeError(w, http.StatusBadRequest, errInvalidQuery)
+			return uuid.Nil, 0, false
+		}
+		before = parsed
+	}
+	return before, limit, true
 }
 
 func (h *writeHandlers) approve(w http.ResponseWriter, r *http.Request, op string, queue proposals.Queue) {

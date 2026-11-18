@@ -23,6 +23,7 @@ import (
 	validator "github.com/pb33f/libopenapi-validator"
 	"golang.org/x/time/rate"
 
+	"github.com/ipsofacto-io/ipso-server/eehooks"
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/authz"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
@@ -557,6 +558,54 @@ func TestNoRouteRunsOrRecordsAnEvaluation(t *testing.T) {
 
 // Only a refusal that depends on what the registry holds is a conflict. A NOT NULL violation or a syntax
 // error is a defect of the server and is a 500.
+type trackersAllowed struct{}
+
+func (trackersAllowed) Allow(feature string) bool { return feature == eehooks.FeatureTrackers }
+
+func TestTrackerRoutesStayOffUntilTheFeatureIsAllowed(t *testing.T) {
+	t.Cleanup(eehooks.ResetForTest)
+	for _, rt := range routes(nil, time.Now, nil, "") {
+		if strings.Contains(rt.pattern, "tracker-proposals") {
+			t.Fatalf("community routes include %s", rt.pattern)
+		}
+	}
+	eehooks.SetGate(trackersAllowed{})
+	var got []string
+	for _, rt := range routes(nil, time.Now, nil, "") {
+		if strings.Contains(rt.pattern, "tracker-proposals") {
+			got = append(got, rt.pattern+" "+rt.op)
+		}
+	}
+	want := []string{
+		"GET /v1/tracker-proposals list_tracker_proposals",
+		"POST /v1/tracker-proposals/{id}/approval approve_tracker_proposal",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("tracker routes %v", got)
+	}
+}
+
+func TestListTrackerProposalsRefusesABadPage(t *testing.T) {
+	h := &writeHandlers{log: slog.New(slog.DiscardHandler)}
+	tenant := uuid.MustParse("00000000-0000-4000-8000-0000000000aa")
+	person := uuid.MustParse("00000000-0000-4000-8000-0000000000bb")
+	for _, target := range []string{"/v1/tracker-proposals?limit=0", "/v1/tracker-proposals?before=nope", "/v1/tracker-proposals?limit="} {
+		r := httptest.NewRequest(http.MethodGet, target, nil)
+		r = r.WithContext(context.WithValue(r.Context(), callerKey{}, Caller{Tenant: tenant, Principal: person}))
+		w := httptest.NewRecorder()
+		h.listTrackerProposals(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s: %d", target, w.Code)
+		}
+	}
+	r := httptest.NewRequest(http.MethodGet, "/v1/tracker-proposals", nil)
+	w := httptest.NewRecorder()
+	h.listTrackerProposals(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("missing caller: %d", w.Code)
+	}
+}
+
 func TestOnlyStateRefusalsAreConflicts(t *testing.T) {
 	for code, want := range map[string]bool{"23505": true, "23503": true, "23P01": true, "23514": true, "23502": false, "23000": false, "22001": false, "42P01": false, "": false} {
 		if got := conflicts(code); got != want {

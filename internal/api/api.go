@@ -285,7 +285,7 @@ func routes(db *sql.DB, now func() time.Time, log *slog.Logger, origin string) [
 		{"GET /v1/audit/waivers", "audit_waivers", authz.AuditRead, []string{"known", "now"}, nil, audits},
 		{"GET /v1/verdicts", "list_verdicts", authz.VerdictsRead, []string{"repo", "decision", "known", "limit", "before"}, nil, http.HandlerFunc(verdicts.list)},
 	}
-	return slices.Concat(reads, writeRoutes(db, log), exportRoutes(db, log), invitationRoutes(db, log, origin), roleBindingRoutes(db, log), auditLogRoutes(db, log), enterpriseRoutes())
+	return slices.Concat(reads, writeRoutes(db, log), exportRoutes(db, log), invitationRoutes(db, log, origin), roleBindingRoutes(db, log), auditLogRoutes(db, log), enterpriseRoutes(), trackerRoutes(db, log))
 }
 
 // enterpriseRoutes are the admin routes the enterprise binary registered. They are absent unless
@@ -296,6 +296,54 @@ func enterpriseRoutes() []route {
 	}
 	var out []route
 	for _, g := range eehooks.Guarded() {
+		serve := g.Serve
+		out = append(out, route{
+			pattern: g.Pattern,
+			op:      g.Op,
+			action:  authz.PrincipalManage,
+			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				caller, ok := r.Context().Value(callerKey{}).(Caller)
+				if !ok || caller.Principal == uuid.Nil {
+					writeError(w, http.StatusForbidden, errForbidden)
+					return
+				}
+				serve(w, r, caller.Principal)
+			}),
+		})
+	}
+	return out
+}
+
+// trackerRoutes are the paid tracker routes. They are absent unless connectors.trackers is allowed,
+// so the community document stays unchanged (ADR-0133).
+func trackerRoutes(db *sql.DB, log *slog.Logger) []route {
+	if !eehooks.Allow(eehooks.FeatureTrackers) {
+		return nil
+	}
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	h := &writeHandlers{db: db, log: log}
+	out := []route{
+		{
+			pattern: "GET /v1/tracker-proposals",
+			op:      "list_tracker_proposals",
+			action:  authz.ProposalsRead,
+			keys:    []string{"limit", "before"},
+			handler: http.HandlerFunc(h.listTrackerProposals),
+		},
+		{
+			pattern: "POST /v1/tracker-proposals/{id}/approval",
+			op:      "approve_tracker_proposal",
+			action:  authz.DecisionApprove,
+			targets: targetsApproval,
+			handler: http.HandlerFunc(h.approveTrackerProposal),
+		},
+	}
+	if eehooks.CurrentTrackerAdmin() == nil {
+		return out
+	}
+	for _, g := range eehooks.TrackerGuarded() {
 		serve := g.Serve
 		out = append(out, route{
 			pattern: g.Pattern,

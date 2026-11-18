@@ -988,7 +988,8 @@ export interface components {
             /** Format: uuid */
             scope_id: string;
             reason: string;
-            ticket_ref: string;
+            /** @description The key of the waiver ticket. Omit it only when a tracker binding opens the ticket (ADR-0133). The stored row still has the key. */
+            ticket_ref?: string;
             /** Format: date-time */
             valid_from: string;
             /**

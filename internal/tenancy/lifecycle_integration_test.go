@@ -46,6 +46,8 @@ var notRestored = map[string]bool{
 	"identity.scim_token": true,
 	// A binding is unique across tenants, so a restore into a fresh tenant would find it taken (ADR-0101).
 	"tenancy.installation": true,
+	// A tracker binding holds sealed credentials and is unique across tenants (ADR-0133).
+	"integrations.tracker_binding": true,
 	// The exports made through the API stay where they are made and are never in another archive (ADR-0111).
 	"tenancy.export":      true,
 	"tenancy.export_part": true,

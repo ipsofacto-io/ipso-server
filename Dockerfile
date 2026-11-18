@@ -18,6 +18,7 @@ COPY cmd ./cmd
 COPY eehooks ./eehooks
 COPY internal ./internal
 COPY run ./run
+COPY trackers ./trackers
 COPY --from=web /src/internal/webapp/dist/app ./internal/webapp/dist/app
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath \

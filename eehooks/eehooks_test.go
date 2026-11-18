@@ -8,6 +8,9 @@ func TestTheDefaultGateDeniesSAML(t *testing.T) {
 	if Allow(FeatureSAML) {
 		t.Fatal("sso.saml is allowed with no gate installed")
 	}
+	if Allow(FeatureTrackers) {
+		t.Fatal("connectors.trackers is allowed with no gate installed")
+	}
 }
 
 func TestANilGateDeniesEveryKey(t *testing.T) {

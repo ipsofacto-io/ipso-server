@@ -121,6 +121,25 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 		INSERT INTO proposals.agent_approval (tenant_id, proposal_id, approver_id, outcome, decision_id)
 		VALUES ($1::uuid, $2::uuid, $3::uuid, 'approved', $4::uuid)`, tenant, agentProposal, person, DecisionTo)
 	mustExec(`
+		INSERT INTO integrations.tracker_binding (tenant_id, connector, external_account, token_sealed, webhook_sealed)
+		VALUES ($1::uuid, 'jira', 'acct-' || $1::text, decode(repeat('ab', 29), 'hex'), decode(repeat('cd', 29), 'hex'))`, tenant)
+	var trackerProposal string
+	mustScan(`
+		INSERT INTO proposals.tracker_proposal
+			(tenant_id, connector, payload, confidence, model_id, prompt_version, external_id, source_url, source_sha256, candidate_index)
+		VALUES ($1::uuid, 'jira', '{"title":"Use Postgres","statement":"Use Postgres for new services","rationale":"the ticket"}',
+		        0.8, 'm', 'p', 'OPS-1', 'https://acme.atlassian.net/browse/OPS-1', decode(repeat('ab', 32), 'hex'), 0)
+		RETURNING id`, []any{tenant}, &trackerProposal)
+	mustExec(`
+		INSERT INTO proposals.tracker_approval (tenant_id, proposal_id, approver_id, outcome, decision_id)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'approved', $4::uuid)`, tenant, trackerProposal, person, DecisionFrom)
+	mustExec(`
+		INSERT INTO integrations.tracker_link (tenant_id, connector, external_id, url, kind, proposal_id, status)
+		VALUES ($1::uuid, 'jira', 'OPS-1', 'https://acme.atlassian.net/browse/OPS-1', 'decision', $2::uuid, 'open')`, tenant, trackerProposal)
+	mustExec(`
+		INSERT INTO integrations.tracker_link (tenant_id, connector, external_id, url, kind, waiver_id, status)
+		VALUES ($1::uuid, 'jira', 'OPS-2', 'https://acme.atlassian.net/browse/OPS-2', 'waiver', $2::uuid, 'open')`, tenant, waiver)
+	mustExec(`
 		INSERT INTO proposals.check_proposal
 			(tenant_id, decision_id, decision_version, spec, rego, rego_sha256, fixtures, fixtures_total, fixtures_passed, repaired, model_id, prompt_version)
 		VALUES ($1::uuid, $2::uuid, 1, '{}'::jsonb, 'package p', sha256(convert_to('package p', 'UTF8')),

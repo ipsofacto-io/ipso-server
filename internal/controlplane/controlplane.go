@@ -33,6 +33,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
 	"github.com/ipsofacto-io/ipso-server/internal/webapp"
+	"github.com/ipsofacto-io/ipso-server/trackers"
 )
 
 const (
@@ -151,6 +152,9 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		}
 		uploads = &api.Uploads{Verifier: ciVerifier, Lookup: newUploadMapper(cfg.DB, cfg.Tenant, cfg.Repositories, cfg.Log).lookup}
 	}
+	if key := eehooks.ConnectorKey(); eehooks.Allow(eehooks.FeatureTrackers) && len(key) == 32 {
+		eehooks.SetTrackerAdmin(trackers.NewAdmin(cfg.DB, cfg.Tenant, key))
+	}
 	apiHandler, err := api.New(api.Config{
 		DB:       cfg.DB,
 		Verifier: verifier,
@@ -179,7 +183,7 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 	}
 
 	mux := http.NewServeMux()
-	eehooks.Mount(eehooks.MountContext{Mux: mux, Log: cfg.Log})
+	eehooks.Mount(eehooks.MountContext{Mux: mux, Log: cfg.Log, DB: cfg.DB, Tenant: cfg.Tenant})
 	mux.HandleFunc("GET /healthz", svc.health)
 	// Every route of the API is under /v1. It answers 401 before it says whether a route exists.
 	mux.Handle("/v1/", apiHandler)
