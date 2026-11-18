@@ -10,14 +10,18 @@ import (
 
 	"filippo.io/age"
 	"github.com/google/uuid"
+
+	"github.com/ipsofacto-io/ipso-server/internal/identity"
 )
 
 // ExportOptions is what an export needs. The archive is encrypted to the recipients, and only their
-// private keys open it.
+// private keys open it. Command is set by ipso-server tenant export. The stored export leaves it false,
+// because that archive is already the entry of the person who asked (ADR-0129).
 type ExportOptions struct {
 	Tenant     uuid.UUID
 	Recipients []age.Recipient
 	Out        io.Writer
+	Command    bool
 }
 
 // ExportReport counts the rows written for each table and the EDR files. It holds no row content.
@@ -109,5 +113,37 @@ func Export(ctx context.Context, db *sql.DB, o ExportOptions) (ExportReport, err
 	if err := w.finish(); err != nil {
 		return report, err
 	}
+	if err := tx.Commit(); err != nil {
+		return report, reduce("export: commit", err)
+	}
+	// The snapshot stays read-only, so the operator command appends in the next transaction (ADR-0129).
+	// A failure here commits no entry, and the caller deletes the file it opened. A stored export does
+	// not append: it is already logged as the person who asked.
+	if o.Command {
+		subject := fmt.Sprintf("rows %d files %d", report.Total, report.Files)
+		if err := recordOperator(ctx, db, o.Tenant, identity.ActionExport, subject); err != nil {
+			return report, err
+		}
+	}
 	return report, nil
+}
+
+// recordOperator appends one operator entry in its own READ COMMITTED transaction. Export is the only
+// command whose own transaction cannot write one (ADR-0129).
+func recordOperator(ctx context.Context, db *sql.DB, tenant uuid.UUID, action, subject string) error {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return reduce("export: record the command", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := setSession(ctx, tx, tenant, false); err != nil {
+		return err
+	}
+	if err := identity.AppendOperator(ctx, tx, tenant, action, subject); err != nil {
+		return reduce("export: record the command", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return reduce("export: record the command", err)
+	}
+	return nil
 }

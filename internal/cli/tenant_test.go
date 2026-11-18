@@ -259,7 +259,7 @@ func TestTenantExportWritesAPrivateFileOnceAndRemovesItOnFailure(t *testing.T) {
 	if b, _ := os.ReadFile(out); string(b) != "archive bytes" {
 		t.Errorf("file holds %q", b)
 	}
-	if calls.checkedApp != 1 || calls.export == nil || len(calls.export.Recipients) != 1 || !strings.Contains(stdout, `"total": 3`) {
+	if calls.checkedApp != 1 || calls.export == nil || !calls.export.Command || len(calls.export.Recipients) != 1 || !strings.Contains(stdout, `"total": 3`) {
 		t.Errorf("calls %+v, stdout %q", calls, stdout)
 	}
 

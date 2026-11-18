@@ -236,7 +236,7 @@ func tenantExport(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		fprintf(stderr, "tenant export: create the file: %v\n", err)
 		return 1
 	}
-	report, err := d.exportTenant(ctx, db, tenancy.ExportOptions{Tenant: id, Recipients: keys, Out: file})
+	report, err := d.exportTenant(ctx, db, tenancy.ExportOptions{Tenant: id, Recipients: keys, Out: file, Command: true})
 	if closeErr := file.Close(); err == nil {
 		err = closeErr
 	}

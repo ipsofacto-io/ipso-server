@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+
+	"github.com/ipsofacto-io/ipso-server/internal/identity"
 )
 
 var (
@@ -149,6 +151,9 @@ func ensureKey(ctx context.Context, tx *sql.Tx, o ProvisionOptions) (bool, error
 func bindPerson(ctx context.Context, tx *sql.Tx, tenant uuid.UUID, p Person) (bool, error) {
 	if p.ID == uuid.Nil || p.Name == "" || p.Issuer == "" || p.Subject == "" {
 		return false, errors.New("provision: a person needs an id, a name, an issuer and a subject")
+	}
+	if p.ID == identity.OperatorPrincipal {
+		return false, fmt.Errorf("provision: the person: %w", ErrConflict)
 	}
 	wrote := false
 	res, err := tx.ExecContext(ctx,

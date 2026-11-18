@@ -8,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/ipsofacto-io/ipso-server/internal/identity"
 )
 
 // ErrInstallationBound is returned when a GitHub App installation is already bound to another tenant. The
@@ -44,7 +46,7 @@ func BindInstallation(ctx context.Context, db *sql.DB, o BindOptions) (BindRepor
 	case o.Installation <= 0:
 		return report, errors.New("bind: an installation id is required")
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return report, reduce("bind: begin", err)
 	}
@@ -87,6 +89,13 @@ func BindInstallation(ctx context.Context, db *sql.DB, o BindOptions) (BindRepor
 		}
 		if !ours {
 			return report, fmt.Errorf("bind: installation %d: %w", o.Installation, ErrInstallationBound)
+		}
+	}
+	// A repeat changes nothing and writes no entry. A refusal returns above and rolls the transaction back.
+	if report.Bound {
+		subject := fmt.Sprintf("installation %d", o.Installation)
+		if err := identity.AppendOperator(ctx, tx, o.Tenant, identity.ActionBindInstallation, subject); err != nil {
+			return report, reduce("bind: record the command", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

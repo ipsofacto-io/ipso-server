@@ -1,6 +1,6 @@
 # The audit log
 
-`identity.action_log` records what a person or an agent did, and since [ADR-0126](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0126-hash-chained-action-log.md) it is a hash chain: every tenant has one chain, the database sets each entry's place in it, and an entry cannot be changed or removed without the chain showing it. An auditor or an admin reads it as JSON lines, and an operator checks it with a command.
+`identity.action_log` records what a person, an agent, or an operator command did, and since [ADR-0126](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0126-hash-chained-action-log.md) it is a hash chain: every tenant has one chain, the database sets each entry's place in it, and an entry cannot be changed or removed without the chain showing it. An auditor or an admin reads it as JSON lines, and an operator checks it with a command.
 
 ## What is in the log
 
@@ -9,8 +9,9 @@
 | `api.<operation>` for every write a person makes and for starting and downloading an export | the write, in the same transaction | the ids it wrote, never a reason, a ticket or a body |
 | `api.<operation>` for every call an agent makes | the guard, before the call runs | the request target, cut to 200 characters |
 | `decisions.applicable`, `decisions.get`, `checks.evaluate`, `decisions.propose` | the remote MCP handler, before the tool runs | the repository, the reference or the title, cut to 200 characters |
+| `operator.export`, `operator.restore`, `operator.offboard`, `operator.bind_installation` | the operator command, in its transaction, or for an export in the next one ([ADR-0129](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0129-operator-command-audit.md)) | ids and counts, never a row, a recipient or a key |
 
-A write that cannot be logged does not run, and an entry never outlives a write that failed. A person's reads, a refused call, a CI verdict upload, the worker's jobs, a sign-in and the operator commands on a tenant are not in the log. The one sign-in that is logged is the first one with an invitation, which writes a person ([ADR-0127](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0127-invitations.md)). The commands are a follow-up of IPSO-68, because an entry needs a principal and a command has none.
+A write that cannot be logged does not run, and an entry never outlives a write that failed. A person's reads, a refused call, a CI verdict upload, the worker's jobs, a sign-in, `tenant create` and an installation unbind are not in the log. The one sign-in that is logged is the first one with an invitation, which writes a person ([ADR-0127](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0127-invitations.md)). An export, a restore, an offboard and a bind name the reserved operator principal ([ADR-0129](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0129-operator-command-audit.md)). An export the API or the worker makes is the person's entry and does not also write `operator.export`.
 
 ## The chain
 
@@ -58,6 +59,6 @@ A chain proves itself from its first entry on. It cannot show that entries after
 
 ## Retention and offboarding
 
-Entries are never pruned while the tenant exists, which meets the retention of section 13 of the specification: 1 year for Team and 7 years for Enterprise. Offboarding deletes the log with the tenant's other rows, because deletion within 30 days is the commitment of section 10. The tombstone `tenancy.offboarding` keeps the head, `log_seq` and `log_hash`, read in the same transaction before the delete, so a customer who kept a copy of the log can show that it was complete and unaltered after the tenant is gone. Both are empty when the log was empty and for a tombstone written before migration 00034.
+Entries are never pruned while the tenant exists, which meets the retention of section 13 of the specification: 1 year for Team and 7 years for Enterprise. Offboarding appends `operator.offboard` and then deletes the log with the tenant's other rows, because deletion within 30 days is the commitment of section 10. The tombstone `tenancy.offboarding` keeps the head of that entry, `log_seq` and `log_hash`, read in the same transaction before the delete. The entry itself is deleted with the log and is not in any export, so a copy kept from an export still verifies and ends one entry before the tombstone head. Both are empty when the log was empty and for a tombstone written before migration 00034. A repeat reports the head the first run stored.
 
 An export archive carries the log with its chain, and a restore keeps every position and hash. An archive made before migration 00034 has another table shape, so a restore refuses it.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	chain "github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
 )
@@ -41,8 +42,21 @@ func TestBindInstallationMapsOneInstallationToOneTenant(t *testing.T) {
 	if report := l.bind(t, tenantA, 4242); !report.Bound || report.Installation != 4242 || report.Tenant.String() != tenantA {
 		t.Fatalf("first bind = %+v", report)
 	}
+	if n := l.count(t, "identity.action_log", tenantA); n != 1 {
+		t.Fatalf("bind wrote %d entries", n)
+	}
+	principal, responsible, action, subject := l.lastEntry(t, tenantA)
+	if principal != chain.OperatorPrincipal || responsible != principal || action != chain.ActionBindInstallation || subject != "installation 4242" {
+		t.Fatalf("entry = %s %s %q", principal, action, subject)
+	}
+	if verified, err := chain.VerifyLog(t.Context(), l.app, uuid.MustParse(tenantA)); err != nil || !verified.Intact || verified.Entries != 1 {
+		t.Fatalf("chain: %+v %v", verified, err)
+	}
 	if report := l.bind(t, tenantA, 4242); report.Bound {
 		t.Fatalf("a repeat bound again: %+v", report)
+	}
+	if l.count(t, "identity.action_log", tenantA) != 1 {
+		t.Error("a repeat bind wrote an entry")
 	}
 
 	// A second tenant cannot take it, and the refusal does not name the owner.
@@ -52,6 +66,9 @@ func TestBindInstallationMapsOneInstallationToOneTenant(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), tenantA) {
 		t.Errorf("the refusal names the owner: %v", err)
+	}
+	if l.count(t, "identity.action_log", tenantA) != 1 || l.count(t, "identity.action_log", tenantB) != 0 {
+		t.Error("a refused bind wrote an entry")
 	}
 	if l.count(t, installationTable, tenantB) != 0 || l.count(t, installationTable, tenantA) != 1 {
 		t.Errorf("rows: A %d, B %d; want 1 and 0", l.count(t, installationTable, tenantA), l.count(t, installationTable, tenantB))
@@ -63,6 +80,13 @@ func TestBindInstallationMapsOneInstallationToOneTenant(t *testing.T) {
 	// A tenant may hold several installations.
 	if !l.bind(t, tenantA, 4243).Bound || l.count(t, installationTable, tenantA) != 2 {
 		t.Errorf("a second installation of one tenant was not bound")
+	}
+	if l.count(t, "identity.action_log", tenantA) != 2 {
+		t.Error("a second installation wrote the wrong number of entries")
+	}
+	_, _, action, subject = l.lastEntry(t, tenantA)
+	if action != chain.ActionBindInstallation || subject != "installation 4243" {
+		t.Fatalf("second entry = %s %q", action, subject)
 	}
 }
 
@@ -89,6 +113,9 @@ func TestBindInstallationRefuses(t *testing.T) {
 	if err := l.admin.QueryRowContext(t.Context(), `SELECT count(*) FROM tenancy.installation`).Scan(&rows); err != nil || rows != 0 {
 		t.Errorf("a refused bind wrote %d rows (%v)", rows, err)
 	}
+	if l.count(t, "identity.action_log", tenantA) != 0 {
+		t.Error("a refused bind wrote an entry")
+	}
 }
 
 func TestBindInstallationRefusesAnOffboardedTenant(t *testing.T) {
@@ -100,6 +127,9 @@ func TestBindInstallationRefusesAnOffboardedTenant(t *testing.T) {
 	_, err := tenancy.BindInstallation(t.Context(), l.app, tenancy.BindOptions{Tenant: uuid.MustParse(tenantA), Installation: 1})
 	if !errors.Is(err, tenancy.ErrOffboarded) {
 		t.Fatalf("bind for an offboarded tenant = %v, want ErrOffboarded", err)
+	}
+	if l.count(t, "identity.action_log", tenantA) != 0 {
+		t.Error("a refused bind wrote an entry")
 	}
 }
 
@@ -207,11 +237,15 @@ func TestUnbindInstallationRemovesOneBindingOfItsOwner(t *testing.T) {
 	l.bind(t, tenantB, 22)
 
 	// The tenant comes from the mapping, as the application role the webhooks process runs as.
+	logged := l.count(t, "identity.action_log", tenantA)
 	if tenant, removed := l.unbind(t, 11); !removed || tenant.String() != tenantA {
 		t.Fatalf("unbind 11 = %v, %v; want tenant A", tenant, removed)
 	}
 	if owner, ok := l.owner(t, 11); ok {
 		t.Errorf("11 still maps to %s", owner)
+	}
+	if l.count(t, "identity.action_log", tenantA) != logged {
+		t.Error("an unbind wrote an entry")
 	}
 	// The tenant's other installation and the other tenant's stay bound.
 	if l.count(t, installationTable, tenantA) != 1 || l.count(t, installationTable, tenantB) != 1 {

@@ -516,6 +516,7 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 		{"tenancy.installation", "installation_open_sys_period", 1 | 2 | 4},
 		{"identity.invitation", "invitation_stamp", 1 | 2 | 4},
 		{"identity.login", "login_open_sys_period", 1 | 2 | 4},
+		{"identity.login", "login_principal", 1 | 2 | 4},
 		{"tenancy.offboarding", "offboarding_open_sys_period", 1 | 2 | 4},
 		{"registry.premise_clearance", "premise_clearance_check", 1 | 2 | 4},
 		{"registry.premise_clearance", "premise_clearance_open_sys_period", 1 | 2 | 4},

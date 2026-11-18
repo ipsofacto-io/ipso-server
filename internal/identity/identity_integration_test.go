@@ -522,3 +522,31 @@ func uuidFor(t *testing.T, db *sql.DB, name string) uuid.UUID {
 	}
 	return id
 }
+
+func TestTheOperatorPrincipalHoldsNoLoginAndNoRole(t *testing.T) {
+	db := migrated(t)
+	addTenant(t, db, tenantA)
+	person := principal(t, db, tenantA, identity.KindHuman, "Ada", nil)
+	if _, err := pgtest.Exec(t.Context(), db, tenantA.String(), `
+		INSERT INTO identity.principal (tenant_id, id, kind, name) VALUES ($1, $2, 'operator', 'operator')`,
+		tenantA, identity.OperatorPrincipal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tryPrincipal(t, db, tenantA, identity.KindOperator, "other", person); err == nil {
+		t.Fatal("an operator with a sponsor was accepted")
+	}
+	if _, err := pgtest.Exec(t.Context(), db, tenantA.String(), `
+		INSERT INTO identity.principal (tenant_id, id, kind, name) VALUES ($1, $2, 'human', 'Ada')`,
+		tenantA, identity.OperatorPrincipal); err == nil {
+		t.Fatal("a person took the operator id")
+	}
+	if _, err := tryPrincipal(t, db, tenantA, identity.KindOperator, "other", nil); err == nil {
+		t.Fatal("another id was an operator")
+	}
+	if err := bind(t, db, tenantA, identity.OperatorPrincipal, idp, "operator-subject"); err == nil {
+		t.Fatal("a login for the operator was accepted")
+	}
+	if err := grant(t, db, tenantA, identity.OperatorPrincipal, identity.RoleAdmin, nil); err == nil {
+		t.Fatal("a role for the operator was accepted")
+	}
+}

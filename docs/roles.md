@@ -24,6 +24,8 @@ An admin manages people and structure and does not approve or waive, so the pers
 
 A principal of kind `agent` holds the `agent` role and nothing else, and a person never holds it. The database refuses any other binding, and the policy also refuses an agent every action that needs a person, whatever it holds.
 
+A principal of kind `operator` is the reserved principal an operator command names ([ADR-0129](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0129-operator-command-audit.md)). It holds no role and no login, and the database refuses both.
+
 ## Scopes
 
 A binding has no scope, which covers the whole tenant, or one scope, which covers that node of the scope tree and every node below it. When a scope moves under another parent, its coverage moves with it.
