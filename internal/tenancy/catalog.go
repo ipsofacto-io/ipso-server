@@ -31,6 +31,8 @@ const (
 	tenantKeyTable    = "tenancy.tenant_key"
 	sessionTable      = "identity.session"
 	invitationTable   = "identity.invitation"
+	scimUserTable     = "identity.scim_user"
+	scimTokenTable    = "identity.scim_token"
 	tombstoneTable    = "tenancy.offboarding"
 	installationTable = "tenancy.installation"
 	// The exports a tenant admin asks for through the API (ADR-0111). An archive never holds the archive
@@ -110,7 +112,7 @@ func exported(all []Table) []Table {
 	var out []Table
 	for _, t := range all {
 		switch t.String() {
-		case tenantKeyTable, sessionTable, invitationTable, tombstoneTable, installationTable, exportTable, exportPartTable:
+		case tenantKeyTable, sessionTable, invitationTable, scimUserTable, scimTokenTable, tombstoneTable, installationTable, exportTable, exportPartTable:
 			continue
 		}
 		out = append(out, t)

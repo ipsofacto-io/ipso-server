@@ -33,11 +33,17 @@ type attempt struct {
 	Verifier   string `json:"v"`
 	Previous   string `json:"o,omitempty"`
 	Invitation string `json:"i,omitempty"`
+	// Request is set for a posted callback. The cookie is then SameSite=None, because a cross-site
+	// POST does not send a Lax cookie (ADR-0131). OIDC and GitHub leave it empty and stay Lax.
+	Request string `json:"r,omitempty"`
 }
 
 func (a attempt) cookie() *http.Cookie {
 	raw, _ := json.Marshal(a)
 	cookie := baseAttemptCookie()
+	if a.Request != "" {
+		cookie.SameSite = http.SameSiteNoneMode
+	}
 	cookie.Value = base64.RawURLEncoding.EncodeToString(raw)
 	cookie.MaxAge = int(attemptLife / time.Second)
 	return cookie
@@ -46,7 +52,17 @@ func (a attempt) cookie() *http.Cookie {
 // clearedAttemptCookie deletes the cookie with the attributes it was set with, because a browser
 // ignores the deletion of a __Host- cookie that differs.
 func clearedAttemptCookie() *http.Cookie {
+	return clearAttempt(http.SameSiteLaxMode)
+}
+
+// clearedPostedAttemptCookie deletes a SameSite=None attempt cookie. A Lax deletion leaves it.
+func clearedPostedAttemptCookie() *http.Cookie {
+	return clearAttempt(http.SameSiteNoneMode)
+}
+
+func clearAttempt(site http.SameSite) *http.Cookie {
 	cookie := baseAttemptCookie()
+	cookie.SameSite = site
 	cookie.MaxAge = -1
 	return cookie
 }

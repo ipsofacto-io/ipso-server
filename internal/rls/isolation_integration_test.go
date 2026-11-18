@@ -356,6 +356,11 @@ func smuggleInserts() []smuggle {
 		// The binding check reads the principal as the caller's tenant, so it refuses this row (23514) before the
 		// policy is asked (42501), like the session stamp above.
 		{"identity.role_binding", `INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ($1::uuid, $1::uuid, 'viewer')`, []any{tenantA}, false},
+		{"identity.scim_user", `INSERT INTO identity.scim_user (tenant_id, principal_id, external_id, user_name) VALUES ($1::uuid, $1::uuid, 'smuggled', 'smuggled')`, []any{tenantA}, true},
+		{"identity.scim_token", `INSERT INTO identity.scim_token (tenant_id, token_sha256) VALUES ($1::uuid, sha256(convert_to('smuggled', 'UTF8')))`, []any{tenantA}, true},
+		{"identity.scim_group", `INSERT INTO identity.scim_group (tenant_id, group_ref) VALUES ($1::uuid, 'smuggled')`, []any{tenantA}, true},
+		{"identity.scim_membership", `INSERT INTO identity.scim_membership (tenant_id, group_id, principal_id) VALUES ($1::uuid, $1::uuid, $1::uuid)`, []any{tenantA}, true},
+		{"identity.idp_group_role", `INSERT INTO identity.idp_group_role (tenant_id, group_ref, role) VALUES ($1::uuid, 'smuggled', 'viewer')`, []any{tenantA}, true},
 		{"registry.premise_host_allow", `INSERT INTO registry.premise_host_allow (tenant_id, host, allowed) VALUES ($1::uuid, 'smuggled.example', true)`, []any{tenantA}, true},
 		{"registry.grandfather_period", `INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period) VALUES ($1::uuid, $2::uuid, '[2021-01-01,)')`, []any{tenantA, decisionTo}, true},
 		{"proposals.proposal", `
@@ -479,6 +484,11 @@ func policyTables() []string {
 		"identity.action_log",
 		"identity.invitation",
 		"identity.login",
+		"identity.idp_group_role",
+		"identity.scim_group",
+		"identity.scim_membership",
+		"identity.scim_token",
+		"identity.scim_user",
 		"identity.principal",
 		"identity.role_binding",
 		"identity.session",
@@ -521,8 +531,13 @@ func expectedPolicies() []string {
 	app := map[string]string{
 		"identity.action_log":               "SELECT INSERT",
 		"identity.invitation":               "SELECT INSERT DELETE",
-		"identity.login":                    "SELECT INSERT",
-		"identity.principal":                "SELECT INSERT",
+		"identity.login":                    "SELECT INSERT UPDATE",
+		"identity.idp_group_role":           "SELECT INSERT DELETE",
+		"identity.scim_group":               "SELECT INSERT DELETE",
+		"identity.scim_membership":          "SELECT INSERT DELETE",
+		"identity.scim_token":               "SELECT INSERT DELETE",
+		"identity.scim_user":                "SELECT INSERT UPDATE",
+		"identity.principal":                "SELECT INSERT UPDATE",
 		"identity.role_binding":             "SELECT INSERT DELETE",
 		"identity.session":                  "SELECT INSERT DELETE",
 		"llm.usage":                         "SELECT INSERT UPDATE",
@@ -567,6 +582,9 @@ func expectedPolicies() []string {
 	migrate["identity.session"] = "SELECT DELETE"
 	// An invitation holds a credential hash, so an export leaves it out like a session (ADR-0127).
 	migrate["identity.invitation"] = "SELECT DELETE"
+	// A SCIM user holds a filter key and a token holds a credential hash, so an export leaves both out (ADR-0131).
+	migrate["identity.scim_user"] = "SELECT DELETE"
+	migrate["identity.scim_token"] = "SELECT DELETE"
 	// A binding is unique across tenants, so an export leaves it out and a restore does not write it.
 	migrate["tenancy.installation"] = "SELECT DELETE"
 	// An export made through the API is never in an archive, so a restore writes neither table (ADR-0111).

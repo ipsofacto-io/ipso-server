@@ -3,9 +3,9 @@ package main
 import (
 	"os"
 
-	"github.com/ipsofacto-io/ipso-server/internal/cli"
+	"github.com/ipsofacto-io/ipso-server/run"
 )
 
 func main() {
-	os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run.Run(os.Args[1:], os.Stdout, os.Stderr))
 }

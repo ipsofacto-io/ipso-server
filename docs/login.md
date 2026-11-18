@@ -107,3 +107,7 @@ CI proves the generic OpenID Connect path against Dex and each provider's quirks
 2. Open `{IPSO_PUBLIC_URL}/v1/scopes` in the same browser and see 200 with JSON.
 3. Sign in with an account you did not bind. A browser ends on the sign-in page, which names the issuer and the subject and starts no session. A client that asks for JSON, or names no `Accept`, still sees 403 `unknown_login` with those two values. Make an invitation, open its link in a private window, sign in with that account, and see the person bound, with the invitation gone.
 4. Sign out with `fetch('/auth/logout', {method: 'POST'})` from the console of that origin and see `/v1/scopes` answer 401.
+
+## SAML and SCIM
+
+SAML sign-in and SCIM provisioning are enterprise features ([ADR-0131](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0131-saml-and-scim.md)). This binary does not mount them. A provider of kind `saml` is refused at startup unless the enterprise command registered that kind and a license grants `sso.saml`. When the key is not granted, the process still starts and those routes stay unmounted.

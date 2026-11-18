@@ -15,7 +15,9 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd ./cmd
+COPY eehooks ./eehooks
 COPY internal ./internal
+COPY run ./run
 COPY --from=web /src/internal/webapp/dist/app ./internal/webapp/dist/app
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath \

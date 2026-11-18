@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 
@@ -40,6 +41,8 @@ const (
 	// maxState and maxCode bound what a callback may carry before anything reads it.
 	maxState = 256
 	maxCode  = 4096
+	// maxSAMLBody bounds a posted assertion before it is verified.
+	maxSAMLBody = 256 << 10
 	// maxInvitationBody bounds the body of POST /auth/invitation/{provider}, which holds one 43 character token.
 	maxInvitationBody = 1024
 )
@@ -54,6 +57,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("/auth/login/{provider}", s.start)
 	mux.HandleFunc("/auth/invitation/{provider}", s.invite)
 	mux.HandleFunc("/auth/callback/{provider}", s.callback)
+	mux.HandleFunc("GET /auth/saml/{provider}/metadata", s.metadata)
 	mux.HandleFunc("/auth/logout", s.logout)
 	mux.HandleFunc("/auth/", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusNotFound, codeNotFound) })
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +119,14 @@ func (s *Service) start(w http.ResponseWriter, r *http.Request) {
 // cookie, and returns the address of the provider to send the browser to. invitation is the token of an
 // invitation the person came with, or empty. It writes the 500 itself when it cannot.
 func (s *Service) begin(w http.ResponseWriter, r *http.Request, id string, p provider, invitation string) (string, bool) {
-	state, err := randomText(32)
+	posted, isPosted := p.(postedLogin)
+	var state string
+	var err error
+	if isPosted {
+		state, err = xmlRequestID()
+	} else {
+		state, err = randomText(32)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, codeInternal)
 		return "", false
@@ -127,12 +138,32 @@ func (s *Service) begin(w http.ResponseWriter, r *http.Request, id string, p pro
 	}
 	verifier := oauth2.GenerateVerifier()
 	begun := attempt{Provider: id, State: state, Nonce: nonce, Verifier: verifier, Invitation: invitation}
+	if isPosted {
+		// The posted callback does not use a nonce or a PKCE verifier. They stay non-empty so the
+		// cookie still parses, and Request selects SameSite=None.
+		begun.Nonce = "saml"
+		begun.Verifier = "saml"
+		begun.Request = "post"
+	}
 	// This request comes from a page of this site, so a session the browser holds is sent with it.
 	if held, err := authn.SessionToken(r); err == nil {
 		begun.Previous = base64.RawURLEncoding.EncodeToString(authn.SessionHash(held))
 	}
 	http.SetCookie(w, begun.cookie())
-	return p.authorizeURL(s.redirectURI(id), state, nonce, verifier), true
+	location := p.authorizeURL(s.redirectURI(id), state, nonce, verifier)
+	if isPosted {
+		location = posted.redirect(state)
+	}
+	if location == "" {
+		if isPosted {
+			http.SetCookie(w, clearedPostedAttemptCookie())
+		} else {
+			http.SetCookie(w, clearedAttemptCookie())
+		}
+		writeJSON(w, http.StatusInternalServerError, codeInternal)
+		return "", false
+	}
+	return location, true
 }
 
 // invitationRequest is the body of POST /auth/invitation/{provider}.
@@ -210,13 +241,22 @@ func (s *Service) invite(w http.ResponseWriter, r *http.Request) {
 // and the issuer. Only then does it spend the bucket and call the provider. The attempt cookie is
 // cleared on every outcome, so a state is never used twice.
 func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("provider")
+	p, ok := s.providers[id]
+	if posted, isPosted := p.(postedLogin); ok && isPosted {
+		http.SetCookie(w, clearedPostedAttemptCookie())
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		s.postedCallback(w, r, id, posted)
+		return
+	}
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
 		return
 	}
 	http.SetCookie(w, clearedAttemptCookie())
-	id := r.PathValue("provider")
-	p, ok := s.providers[id]
 	if !ok {
 		s.writeCallbackRefusal(w, r, http.StatusNotFound, codeNotFound, nil)
 		return
@@ -279,12 +319,58 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.finishSignIn(w, r, ctx, id, who, a, now)
+}
+
+// postedCallback finishes a SAML sign-in. The attempt cookie was cleared by the caller with
+// SameSite=None. RelayState and InResponseTo are checked by the registered verifier.
+func (s *Service) postedCallback(w http.ResponseWriter, r *http.Request, id string, p postedLogin) {
+	refuse := func(reason string) {
+		s.log.Warn("a sign-in was refused", "provider", id, "reason", reason)
+		s.writeCallbackRefusal(w, r, http.StatusBadRequest, codeInvalidLogin, nil)
+	}
+	a, ok := readAttempt(r)
+	if !ok || a.Provider != id || a.Request == "" {
+		refuse("no_attempt")
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxSAMLBody))
+	if err != nil || len(body) == 0 {
+		refuse("body")
+		return
+	}
+	now := s.now()
+	if wait, allowed := s.callbacks.Allow(s.tenant, now); !allowed {
+		w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
+		s.writeCallbackRefusal(w, r, http.StatusTooManyRequests, codeRateLimited, nil)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), callbackTimeout)
+	defer cancel()
+	who, err := p.completePOST(ctx, body, a.State)
+	if err != nil {
+		var f *failure
+		if errors.As(err, &f) {
+			s.log.Warn("a sign-in could not be completed", "provider", id, "step", f.Error())
+		} else {
+			s.log.Warn("a sign-in could not be completed", "provider", id)
+		}
+		s.writeCallbackRefusal(w, r, http.StatusBadRequest, codeInvalidLogin, nil)
+		return
+	}
+	s.finishSignIn(w, r, ctx, id, who, a, now)
+}
+
+// finishSignIn opens the session after the provider has named a subject. It is shared by the GET
+// callback and the posted one.
+func (s *Service) finishSignIn(w http.ResponseWriter, r *http.Request, ctx context.Context, id string, who subject, a attempt, now time.Time) {
 	previous := previousSession(r, a)
 	var invitation []byte
 	if a.Invitation != "" {
-		// Only this server sets the cookie, so a token that does not read is a defect, and no sign-in goes on.
+		var ok bool
 		if invitation, ok = identity.InvitationHash(a.Invitation); !ok {
-			refuse("invitation")
+			s.log.Warn("a sign-in was refused", "provider", id, "reason", "invitation")
+			s.writeCallbackRefusal(w, r, http.StatusBadRequest, codeInvalidLogin, nil)
 			return
 		}
 	}
@@ -296,13 +382,10 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	expires, err := s.store.start(ctx, who.issuer, who.subject, authn.SessionHash(token), previous, invitation)
 	switch {
 	case errors.Is(err, identity.ErrUnknownInvitation):
-		// Nothing is written. The token is neither logged nor answered.
 		s.log.Info("a sign-in carried an invitation the tenant holds no open one for", "provider", id)
 		s.writeCallbackRefusal(w, r, http.StatusForbidden, codeUnknownInvitation, nil)
 		return
 	case errors.Is(err, identity.ErrUnknownLogin):
-		// The person gets the two values an operator binds, and nothing is written. The subject is
-		// theirs to see and is not logged.
 		s.log.Info("a sign-in named a login the tenant never bound", "provider", id)
 		s.writeCallbackRefusal(w, r, http.StatusForbidden, codeUnknownLogin, &who)
 		return
@@ -318,9 +401,30 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		s.known.remove(previous)
 	}
 	http.SetCookie(w, authn.NewSessionCookie(token, expires, now))
-	// The constant /, never a parameter, so a sign-in cannot be turned into an open redirect.
 	w.Header().Set("Location", "/")
 	w.WriteHeader(http.StatusSeeOther)
+}
+
+func (s *Service) metadata(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("provider")
+	p, ok := s.providers[id]
+	posted, isPosted := p.(postedLogin)
+	if !ok || !isPosted {
+		writeJSON(w, http.StatusNotFound, codeNotFound)
+		return
+	}
+	if wait, allowed := s.lists.Allow(s.tenant, s.now()); !allowed {
+		w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
+		writeJSON(w, http.StatusTooManyRequests, codeRateLimited)
+		return
+	}
+	body := posted.metadata()
+	if len(body) == 0 {
+		writeJSON(w, http.StatusNotFound, codeNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/samlmetadata+xml")
+	_, _ = io.Copy(w, strings.NewReader(string(body)))
 }
 
 // previousSession is the hash of the session this browser holds, which the new one replaces: the one on
@@ -374,7 +478,8 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// writeCallbackRefusal answers a GET callback that did not start a session (ADR-0130). A browser navigation
+// writeCallbackRefusal answers a callback that did not start a session (ADR-0130, and ADR-0131 for a posted
+// callback). A browser navigation
 // asks for HTML, and the only page that can explain the refusal is the app's /signin, so the answer is 303
 // to that fixed path with the closed code in the fragment. The fragment is not sent on the request that
 // loads the page. A client that does not ask for HTML keeps the JSON contract. Issuer and subject are added
