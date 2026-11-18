@@ -361,6 +361,10 @@ func smuggleInserts() []smuggle {
 		{"identity.scim_group", `INSERT INTO identity.scim_group (tenant_id, group_ref) VALUES ($1::uuid, 'smuggled')`, []any{tenantA}, true},
 		{"identity.scim_membership", `INSERT INTO identity.scim_membership (tenant_id, group_id, principal_id) VALUES ($1::uuid, $1::uuid, $1::uuid)`, []any{tenantA}, true},
 		{"identity.idp_group_role", `INSERT INTO identity.idp_group_role (tenant_id, group_ref, role) VALUES ($1::uuid, 'smuggled', 'viewer')`, []any{tenantA}, true},
+		{"identity.idp_group_owner", `INSERT INTO identity.idp_group_owner (tenant_id, group_ref, owner_ref) VALUES ($1::uuid, 'smuggled', 'team:platform')`, []any{tenantA}, true},
+		// The owner check reads the principal as the caller's tenant, so it refuses this row (23514) before the
+		// policy is asked (42501), like the role binding above.
+		{"identity.principal_owner", `INSERT INTO identity.principal_owner (tenant_id, principal_id, owner_ref) VALUES ($1::uuid, $1::uuid, 'team:platform')`, []any{tenantA}, false},
 		{"registry.premise_host_allow", `INSERT INTO registry.premise_host_allow (tenant_id, host, allowed) VALUES ($1::uuid, 'smuggled.example', true)`, []any{tenantA}, true},
 		{"registry.grandfather_period", `INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period) VALUES ($1::uuid, $2::uuid, '[2021-01-01,)')`, []any{tenantA, decisionTo}, true},
 		{"proposals.proposal", `
@@ -484,7 +488,9 @@ func policyTables() []string {
 		"identity.action_log",
 		"identity.invitation",
 		"identity.login",
+		"identity.idp_group_owner",
 		"identity.idp_group_role",
+		"identity.principal_owner",
 		"identity.scim_group",
 		"identity.scim_membership",
 		"identity.scim_token",
@@ -532,7 +538,9 @@ func expectedPolicies() []string {
 		"identity.action_log":               "SELECT INSERT",
 		"identity.invitation":               "SELECT INSERT DELETE",
 		"identity.login":                    "SELECT INSERT UPDATE",
+		"identity.idp_group_owner":          "SELECT INSERT DELETE",
 		"identity.idp_group_role":           "SELECT INSERT DELETE",
+		"identity.principal_owner":          "SELECT INSERT DELETE",
 		"identity.scim_group":               "SELECT INSERT DELETE",
 		"identity.scim_membership":          "SELECT INSERT DELETE",
 		"identity.scim_token":               "SELECT INSERT DELETE",

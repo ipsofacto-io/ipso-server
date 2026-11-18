@@ -133,6 +133,27 @@ func (d scimDirectory) DeleteGroupRole(ctx context.Context, actor, id uuid.UUID)
 	return mapSCIM(identity.DeleteIDPGroupRole(ctx, d.db, d.tenant, actor, id))
 }
 
+func (d scimDirectory) PutGroupOwner(ctx context.Context, actor uuid.UUID, groupRef, ownerRef string) (eehooks.GroupOwner, error) {
+	row, err := identity.PutIDPGroupOwner(ctx, d.db, d.tenant, actor, groupRef, ownerRef)
+	return eehooks.GroupOwner{ID: row.ID, GroupRef: row.GroupRef, OwnerRef: row.OwnerRef}, mapSCIM(err)
+}
+
+func (d scimDirectory) ListGroupOwners(ctx context.Context) ([]eehooks.GroupOwner, error) {
+	rows, err := identity.ListIDPGroupOwners(ctx, d.db, d.tenant)
+	if err != nil {
+		return nil, mapSCIM(err)
+	}
+	out := make([]eehooks.GroupOwner, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, eehooks.GroupOwner{ID: row.ID, GroupRef: row.GroupRef, OwnerRef: row.OwnerRef})
+	}
+	return out, nil
+}
+
+func (d scimDirectory) DeleteGroupOwner(ctx context.Context, actor, id uuid.UUID) error {
+	return mapSCIM(identity.DeleteIDPGroupOwner(ctx, d.db, d.tenant, actor, id))
+}
+
 func toUser(user identity.SCIMUser) eehooks.User {
 	return eehooks.User{ID: user.ID, ExternalID: user.ExternalID, UserName: user.UserName, Name: user.Name, Active: user.Active}
 }

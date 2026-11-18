@@ -113,6 +113,13 @@ type GroupRole struct {
 	ScopeID  uuid.UUID
 }
 
+// GroupOwner is one IdP group mapped to a decision owner team.
+type GroupOwner struct {
+	ID       uuid.UUID
+	GroupRef string
+	OwnerRef string
+}
+
 // Group is one SCIM group. Ref is the value a group-role row matches.
 type Group struct {
 	ID  uuid.UUID
@@ -149,6 +156,9 @@ type Directory interface {
 	PutGroupRole(ctx context.Context, actor uuid.UUID, groupRef, role string, scope uuid.UUID) (GroupRole, error)
 	ListGroupRoles(ctx context.Context) ([]GroupRole, error)
 	DeleteGroupRole(ctx context.Context, actor, id uuid.UUID) error
+	PutGroupOwner(ctx context.Context, actor uuid.UUID, groupRef, ownerRef string) (GroupOwner, error)
+	ListGroupOwners(ctx context.Context) ([]GroupOwner, error)
+	DeleteGroupOwner(ctx context.Context, actor, id uuid.UUID) error
 }
 
 var directory Directory
