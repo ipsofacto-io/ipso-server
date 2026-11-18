@@ -9,6 +9,9 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 
 	"golang.org/x/oauth2"
 
@@ -215,12 +218,12 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("provider")
 	p, ok := s.providers[id]
 	if !ok {
-		writeJSON(w, http.StatusNotFound, codeNotFound)
+		s.writeCallbackRefusal(w, r, http.StatusNotFound, codeNotFound, nil)
 		return
 	}
 	refuse := func(reason string) {
 		s.log.Warn("a sign-in was refused", "provider", id, "reason", reason)
-		writeJSON(w, http.StatusBadRequest, codeInvalidLogin)
+		s.writeCallbackRefusal(w, r, http.StatusBadRequest, codeInvalidLogin, nil)
 	}
 	a, ok := readAttempt(r)
 	if !ok || a.Provider != id {
@@ -238,7 +241,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	if query.Get("error") != "" {
 		s.log.Warn("a sign-in was refused by the provider", "provider", id)
-		writeJSON(w, http.StatusBadRequest, codeLoginRefused)
+		s.writeCallbackRefusal(w, r, http.StatusBadRequest, codeLoginRefused, nil)
 		return
 	}
 	state, code := query.Get("state"), query.Get("code")
@@ -258,7 +261,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	if wait, ok := s.callbacks.Allow(s.tenant, now); !ok {
 		w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
-		writeJSON(w, http.StatusTooManyRequests, codeRateLimited)
+		s.writeCallbackRefusal(w, r, http.StatusTooManyRequests, codeRateLimited, nil)
 		return
 	}
 
@@ -272,7 +275,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		} else {
 			s.log.Warn("a sign-in could not be completed", "provider", id)
 		}
-		writeJSON(w, http.StatusBadRequest, codeInvalidLogin)
+		s.writeCallbackRefusal(w, r, http.StatusBadRequest, codeInvalidLogin, nil)
 		return
 	}
 
@@ -287,7 +290,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := authn.NewSessionToken()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, codeInternal)
+		s.writeCallbackRefusal(w, r, http.StatusInternalServerError, codeInternal, nil)
 		return
 	}
 	expires, err := s.store.start(ctx, who.issuer, who.subject, authn.SessionHash(token), previous, invitation)
@@ -295,20 +298,20 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, identity.ErrUnknownInvitation):
 		// Nothing is written. The token is neither logged nor answered.
 		s.log.Info("a sign-in carried an invitation the tenant holds no open one for", "provider", id)
-		writeJSON(w, http.StatusForbidden, codeUnknownInvitation)
+		s.writeCallbackRefusal(w, r, http.StatusForbidden, codeUnknownInvitation, nil)
 		return
 	case errors.Is(err, identity.ErrUnknownLogin):
 		// The person gets the two values an operator binds, and nothing is written. The subject is
 		// theirs to see and is not logged.
 		s.log.Info("a sign-in named a login the tenant never bound", "provider", id)
-		writeUnknownLogin(w, who)
+		s.writeCallbackRefusal(w, r, http.StatusForbidden, codeUnknownLogin, &who)
 		return
 	case errors.Is(err, identity.ErrNotHuman):
-		writeJSON(w, http.StatusForbidden, codeForbidden)
+		s.writeCallbackRefusal(w, r, http.StatusForbidden, codeForbidden, nil)
 		return
 	case err != nil:
 		s.log.Warn("a session could not be started", "provider", id)
-		writeJSON(w, http.StatusInternalServerError, codeInternal)
+		s.writeCallbackRefusal(w, r, http.StatusInternalServerError, codeInternal, nil)
 		return
 	}
 	if previous != nil {
@@ -369,6 +372,87 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 	s.known.remove(hash)
 	http.SetCookie(w, authn.ClearedSessionCookie())
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeCallbackRefusal answers a GET callback that did not start a session (ADR-0130). A browser navigation
+// asks for HTML, and the only page that can explain the refusal is the app's /signin, so the answer is 303
+// to that fixed path with the closed code in the fragment. The fragment is not sent on the request that
+// loads the page. A client that does not ask for HTML keeps the JSON contract. Issuer and subject are added
+// only for unknown_login, and they are the verified login, never a value the provider put on the query.
+func (s *Service) writeCallbackRefusal(w http.ResponseWriter, r *http.Request, status int, code string, who *subject) {
+	if prefersPage(r) {
+		w.Header().Set("Location", signInLocation(code, who))
+		w.WriteHeader(http.StatusSeeOther)
+		return
+	}
+	if who != nil && code == codeUnknownLogin {
+		writeUnknownLogin(w, *who)
+		return
+	}
+	writeJSON(w, status, code)
+}
+
+// signInLocation is the only redirect a refusal may send. The path is fixed, so a callback cannot be turned
+// into an open redirect, and the fragment carries the closed code.
+func signInLocation(code string, who *subject) string {
+	v := url.Values{}
+	v.Set("code", code)
+	if code == codeUnknownLogin && who != nil {
+		v.Set("issuer", who.issuer)
+		v.Set("subject", who.subject)
+	}
+	return "/signin#" + v.Encode()
+}
+
+// prefersPage reports whether the client asked for a page rather than the JSON contract. text/html has to be
+// listed, and at a higher quality than application/json when that is listed too. An empty Accept, */* alone,
+// an equal quality, or JSON ahead of HTML keeps the JSON.
+func prefersPage(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	if accept == "" {
+		return false
+	}
+	html, htmlOK := mediaQuality(accept, "text/html")
+	jsonQ, jsonOK := mediaQuality(accept, "application/json")
+	if !htmlOK {
+		return false
+	}
+	if !jsonOK {
+		return true
+	}
+	return html > jsonQ
+}
+
+// mediaQuality is the highest quality at which header lists want, or false when it does not list it at a
+// quality above zero. A missing q is 1. A q outside (0, 1] is ignored.
+func mediaQuality(header, want string) (float64, bool) {
+	var (
+		found bool
+		best  float64
+	)
+	for _, part := range strings.Split(header, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		media, params, err := mime.ParseMediaType(part)
+		if err != nil || !strings.EqualFold(media, want) {
+			continue
+		}
+		q := 1.0
+		if raw, ok := params["q"]; ok {
+			parsed, err := strconv.ParseFloat(raw, 64)
+			if err != nil || parsed <= 0 || parsed > 1 {
+				continue
+			}
+			q = parsed
+		}
+		if !found || q > best {
+			found = true
+			best = q
+		}
+	}
+	return best, found
 }
 
 func methodNotAllowed(w http.ResponseWriter, allow string) {

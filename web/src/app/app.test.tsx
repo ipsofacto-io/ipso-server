@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { NOW, renderApp, stubFetch } from '../test/render';
+import { refusalOf } from '../views/SignIn';
 import { followSystemTheme } from '../theme';
 
 beforeEach(() => {
@@ -233,5 +234,103 @@ describe('the export entry of the menu', () => {
     await screen.findByRole('heading', { name: 'Sign in to ipso' });
     expect(screen.queryByRole('link', { name: 'Export' })).not.toBeInTheDocument();
     expect(stub.requests).not.toContain('GET /v1/exports/current');
+  });
+});
+
+const REFUSALS = {
+  unknown_login: 'This account is not a member of this organization. Give an administrator the issuer and the subject below so they can invite you or bind the login.',
+  unknown_invitation: 'This invitation was already used, was withdrawn, or has expired. Ask the person who invited you for a new one.',
+  invalid_login: 'The sign-in did not finish. Start again.',
+  login_refused: 'The sign-in was cancelled or refused. Start again if you still want to sign in.',
+  forbidden: 'This login belongs to an agent. Sign in with a person account.',
+  rate_limited: 'Too many tries. Wait a moment and try again.',
+  internal: 'The sign-in could not be completed. Try again in a moment.',
+  not_found: 'This sign-in provider is not configured.',
+};
+
+function openSignIn(hash: string) {
+  window.history.replaceState(null, '', `/signin${hash}`);
+}
+
+describe('a refused sign-in', () => {
+  afterEach(() => {
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('says in words what to do for each code, and never shows the code', async () => {
+    for (const [code, words] of Object.entries(REFUSALS)) {
+      openSignIn(`#code=${code}`);
+      stubFetch({ signedIn: false });
+      const view = renderApp('/signin');
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(words);
+      expect(alert).not.toHaveTextContent(code);
+      expect(window.location.hash).toBe('');
+      expect(await screen.findByRole('link', { name: 'Sign in with dex' })).toHaveAttribute('href', '/auth/login/dex');
+      view.unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('shows the issuer and the subject only for an unknown login, as text', async () => {
+    openSignIn('#code=unknown_login&issuer=javascript%3Aalert(1)&subject=person-9');
+    stubFetch({ signedIn: false });
+    renderApp('/signin');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Issuer:');
+    expect(alert).toHaveTextContent('javascript:alert(1)');
+    expect(alert).toHaveTextContent('Subject:');
+    expect(alert).toHaveTextContent('person-9');
+    expect(screen.getByText('javascript:alert(1)').closest('a')).toBeNull();
+    expect(document.querySelector('a[href^="javascript:"]')).toBeNull();
+    expect(window.location.hash).toBe('');
+    expect(window.location.href).not.toContain('person-9');
+  });
+
+  it('does not show an issuer that arrived with another code', async () => {
+    openSignIn('#code=login_refused&issuer=https%3A%2F%2Fidp.test&subject=person-9&error_description=the%20user%20said%20no');
+    stubFetch({ signedIn: false });
+    renderApp('/signin');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(REFUSALS.login_refused);
+    expect(alert).not.toHaveTextContent('idp.test');
+    expect(alert).not.toHaveTextContent('person-9');
+    expect(alert).not.toHaveTextContent('the user said no');
+    expect(alert).not.toHaveTextContent('login_refused');
+  });
+
+  it('treats a code outside the set as a sign-in that did not finish, and shows no extra value', async () => {
+    openSignIn('#code=access_denied&issuer=https%3A%2F%2Fidp.test&subject=person-9');
+    stubFetch({ signedIn: false });
+    renderApp('/signin');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(REFUSALS.invalid_login);
+    expect(alert).not.toHaveTextContent('access_denied');
+    expect(alert).not.toHaveTextContent('idp.test');
+    expect(alert).not.toHaveTextContent('person-9');
+  });
+
+  it('omits an issuer or subject that is too long or has a control character', async () => {
+    const long = 'Z'.repeat(2049);
+    openSignIn(`#code=unknown_login&issuer=${encodeURIComponent(long)}&subject=${encodeURIComponent('ok-subject\nno')}`);
+    stubFetch({ signedIn: false });
+    renderApp('/signin');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(REFUSALS.unknown_login);
+    expect(alert).not.toHaveTextContent(long);
+    expect(alert).not.toHaveTextContent('ok-subject');
+    expect(alert).not.toHaveTextContent('Issuer:');
+    expect(alert).not.toHaveTextContent('Subject:');
+  });
+
+  it('reads the fragment the page reads', () => {
+    expect(refusalOf('')).toBeNull();
+    expect(refusalOf('#')).toBeNull();
+    expect(refusalOf('#code=unknown_login&issuer=https://idp.test&subject=person-9')).toEqual({
+      words: REFUSALS.unknown_login,
+      issuer: 'https://idp.test',
+      subject: 'person-9',
+    });
+    expect(refusalOf('#foo=1')).toEqual({ words: REFUSALS.invalid_login, issuer: null, subject: null });
   });
 });
