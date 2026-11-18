@@ -35,6 +35,9 @@ const (
 	scimTokenTable    = "identity.scim_token"
 	tombstoneTable    = "tenancy.offboarding"
 	installationTable = "tenancy.installation"
+	// A tracker binding holds sealed vendor credentials and is unique per connector across tenants,
+	// so an export leaves it out (ADR-0133).
+	trackerBindingTable = "integrations.tracker_binding"
 	// The exports a tenant admin asks for through the API (ADR-0111). An archive never holds the archive
 	// before it, so neither table is exported or restored. Offboarding purges both.
 	exportTable     = "tenancy.export"
@@ -112,7 +115,7 @@ func exported(all []Table) []Table {
 	var out []Table
 	for _, t := range all {
 		switch t.String() {
-		case tenantKeyTable, sessionTable, invitationTable, scimUserTable, scimTokenTable, tombstoneTable, installationTable, exportTable, exportPartTable:
+		case tenantKeyTable, sessionTable, invitationTable, scimUserTable, scimTokenTable, tombstoneTable, installationTable, trackerBindingTable, exportTable, exportPartTable:
 			continue
 		}
 		out = append(out, t)

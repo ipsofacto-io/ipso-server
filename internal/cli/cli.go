@@ -21,6 +21,7 @@ import (
 
 	"github.com/ipsofacto-io/ipso/pkg/plancheck"
 
+	"github.com/ipsofacto-io/ipso-server/eehooks"
 	"github.com/ipsofacto-io/ipso-server/internal/controlplane"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
@@ -32,6 +33,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
 	"github.com/ipsofacto-io/ipso-server/internal/webapp"
 	"github.com/ipsofacto-io/ipso-server/internal/worker"
+	"github.com/ipsofacto-io/ipso-server/trackers"
 )
 
 // migrateDatabaseEnv names the only place the migration credential is read from.
@@ -56,6 +58,9 @@ const (
 	// the webhooks service reads no discussion and calls no model. It holds route names and key variable
 	// names, never a key, and it is not an IPSO_LLM_ variable, so no route can name it as its key.
 	gatewayConfigEnv = "IPSO_GATEWAY_CONFIG"
+	// connectorKeyEnv is the base64 of 32 bytes that seals tracker tokens (ADR-0133). Unset leaves the
+	// tracker routes unmounted. It is not the tenant key.
+	connectorKeyEnv = "IPSO_CONNECTOR_KEK"
 )
 
 // The run task service reads the same way. The bundle is verified at start and held in memory.
@@ -304,6 +309,18 @@ func apiCmd(ctx context.Context, stderr io.Writer, d deps) int {
 	cfg.Version = Version
 	cfg.Web = webapp.Files()
 	cfg.Log = slog.New(slog.NewJSONHandler(stderr, nil))
+	if err := installConnectorKey(d.getenv); err != nil {
+		fprintf(stderr, "api: %v\n", err)
+		return 1
+	}
+	if path := d.getenv(gatewayConfigEnv); path != "" {
+		complete, err := trackerComplete(db, path, cfg.Log)
+		if err != nil {
+			fprintf(stderr, "api: %v\n", err)
+			return 1
+		}
+		eehooks.SetComplete(complete)
+	}
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", address)
 	if err != nil {
 		fprintf(stderr, "api: %v\n", err)
@@ -395,6 +412,10 @@ func workerCmd(ctx context.Context, stderr io.Writer, d deps) int {
 		return 1
 	}
 	defer pool.Close()
+	if err := installConnectorKey(d.getenv); err != nil {
+		fprintf(stderr, "worker: %v\n", err)
+		return 1
+	}
 	err = d.runWorker(ctx, worker.Config{
 		Pool:   pool,
 		Tenant: tenant,
@@ -508,6 +529,46 @@ func mergedHook(db *sql.DB, path string, log *slog.Logger) (func(context.Context
 		return nil, err
 	}
 	return proposals.OnMerged(db, gateway, log), nil
+}
+
+// installConnectorKey parses IPSO_CONNECTOR_KEK when it is set and clears the process key when it is not.
+// A value that is not 32 bytes stops the process. The key is not logged.
+func installConnectorKey(getenv func(string) string) error {
+	raw := getenv(connectorKeyEnv)
+	if raw == "" {
+		eehooks.SetConnectorKey(nil)
+		return nil
+	}
+	key, err := trackers.ParseKey(raw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", connectorKeyEnv, err)
+	}
+	eehooks.SetConnectorKey(key)
+	return nil
+}
+
+// trackerComplete builds the model call the tracker webhook uses when a gateway file is set.
+func trackerComplete(db *sql.DB, path string, log *slog.Logger) (eehooks.CompleteFunc, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", gatewayConfigEnv, err)
+	}
+	defer func() { _ = file.Close() }()
+	cfg, err := llmgw.ParseConfig(file)
+	if err != nil {
+		return nil, err
+	}
+	gateway, err := llmgw.New(cfg, llmgw.PGLedger{DB: db}, nil, log)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, tenant uuid.UUID, system, user string, maxTokens int) (string, string, error) {
+		answer, err := gateway.For(tenant)(ctx, system, user, maxTokens)
+		if err != nil {
+			return "", "", err
+		}
+		return answer.Text, answer.Model, nil
+	}, nil
 }
 
 func runTasksCmd(ctx context.Context, stderr io.Writer, d deps) int {

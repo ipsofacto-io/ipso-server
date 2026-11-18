@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
+
+	"github.com/ipsofacto-io/ipso-server/eehooks"
 )
 
 const (
@@ -100,6 +102,9 @@ func (w *waiverNotices) Work(ctx context.Context, job *river.Job[WaiverNoticesAr
 	recorded, err := w.notify(ctx, w.db, w.tenant)
 	if err != nil {
 		return reduce("record waiver notices", err)
+	}
+	if err := eehooks.CloseDue(ctx, w.db, w.tenant); err != nil {
+		return reduce("close waiver tickets", err)
 	}
 	w.log.Info("waiver notices recorded", "job", job.ID, "tenant", w.tenant, "recorded", recorded)
 	return nil

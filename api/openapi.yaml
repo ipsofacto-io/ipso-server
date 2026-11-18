@@ -2482,7 +2482,7 @@ components:
     WaiverRequest:
       type: object
       additionalProperties: false
-      required: [decision_id, scope_id, reason, ticket_ref, valid_from, expires_at]
+      required: [decision_id, scope_id, reason, valid_from, expires_at]
       properties:
         decision_id:
           type: string
@@ -2498,6 +2498,7 @@ components:
           type: string
           minLength: 1
           maxLength: 200
+          description: The key of the waiver ticket. Omit it only when a tracker binding opens the ticket (ADR-0133). The stored row still has the key.
         valid_from:
           type: string
           format: date-time

@@ -367,6 +367,20 @@ func smuggleInserts() []smuggle {
 		{"identity.principal_owner", `INSERT INTO identity.principal_owner (tenant_id, principal_id, owner_ref) VALUES ($1::uuid, $1::uuid, 'team:platform')`, []any{tenantA}, false},
 		{"registry.premise_host_allow", `INSERT INTO registry.premise_host_allow (tenant_id, host, allowed) VALUES ($1::uuid, 'smuggled.example', true)`, []any{tenantA}, true},
 		{"registry.grandfather_period", `INSERT INTO registry.grandfather_period (tenant_id, decision_id, valid_period) VALUES ($1::uuid, $2::uuid, '[2021-01-01,)')`, []any{tenantA, decisionTo}, true},
+		{"proposals.tracker_proposal", `
+			INSERT INTO proposals.tracker_proposal
+				(tenant_id, connector, payload, confidence, model_id, prompt_version, external_id, source_url, source_sha256, candidate_index)
+			VALUES ($1::uuid, 'jira', '{"title":"Use Postgres"}', 0.5, 'm', 'p', 'OPS-9',
+			        'https://acme.atlassian.net/browse/OPS-9', decode(repeat('cd', 32), 'hex'), 0)`, []any{tenantA}, true},
+		{"proposals.tracker_approval", `
+			INSERT INTO proposals.tracker_approval (tenant_id, proposal_id, approver_id, outcome)
+			VALUES ($1::uuid, $1::uuid, $1::uuid, 'rejected')`, []any{tenantA}, false},
+		{"integrations.tracker_binding", `
+			INSERT INTO integrations.tracker_binding (tenant_id, connector, external_account, token_sealed, webhook_sealed)
+			VALUES ($1::uuid, 'jira', 'smuggled.atlassian.net/OPS', decode(repeat('ab', 29), 'hex'), decode(repeat('ab', 29), 'hex'))`, []any{tenantA}, true},
+		{"integrations.tracker_link", `
+			INSERT INTO integrations.tracker_link (tenant_id, connector, external_id, url, kind, proposal_id, status)
+			VALUES ($1::uuid, 'jira', 'OPS-8', 'https://acme.atlassian.net/browse/OPS-8', 'decision', $1::uuid, 'open')`, []any{tenantA}, true},
 		{"proposals.proposal", `
 			INSERT INTO proposals.proposal
 				(tenant_id, payload, confidence, model_id, prompt_version, repo, pr_number, external_id, source_url, source_sha256, candidate_index)
@@ -486,6 +500,8 @@ func policies(ctx context.Context, db *sql.DB) ([]string, error) {
 func policyTables() []string {
 	tables := []string{
 		"identity.action_log",
+		"integrations.tracker_binding",
+		"integrations.tracker_link",
 		"identity.invitation",
 		"identity.login",
 		"identity.idp_group_owner",
@@ -505,6 +521,8 @@ func policyTables() []string {
 		"proposals.check_approval",
 		"proposals.check_proposal",
 		"proposals.proposal",
+		"proposals.tracker_approval",
+		"proposals.tracker_proposal",
 		"registry.baseline",
 		"registry.decision_version",
 		"registry.decision_version_history",
@@ -536,6 +554,8 @@ func policyTables() []string {
 func expectedPolicies() []string {
 	app := map[string]string{
 		"identity.action_log":               "SELECT INSERT",
+		"integrations.tracker_binding":      "SELECT INSERT DELETE",
+		"integrations.tracker_link":         "SELECT INSERT UPDATE",
 		"identity.invitation":               "SELECT INSERT DELETE",
 		"identity.login":                    "SELECT INSERT UPDATE",
 		"identity.idp_group_owner":          "SELECT INSERT DELETE",
@@ -555,6 +575,8 @@ func expectedPolicies() []string {
 		"proposals.check_approval":          "SELECT INSERT",
 		"proposals.check_proposal":          "SELECT INSERT",
 		"proposals.proposal":                "SELECT INSERT",
+		"proposals.tracker_approval":        "SELECT INSERT",
+		"proposals.tracker_proposal":        "SELECT INSERT",
 		"registry.baseline":                 "SELECT INSERT",
 		"registry.decision_version":         "SELECT INSERT UPDATE DELETE",
 		"registry.decision_version_history": "SELECT",
@@ -595,6 +617,8 @@ func expectedPolicies() []string {
 	migrate["identity.scim_token"] = "SELECT DELETE"
 	// A binding is unique across tenants, so an export leaves it out and a restore does not write it.
 	migrate["tenancy.installation"] = "SELECT DELETE"
+	// A tracker binding holds sealed vendor credentials and is unique across tenants (ADR-0133).
+	migrate["integrations.tracker_binding"] = "SELECT DELETE"
 	// An export made through the API is never in an archive, so a restore writes neither table (ADR-0111).
 	migrate["tenancy.export"] = "SELECT DELETE"
 	migrate["tenancy.export_part"] = "SELECT DELETE"

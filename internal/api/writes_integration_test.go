@@ -5,8 +5,10 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,10 +19,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ipsofacto-io/ipso-server/eehooks"
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
+	"github.com/ipsofacto-io/ipso-server/trackers"
 )
 
 // scribe sends the writes of ADR-0109 through the real handler against PostgreSQL and checks each request and
@@ -913,5 +917,93 @@ func TestAScopedApproverAnswersOnlyTheChecksInsideItsScope(t *testing.T) {
 	s.expect(http.StatusCreated, repoApproverA, http.MethodPost, checkApprovalPath(f.api, second), rejected)
 	if n := s.count(tenantA, `SELECT count(*) FROM proposals.check_approval WHERE tenant_id = $1`); n != 2 {
 		t.Fatalf("%d answers stored, want 2", n)
+	}
+}
+
+type allowTrackers struct{}
+
+func (allowTrackers) Allow(feature string) bool { return feature == eehooks.FeatureTrackers }
+
+func TestAnOmittedTicketRefStaysRequiredWithoutATracker(t *testing.T) {
+	s := newScribe(t)
+	s.expect(http.StatusBadRequest, approverA, http.MethodPost, "/v1/waivers", map[string]any{
+		"decision_id": s.f.tls, "scope_id": s.f.repo, "reason": "no ticket yet",
+		"valid_from": "2026-06-01T00:00:00Z", "expires_at": "2026-07-01T00:00:00Z",
+	})
+}
+
+func TestAnOmittedTicketRefOpensOneTrackerTicket(t *testing.T) {
+	s := newScribe(t)
+	eehooks.ResetForTest()
+	t.Cleanup(eehooks.ResetForTest)
+	eehooks.SetGate(allowTrackers{})
+	var abandoned int
+	eehooks.SetOpenWaiver(func(context.Context, *sql.DB, uuid.UUID, string, time.Time, time.Time) (eehooks.WaiverTicket, bool, error) {
+		return eehooks.WaiverTicket{
+			Connector: trackers.Jira, ExternalID: "OPS-44", URL: "https://acme.atlassian.net/browse/OPS-44", Key: "OPS-44",
+			Abandon: func(context.Context) { abandoned++ },
+		}, true, nil
+	})
+	answer := s.expect(http.StatusCreated, approverA, http.MethodPost, "/v1/waivers", map[string]any{
+		"decision_id": s.f.tls, "scope_id": s.f.repo, "reason": "opened by the tracker",
+		"valid_from": "2026-06-01T00:00:00Z", "expires_at": "2026-07-01T00:00:00Z",
+	})
+	if answer["ticket_ref"] != "OPS-44" {
+		t.Fatalf("ticket_ref = %v", answer["ticket_ref"])
+	}
+	if abandoned != 0 {
+		t.Fatal("the recorded waiver abandoned its ticket")
+	}
+	if n := s.count(tenantA, `SELECT count(*) FROM integrations.tracker_link WHERE tenant_id = $1 AND external_id = 'OPS-44' AND kind = 'waiver' AND status = 'open'`); n != 1 {
+		t.Fatalf("links = %d, want 1", n)
+	}
+}
+
+func TestATrackerFailureWritesNoWaiver(t *testing.T) {
+	s := newScribe(t)
+	eehooks.ResetForTest()
+	t.Cleanup(eehooks.ResetForTest)
+	eehooks.SetGate(allowTrackers{})
+	eehooks.SetOpenWaiver(func(context.Context, *sql.DB, uuid.UUID, string, time.Time, time.Time) (eehooks.WaiverTicket, bool, error) {
+		return eehooks.WaiverTicket{}, false, errors.New("vendor")
+	})
+	body := mustJSON(t, map[string]any{
+		"decision_id": s.f.tls, "scope_id": s.f.repo, "reason": "vendor down",
+		"valid_from": "2026-06-01T00:00:00Z", "expires_at": "2026-07-01T00:00:00Z",
+	})
+	w := s.raw(approverA, http.MethodPost, "/v1/waivers", "application/json", body)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status %d %s, want 502", w.Code, w.Body)
+	}
+	if n := s.count(tenantA, `SELECT count(*) FROM registry.waiver WHERE tenant_id = $1 AND reason = 'vendor down'`); n != 0 {
+		t.Fatalf("a failed create stored %d waivers", n)
+	}
+}
+
+func TestAWaiverInsertFailureAbandonsTheTicket(t *testing.T) {
+	s := newScribe(t)
+	eehooks.ResetForTest()
+	t.Cleanup(eehooks.ResetForTest)
+	eehooks.SetGate(allowTrackers{})
+	var abandoned int
+	eehooks.SetOpenWaiver(func(context.Context, *sql.DB, uuid.UUID, string, time.Time, time.Time) (eehooks.WaiverTicket, bool, error) {
+		return eehooks.WaiverTicket{
+			Connector: trackers.Jira, ExternalID: "OPS-45", URL: "https://acme.atlassian.net/browse/OPS-45", Key: "OPS-45",
+			Abandon: func(context.Context) { abandoned++ },
+		}, true, nil
+	})
+	body := mustJSON(t, map[string]any{
+		"decision_id": s.f.tls, "scope_id": s.f.repo, "reason": "too long for a waiver",
+		"valid_from": "2026-06-01T00:00:00Z", "expires_at": "2026-09-01T00:00:00Z",
+	})
+	w := s.raw(approverA, http.MethodPost, "/v1/waivers", "application/json", body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d %s, want 400", w.Code, w.Body)
+	}
+	if abandoned != 1 {
+		t.Fatalf("abandon calls = %d, want 1", abandoned)
+	}
+	if n := s.count(tenantA, `SELECT count(*) FROM registry.waiver WHERE tenant_id = $1 AND ticket_ref = 'OPS-45'`); n != 0 {
+		t.Fatalf("a refused waiver stored %d rows", n)
 	}
 }
