@@ -340,8 +340,15 @@ func (r *rig) invited(token string) attemptOf {
 }
 
 func (r *rig) callback(provider string, a attemptOf, query url.Values, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	return r.callbackWith(provider, a, query, nil, cookies...)
+}
+
+func (r *rig) callbackWith(provider string, a attemptOf, query url.Values, headers map[string]string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	r.t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/auth/callback/"+provider+"?"+query.Encode(), nil)
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
 	if a.cookie != nil {
 		req.AddCookie(&http.Cookie{Name: a.cookie.Name, Value: a.cookie.Value})
 	}

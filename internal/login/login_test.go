@@ -677,6 +677,235 @@ func TestLookupNeverKeepsAMissAndLimitsTheDatabase(t *testing.T) {
 	}
 }
 
+// A browser navigation asks for HTML, so a refused callback sends it to the sign-in page instead of a JSON
+// document. The fragment holds the closed code, and nothing the provider sent (ADR-0130).
+func TestABrowserRefusalEndsOnTheSignInPage(t *testing.T) {
+	html := map[string]string{"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+
+	t.Run("invalid_login", func(t *testing.T) {
+		r := newRig(t)
+		_, a := r.start("fake")
+		query := goodQuery(a)
+		query.Set("state", "another")
+		query.Set("return_to", "https://evil.example.test/steal")
+		rec := r.callbackWith("fake", a, query, html)
+		got := refusalFragment(t, rec)
+		if got.Get("code") != "invalid_login" || len(got) != 1 {
+			t.Fatalf("%v", got)
+		}
+		assertNoLeak(t, rec, "evil.example", "return_to")
+	})
+
+	t.Run("login_refused", func(t *testing.T) {
+		r := newRig(t)
+		_, a := r.start("fake")
+		query := goodQuery(a)
+		query.Set("error", "access_denied")
+		query.Set("error_description", "the user said no")
+		query.Set("return_to", "https://evil.example.test/steal")
+		rec := r.callbackWith("fake", a, query, html)
+		got := refusalFragment(t, rec)
+		if got.Get("code") != "login_refused" || len(got) != 1 {
+			t.Fatalf("%v", got)
+		}
+		assertNoLeak(t, rec, "access_denied", "the user said no", "evil.example", "return_to", "error_description")
+	})
+
+	t.Run("unknown_login", func(t *testing.T) {
+		r := newRig(t)
+		_, a := r.start("fake")
+		query := goodQuery(a)
+		query.Set("error_description", "should not be copied")
+		rec := r.callbackWith("fake", a, query, html)
+		got := refusalFragment(t, rec)
+		if got.Get("code") != "unknown_login" || got.Get("issuer") != r.auth.Server.URL || got.Get("subject") != subjectOne || len(got) != 3 {
+			t.Fatalf("%v", got)
+		}
+		if contains(r.logs.String(), subjectOne) {
+			t.Errorf("the log holds the subject:\n%s", r.logs)
+		}
+		if r.store.sessionCount() != 0 {
+			t.Error("a session was started")
+		}
+		assertNoLeak(t, rec, "should not be copied")
+	})
+
+	t.Run("unknown_invitation", func(t *testing.T) {
+		r := newRig(t)
+		token := newToken(t, r)
+		a := r.invited(token)
+		hash, ok := identity.InvitationHash(token)
+		if !ok {
+			t.Fatal("token")
+		}
+		delete(r.store.invitations, string(hash))
+		rec := r.callbackWith("fake", a, goodQuery(a), html)
+		got := refusalFragment(t, rec)
+		if got.Get("code") != "unknown_invitation" || len(got) != 1 {
+			t.Fatalf("%v", got)
+		}
+		assertNoLeak(t, rec, token)
+		if contains(r.logs.String(), token) {
+			t.Errorf("the log holds the token:\n%s", r.logs)
+		}
+	})
+
+	t.Run("forbidden", func(t *testing.T) {
+		r := newRig(t)
+		r.store.bind(r.auth.Server.URL, subjectOne, identity.KindAgent)
+		_, a := r.start("fake")
+		rec := r.callbackWith("fake", a, goodQuery(a), html)
+		got := refusalFragment(t, rec)
+		if got.Get("code") != "forbidden" || len(got) != 1 || r.store.sessionCount() != 0 {
+			t.Fatalf("%v sessions %d", got, r.store.sessionCount())
+		}
+	})
+
+	t.Run("rate_limited", func(t *testing.T) {
+		r := newRig(t, withLimits(1, 1))
+		r.store.bind(r.auth.Server.URL, subjectOne, identity.KindHuman)
+		_, a := r.start("fake")
+		if rec := r.callback("fake", a, goodQuery(a)); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
+			t.Fatalf("first callback %d %s", rec.Code, rec.Header().Get("Location"))
+		}
+		_, a = r.start("fake")
+		rec := r.callbackWith("fake", a, goodQuery(a), html)
+		got := refusalFragment(t, rec)
+		if got.Get("code") != "rate_limited" || len(got) != 1 || rec.Header().Get("Retry-After") == "" {
+			t.Fatalf("%v retry %q", got, rec.Header().Get("Retry-After"))
+		}
+	})
+
+	t.Run("internal", func(t *testing.T) {
+		r := newRig(t)
+		r.store.bind(r.auth.Server.URL, subjectOne, identity.KindHuman)
+		r.store.err = errBoom
+		_, a := r.start("fake")
+		rec := r.callbackWith("fake", a, goodQuery(a), html)
+		got := refusalFragment(t, rec)
+		if got.Get("code") != "internal" || len(got) != 1 {
+			t.Fatalf("%v", got)
+		}
+		assertNoLeak(t, rec, "boom", "hunter2")
+	})
+
+	t.Run("not_found", func(t *testing.T) {
+		r := newRig(t)
+		rec := r.callbackWith("nobody", attemptOf{}, url.Values{"return_to": {"https://evil.example.test/steal"}}, html)
+		got := refusalFragment(t, rec)
+		if got.Get("code") != "not_found" || len(got) != 1 {
+			t.Fatalf("%v", got)
+		}
+		assertNoLeak(t, rec, "evil.example", "return_to")
+	})
+}
+
+func TestACallbackThatDoesNotAskForHTMLKeepsTheJSON(t *testing.T) {
+	r := newRig(t)
+	_, a := r.start("fake")
+	for name, accept := range map[string]string{
+		"absent":        "",
+		"star":          "*/*",
+		"json":          "application/json",
+		"json ahead":    "text/html;q=0.1, application/json",
+		"equal quality": "text/html;q=0.5, application/json;q=0.5",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var headers map[string]string
+			if accept != "" {
+				headers = map[string]string{"Accept": accept}
+			}
+			rec := r.callbackWith("fake", a, goodQuery(a), headers)
+			if rec.Code != http.StatusForbidden || rec.Header().Get("Location") != "" {
+				t.Fatalf("%d location %q body %s", rec.Code, rec.Header().Get("Location"), rec.Body)
+			}
+			body := bodyCode(t, rec)
+			if body["error"] != "unknown_login" || body["issuer"] != r.auth.Server.URL || body["subject"] != subjectOne {
+				t.Fatalf("%v", body)
+			}
+		})
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/callback/fake", nil)
+	req.Header.Set("Accept", "text/html")
+	rec := newRecorder(r, req)
+	if rec.Code != http.StatusMethodNotAllowed || bodyCode(t, rec)["error"] != "method_not_allowed" || rec.Header().Get("Location") != "" {
+		t.Fatalf("method %d %s location %q", rec.Code, rec.Body, rec.Header().Get("Location"))
+	}
+
+	invite := httptest.NewRequest(http.MethodPost, "/auth/invitation/fake", strings.NewReader(`{"token":"abc"}`))
+	invite.Header.Set("Content-Type", "application/json")
+	invite.Header.Set("Sec-Fetch-Site", "same-origin")
+	invite.Header.Set("Accept", "text/html")
+	rec = newRecorder(r, invite)
+	if rec.Code != http.StatusForbidden || bodyCode(t, rec)["error"] != "unknown_invitation" || rec.Header().Get("Location") != "" {
+		t.Fatalf("invitation %d %s location %q", rec.Code, rec.Body, rec.Header().Get("Location"))
+	}
+}
+
+func TestPrefersPageOnlyWhenHTMLOutranksJSON(t *testing.T) {
+	for _, tc := range []struct {
+		accept string
+		want   bool
+	}{
+		{accept: "", want: false},
+		{accept: "*/*", want: false},
+		{accept: "application/json", want: false},
+		{accept: "text/html", want: true},
+		{accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", want: true},
+		{accept: "text/html;q=0.1, application/json", want: false},
+		{accept: "text/html;q=0.5, application/json;q=0.5", want: false},
+		{accept: "text/html, application/json;q=0.8", want: true},
+		{accept: "text/html;q=0", want: false},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		if tc.accept != "" {
+			req.Header.Set("Accept", tc.accept)
+		}
+		if got := prefersPage(req); got != tc.want {
+			t.Errorf("%q: %v, want %v", tc.accept, got, tc.want)
+		}
+	}
+}
+
+func refusalFragment(t *testing.T, rec *httptest.ResponseRecorder) url.Values {
+	t.Helper()
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("body %s", rec.Body)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/signin#") || strings.Contains(loc, "://") || strings.HasPrefix(loc, "//") {
+		t.Fatalf("location %q", loc)
+	}
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("cache %q", rec.Header().Get("Cache-Control"))
+	}
+	if cookieNamed(rec.Result().Cookies(), authn.SessionCookieName) != nil {
+		t.Fatal("a session cookie was set")
+	}
+	if cleared := cookieNamed(rec.Result().Cookies(), attemptCookieName); cleared == nil || cleared.MaxAge >= 0 {
+		t.Fatal("the attempt cookie was not cleared")
+	}
+	query, err := url.ParseQuery(strings.TrimPrefix(loc, "/signin#"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return query
+}
+
+func assertNoLeak(t *testing.T, rec *httptest.ResponseRecorder, parts ...string) {
+	t.Helper()
+	loc := rec.Header().Get("Location")
+	for _, part := range parts {
+		if strings.Contains(loc, part) || strings.Contains(rec.Body.String(), part) {
+			t.Errorf("the answer holds %q:\n%s\n%s", part, loc, rec.Body)
+		}
+	}
+}
+
 func TestLookupSaysFailedWhenTheDatabaseDoes(t *testing.T) {
 	r := newRig(t)
 	r.store.err = errBoom

@@ -72,7 +72,7 @@ A login of an agent cannot start a browser session.
 - `GET /auth/providers` lists the providers the server is configured with, as `{"providers":[{"id":"dex","kind":"oidc"}]}`, so the sign-in page of the web app can link to each. It needs no session, names no issuer, client id or secret, and has a rate limit of its own, so reading it never spends the bucket of the callbacks.
 - `GET /auth/login/{id}` sends the browser to the provider and keeps the state of the attempt in the cookie `__Host-ipso-login` for ten minutes.
 - `POST /auth/invitation/{id}` starts the same sign-in for a person who came with an invitation. It takes `{"token":"..."}`, needs no session, refuses a request from another site, and has a rate limit of its own. It answers 200 with `{"location":"..."}`, the address of the provider, and sets the same cookie with the token in it. A token that is not open is 403 `unknown_invitation` and sets no cookie.
-- `GET /auth/callback/{id}` finishes it, clears that cookie on every outcome, and answers 303 to `/` with the cookie `__Host-ipso-session`.
+- `GET /auth/callback/{id}` finishes it, clears that cookie on every outcome, and answers 303 to `/` with the cookie `__Host-ipso-session`. A refusal whose `Accept` prefers `text/html` is 303 to `/signin` with the code in the fragment, and every other client still gets the JSON code below.
 - `POST /auth/logout` ends the session and clears the cookie. It is a POST, and a request from another site is refused.
 
 The session cookie holds 32 random bytes and the database keeps their SHA-256, so a read of the table is not a session. It is HttpOnly, Secure, SameSite=Strict, and `Path=/`, and the session ends 8 hours after sign-in. Every sign-in mints a new token and ends the session the browser held when the sign-in began. A request that could change state and comes from another origin is refused with 403 before the cookie is looked up. Each process keeps a session it has found for a minute, so a logout on another process takes up to a minute to reach this one.
@@ -89,7 +89,7 @@ A session belongs to the one tenant the process serves, and each tenant process 
 
 ## When a sign-in fails
 
-The answer is a short code and the log says where it stopped, never what the provider sent.
+A client that does not ask for a page gets a short code, and the log says where it stopped, never what the provider sent. A browser asks for HTML, and `GET /auth/callback/{id}` then answers 303 to `/signin` with that same code in the fragment (`#code=invalid_login`). The fragment is not a request the server sees again. Only `unknown_login` adds `issuer` and `subject`, taken from the verified login. The page reads them, removes the fragment from the address, and says in words what to do. `Cache-Control` stays `no-store`. No answer carries a token or a `return_to`. An empty `Accept`, `*/*`, or JSON ahead of HTML keeps the JSON.
 
 - `invalid_login` (400): the state, the attempt cookie, or the `iss` did not match, the code was refused, or the ID token did not verify. The log line has `reason` or `step`, such as `state`, `exchange: invalid_grant`, or `id_token`. Check the issuer, the client id, the client secret, and that the redirect URI is registered exactly.
 - `invalid_request` (400, 415): the start of a sign-in with an invitation did not carry one JSON object `{"token":"..."}` with a content type of `application/json`, or was over 1 KiB.
@@ -105,5 +105,5 @@ CI proves the generic OpenID Connect path against Dex and each provider's quirks
 
 1. Open `{IPSO_PUBLIC_URL}/auth/login/{id}` in a browser, sign in, and end up on `/`.
 2. Open `{IPSO_PUBLIC_URL}/v1/scopes` in the same browser and see 200 with JSON.
-3. Sign in with an account you did not bind and see 403 `unknown_login` and no session. Make an invitation, open its link in a private window, sign in with that account, and see the person bound, with the invitation gone.
+3. Sign in with an account you did not bind. A browser ends on the sign-in page, which names the issuer and the subject and starts no session. A client that asks for JSON, or names no `Accept`, still sees 403 `unknown_login` with those two values. Make an invitation, open its link in a private window, sign in with that account, and see the person bound, with the invitation gone.
 4. Sign out with `fetch('/auth/logout', {method: 'POST'})` from the console of that origin and see `/v1/scopes` answer 401.

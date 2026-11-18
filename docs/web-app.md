@@ -88,7 +88,7 @@ The policy lets a page load and call only its own origin, so the page has no inl
 
 The app uses the session cookie of [ADR-0099](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0099-browser-login-sessions.md) and nothing else: the page and the API are one origin, the cookie is HttpOnly and SameSite=Strict, and a request that could change state from another origin is refused by the server. The app holds no token and sends no tenant, because the tenant is the one the process serves. `GET /auth/providers` lists the providers the server is configured with, so the sign-in page links to `/auth/login/{id}`. A 401 sends the person to the sign-in, a 429 only says to try again, and a 403 says no role of the person allows it and to ask a tenant admin for one (ADR-0108).
 
-The sign-in answers of `/auth` that a person sees directly (a refused callback, an unknown login) are JSON pages of the server, not views of the app.
+A browser that is refused at the callback is sent to the sign-in page, which says why ([ADR-0130](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0130-signin-refusal-page.md)). A client that does not ask for HTML still gets the JSON of `/auth`.
 
 ## Develop
 
