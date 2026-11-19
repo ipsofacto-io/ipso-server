@@ -711,7 +711,7 @@ export interface components {
          * @description The ipso check command that wrote the report.
          * @enum {string}
          */
-        VerdictCheck: "plan" | "ci" | "checkov" | "pulumi" | "cloudformation" | "arm" | "depcruise" | "semgrep" | "archunit" | "importlinter" | "kyverno" | "gatekeeper" | "eslint";
+        VerdictCheck: "plan" | "ci" | "checkov" | "snyk" | "wiz" | "sonarqube" | "dependabot" | "pulumi" | "cloudformation" | "arm" | "depcruise" | "semgrep" | "archunit" | "importlinter" | "kyverno" | "gatekeeper" | "eslint";
         CheckVerdict: {
             /** @description The EDR id of the decision. */
             decision_id: string;
@@ -726,7 +726,7 @@ export interface components {
             /** @description The digests of the violations of the check, sorted and distinct (ADR-0059). Version 2 reports have the key on every verdict and version 1 reports on none, and the server enforces both. A pass and an error have none. A waived verdict has none or one for each violation. A failed verdict has none or every digest of the check, covered by the baseline of the runner or not, so at least as many as its violations. It is empty when the runner sent none: no baseline, a waiver, an error, or a violation that has no identity. */
             fingerprints?: components["schemas"]["Sha256"][];
         };
-        /** @description The report of ADR-0030, version 1 or 2, exactly as the command wrote it. Version 2 adds the digests of the violations to each verdict (ADR-0122). Beyond the six keys every report has, each check has its own keys, and the server refuses a report with any other set. plan has plan_sha256. ci has commit_sha and evidence_sha256. checkov has evidence_sha256. pulumi, cloudformation and arm have adapter, equal to the check, and input_sha256. depcruise, semgrep, archunit, importlinter, kyverno, gatekeeper and eslint have paths and their engine's version key (depcruise_version, semgrep_version, archunit_version, importlinter_version, kyverno_version, gator_version, eslint_version), which is empty when the engine did not run. */
+        /** @description The report of ADR-0030, version 1 or 2, exactly as the command wrote it. Version 2 adds the digests of the violations to each verdict (ADR-0122). Beyond the six keys every report has, each check has its own keys, and the server refuses a report with any other set. plan has plan_sha256. ci has commit_sha and evidence_sha256. checkov, snyk, wiz, sonarqube and dependabot have evidence_sha256. pulumi, cloudformation and arm have adapter, equal to the check, and input_sha256. depcruise, semgrep, archunit, importlinter, kyverno, gatekeeper and eslint have paths and their engine's version key (depcruise_version, semgrep_version, archunit_version, importlinter_version, kyverno_version, gator_version, eslint_version), which is empty when the engine did not run. */
         VerdictReport: {
             /** @enum {integer} */
             report_version: 1 | 2;

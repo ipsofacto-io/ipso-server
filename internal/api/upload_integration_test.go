@@ -162,6 +162,46 @@ func raw(handler http.Handler, method, target, authorization, contentType string
 	return w
 }
 
+// A security-tool report uses the checkov keys. The database names the same four commands, so each
+// upload is stored, and the stored report has no finding id.
+func TestASecurityToolUploadIsStored(t *testing.T) {
+	f := newFixture(t)
+	c := newContract(t)
+	handler, runs := f.uploadHandler(t, Limits{})
+	runs.maps[501] = Mapping{Tenant: tenantA, Installation: 42}
+	checks := []string{"snyk", "wiz", "sonarqube", "dependabot"}
+	hashes := []string{strings.Repeat("11", 32), strings.Repeat("22", 32), strings.Repeat("33", 32), strings.Repeat("44", 32)}
+	for i, check := range checks {
+		body := uploadBody(t, func(upload, report map[string]any) {
+			upload["check"] = check
+			delete(report, "plan_sha256")
+			report["evidence_sha256"] = hashes[i]
+		})
+		w := c.exchange(t, handler, http.MethodPost, "/v1/verdicts", runs.token(uploadedRepo, 501, int64(7100+i), 1), "application/json", body)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("%s: status %d: %s", check, w.Code, w.Body.String())
+		}
+	}
+	all := c.exchange(t, handler, http.MethodGet, "/v1/verdicts?repo=acme%2Fuploaded", f.token(t, personA), "", nil)
+	if all.Code != http.StatusOK {
+		t.Fatalf("read: status %d: %s", all.Code, all.Body.String())
+	}
+	seen := map[string]int{}
+	for _, item := range list(answerOf(t, all), "verdicts") {
+		row := item.(map[string]any)
+		seen[row["check"].(string)]++
+		evidence, _ := row["evidence"].(map[string]any)
+		if _, ok := evidence["findings"]; ok {
+			t.Errorf("%s stored a findings key", row["check"])
+		}
+	}
+	for _, check := range checks {
+		if seen[check] != 2 {
+			t.Errorf("%s: %d verdicts, want 2", check, seen[check])
+		}
+	}
+}
+
 // The upload and the read match the document on both sides, and the same run uploading the same content
 // twice stores it once.
 func TestAnUploadMatchesTheDocumentAndIsStoredOnce(t *testing.T) {

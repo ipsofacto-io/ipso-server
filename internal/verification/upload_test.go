@@ -63,8 +63,8 @@ func bodyOf(t *testing.T, check string, mutate func(upload, report map[string]an
 }
 
 func TestParseAcceptsTheReportOfEveryCheck(t *testing.T) {
-	if len(kinds) != 13 {
-		t.Fatalf("%d checks write a report, want 13", len(kinds))
+	if len(kinds) != 17 {
+		t.Fatalf("%d checks write a report, want 17", len(kinds))
 	}
 	for check := range kinds {
 		t.Run(check, func(t *testing.T) {
@@ -213,6 +213,7 @@ func TestParseRefusesWhatBreaksOneChecksFields(t *testing.T) {
 		}},
 		{"kyverno", func(r map[string]any) { r["kyverno_version"] = strings.Repeat("v", 65) }},
 		{"eslint", func(r map[string]any) { r["semgrep_version"] = "1" }},
+		{"snyk", func(r map[string]any) { r["findings"] = []any{"SNYK-JS-LODASH-590103"} }},
 	}
 	for i, c := range cases {
 		_, err := Parse(bodyOf(t, c.check, func(_, report map[string]any) { c.mutate(report) }))
