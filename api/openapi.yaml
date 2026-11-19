@@ -1896,7 +1896,7 @@ components:
       description: A lowercase hex SHA-256.
     VerdictCheck:
       type: string
-      enum: [plan, ci, checkov, pulumi, cloudformation, arm, depcruise, semgrep, archunit, importlinter, kyverno, gatekeeper, eslint]
+      enum: [plan, ci, checkov, snyk, wiz, sonarqube, dependabot, pulumi, cloudformation, arm, depcruise, semgrep, archunit, importlinter, kyverno, gatekeeper, eslint]
       description: The ipso check command that wrote the report.
     CheckVerdict:
       type: object
@@ -1946,7 +1946,7 @@ components:
         The report of ADR-0030, version 1 or 2, exactly as the command wrote it. Version 2 adds the digests of
         the violations to each verdict (ADR-0122). Beyond the six keys every report
         has, each check has its own keys, and the server refuses a report with any other set. plan has
-        plan_sha256. ci has commit_sha and evidence_sha256. checkov has evidence_sha256. pulumi,
+        plan_sha256. ci has commit_sha and evidence_sha256. checkov, snyk, wiz, sonarqube and dependabot have evidence_sha256. pulumi,
         cloudformation and arm have adapter, equal to the check, and input_sha256. depcruise, semgrep,
         archunit, importlinter, kyverno, gatekeeper and eslint have paths and their engine's version key
         (depcruise_version, semgrep_version, archunit_version, importlinter_version, kyverno_version,
