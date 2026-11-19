@@ -21,6 +21,9 @@ const FeatureSAML = "sso.saml"
 // FeatureTrackers is the feature key that gates Jira, Linear, and GitHub Issues (ADR-0133).
 const FeatureTrackers = "connectors.trackers"
 
+// FeatureChat is the feature key that gates outbound Slack and Teams digests (ADR-0138).
+const FeatureChat = "connectors.chat"
+
 // Gate says whether a feature key is allowed for this process.
 type Gate interface {
 	Allow(feature string) bool
@@ -274,6 +277,22 @@ type OpenWaiverFunc func(ctx context.Context, db *sql.DB, tenant uuid.UUID, reas
 // CloseDueFunc sets done on waiver tickets this server created once the 0-day notice is stored.
 type CloseDueFunc func(ctx context.Context, db *sql.DB, tenant uuid.UUID) error
 
+// ChatDestination is one unsealed webhook. URL must not be logged or written to a response.
+type ChatDestination struct {
+	Connector string
+	URL       string
+}
+
+// ChatAdmin replaces and lists chat destinations. The enterprise routes call it.
+type ChatAdmin interface {
+	Put(ctx context.Context, actor uuid.UUID, connector, webhookURL string) (uuid.UUID, error)
+	Delete(ctx context.Context, actor uuid.UUID, connector string) error
+	List(ctx context.Context) ([]ChatDestination, error)
+}
+
+// DeliverChatFunc posts the digests that are due. A denied feature does not call it.
+type DeliverChatFunc func(ctx context.Context, db *sql.DB, tenant uuid.UUID) error
+
 // CompleteFunc is one model call for a tenant. text and model are the answer.
 type CompleteFunc func(ctx context.Context, tenant uuid.UUID, system, user string, maxTokens int) (text, model string, err error)
 
@@ -285,6 +304,9 @@ var (
 	openWaiver     OpenWaiverFunc
 	closeDue       CloseDueFunc
 	complete       CompleteFunc
+	chatGuarded    []GuardedRoute
+	chatAdmin      ChatAdmin
+	deliverChat    DeliverChatFunc
 )
 
 // RegisterTrackerGuarded appends admin routes mounted only when connectors.trackers is allowed.
@@ -404,7 +426,59 @@ func Complete() CompleteFunc {
 	return complete
 }
 
-// ResetForTest clears the gate, kinds, directory, routes, mounts, and tracker hooks. A test that
+// RegisterChatGuarded appends admin routes mounted only when connectors.chat is allowed.
+func RegisterChatGuarded(routes []GuardedRoute) {
+	mu.Lock()
+	defer mu.Unlock()
+	chatGuarded = append(chatGuarded, routes...)
+}
+
+// ChatGuarded returns a copy of the chat admin routes.
+func ChatGuarded() []GuardedRoute {
+	mu.RLock()
+	defer mu.RUnlock()
+	out := make([]GuardedRoute, len(chatGuarded))
+	copy(out, chatGuarded)
+	return out
+}
+
+// SetChatAdmin installs the destination writer. A nil admin clears it.
+func SetChatAdmin(admin ChatAdmin) {
+	mu.Lock()
+	defer mu.Unlock()
+	chatAdmin = admin
+}
+
+// CurrentChatAdmin returns the installed admin, or nil.
+func CurrentChatAdmin() ChatAdmin {
+	mu.RLock()
+	defer mu.RUnlock()
+	return chatAdmin
+}
+
+// SetDeliverChat installs the digest sender. A nil sender clears it.
+func SetDeliverChat(fn DeliverChatFunc) {
+	mu.Lock()
+	defer mu.Unlock()
+	deliverChat = fn
+}
+
+// DeliverChat posts due digests when the feature is allowed and a sender is installed.
+// A denied feature or no sender does nothing.
+func DeliverChat(ctx context.Context, db *sql.DB, tenant uuid.UUID) error {
+	if !Allow(FeatureChat) {
+		return nil
+	}
+	mu.RLock()
+	fn := deliverChat
+	mu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn(ctx, db, tenant)
+}
+
+// ResetForTest clears the gate, kinds, directory, routes, mounts, and connector hooks. A test that
 // changes them calls it from t.Cleanup.
 func ResetForTest() {
 	mu.Lock()
@@ -421,4 +495,7 @@ func ResetForTest() {
 	openWaiver = nil
 	closeDue = nil
 	complete = nil
+	chatGuarded = nil
+	chatAdmin = nil
+	deliverChat = nil
 }

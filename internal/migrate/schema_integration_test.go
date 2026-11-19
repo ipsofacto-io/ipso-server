@@ -505,6 +505,8 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 		{"proposals.approval", "approval_open_sys_period", 1 | 2 | 4},
 		{"registry.baseline", "baseline_fingerprints", 1 | 2 | 4},
 		{"registry.baseline", "baseline_open_sys_period", 1 | 2 | 4},
+		{"integrations.chat_delivery", "chat_delivery_open_sys_period", 1 | 2 | 4},
+		{"integrations.chat_destination", "chat_destination_open_sys_period", 1 | 2 | 4},
 		{"proposals.check_approval", "check_approval_approver", 1 | 2 | 4},
 		{"proposals.check_approval", "check_approval_open_sys_period", 1 | 2 | 4},
 		{"proposals.check_proposal", "check_proposal_open_sys_period", 1 | 2 | 4},

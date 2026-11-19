@@ -48,6 +48,8 @@ var notRestored = map[string]bool{
 	"tenancy.installation": true,
 	// A tracker binding holds sealed credentials and is unique across tenants (ADR-0133).
 	"integrations.tracker_binding": true,
+	// A chat destination holds a sealed webhook URL (ADR-0138).
+	"integrations.chat_destination": true,
 	// The exports made through the API stay where they are made and are never in another archive (ADR-0111).
 	"tenancy.export":      true,
 	"tenancy.export_part": true,

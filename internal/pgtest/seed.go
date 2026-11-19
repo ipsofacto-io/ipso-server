@@ -81,9 +81,17 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 			(tenant_id, decision_id, scope_id, reason, approver, approver_id, valid_period, ticket_ref)
 		VALUES ($1::uuid, $2::uuid, $3::uuid, 'synthetic exception', 'Ada', $4::uuid, '[2020-01-01,2020-02-01)', 'OPS-1')
 		RETURNING id`, []any{tenant, DecisionKeep, org, person}, &waiver)
-	mustExec(`
+	var notice string
+	mustScan(`
 		INSERT INTO registry.waiver_notice (tenant_id, waiver_id, days_before, ticket_ref)
-		VALUES ($1::uuid, $2::uuid, 0, 'OPS-1')`, tenant, waiver)
+		VALUES ($1::uuid, $2::uuid, 0, 'OPS-1')
+		RETURNING id`, []any{tenant, waiver}, &notice)
+	mustExec(`
+		INSERT INTO integrations.chat_destination (tenant_id, connector, url_sealed)
+		VALUES ($1::uuid, 'slack', decode(repeat('ab', 29), 'hex'))`, tenant)
+	mustExec(`
+		INSERT INTO integrations.chat_delivery (tenant_id, connector, kind, subject_id)
+		VALUES ($1::uuid, 'slack', 'waiver', $2::uuid)`, tenant, notice)
 
 	var evaluation, reason string
 	mustScan(`

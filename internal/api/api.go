@@ -285,7 +285,7 @@ func routes(db *sql.DB, now func() time.Time, log *slog.Logger, origin string) [
 		{"GET /v1/audit/waivers", "audit_waivers", authz.AuditRead, []string{"known", "now"}, nil, audits},
 		{"GET /v1/verdicts", "list_verdicts", authz.VerdictsRead, []string{"repo", "decision", "known", "limit", "before"}, nil, http.HandlerFunc(verdicts.list)},
 	}
-	return slices.Concat(reads, writeRoutes(db, log), exportRoutes(db, log), invitationRoutes(db, log, origin), roleBindingRoutes(db, log), auditLogRoutes(db, log), enterpriseRoutes(), trackerRoutes(db, log))
+	return slices.Concat(reads, writeRoutes(db, log), exportRoutes(db, log), invitationRoutes(db, log, origin), roleBindingRoutes(db, log), auditLogRoutes(db, log), enterpriseRoutes(), trackerRoutes(db, log), chatRoutes())
 }
 
 // enterpriseRoutes are the admin routes the enterprise binary registered. They are absent unless
@@ -344,6 +344,32 @@ func trackerRoutes(db *sql.DB, log *slog.Logger) []route {
 		return out
 	}
 	for _, g := range eehooks.TrackerGuarded() {
+		serve := g.Serve
+		out = append(out, route{
+			pattern: g.Pattern,
+			op:      g.Op,
+			action:  authz.PrincipalManage,
+			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				caller, ok := r.Context().Value(callerKey{}).(Caller)
+				if !ok || caller.Principal == uuid.Nil {
+					writeError(w, http.StatusForbidden, errForbidden)
+					return
+				}
+				serve(w, r, caller.Principal)
+			}),
+		})
+	}
+	return out
+}
+
+// chatRoutes are the paid chat admin routes. They are absent unless connectors.chat is allowed and a
+// destination writer is installed, so the community document stays unchanged (ADR-0138).
+func chatRoutes() []route {
+	if !eehooks.Allow(eehooks.FeatureChat) || eehooks.CurrentChatAdmin() == nil {
+		return nil
+	}
+	var out []route
+	for _, g := range eehooks.ChatGuarded() {
 		serve := g.Serve
 		out = append(out, route{
 			pattern: g.Pattern,
