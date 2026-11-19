@@ -61,19 +61,16 @@ digest_of() {
   awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^sha256:/) { print $i; exit } }' <<<"$line"
 }
 
-# kind load stores the image by tag. containerd 2 does not answer a digest pull for that tag,
-# so the chart's repository@digest reference stays in ImagePullBackOff. Importing with --digests
-# records the same manifest under the digest name the kubelet requests.
+# kind load stores the image by tag. containerd 2 answers a digest pull only when that
+# repository@digest name exists, so the chart reference has to be tagged explicitly.
 pin_loaded_image() {
-  local ref=$1 digest repo tar
+  local ref=$1 digest repo name
   digest=$(digest_of "$ref")
   repo=${ref%:*}
-  tar=$(mktemp)
-  docker save "$ref" -o "$tar"
-  docker exec -i "${cluster}-control-plane" ctr -n k8s.io images import --digests - <"$tar"
-  rm -f "$tar"
-  if ! docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v want="${repo}@${digest}" '$1 == want { found = 1 } END { exit !found }'; then
-    echo "kind has ${ref} but not ${repo}@${digest}" >&2
+  name="${repo}@${digest}"
+  docker exec "${cluster}-control-plane" ctr -n k8s.io images tag "$ref" "$name"
+  if ! docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v want="$name" '$1 == want { found = 1 } END { exit !found }'; then
+    echo "kind has ${ref} but not ${name}" >&2
     docker exec "${cluster}-control-plane" ctr -n k8s.io images ls >&2
     exit 1
   fi
