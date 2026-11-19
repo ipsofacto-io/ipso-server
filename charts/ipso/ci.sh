@@ -47,10 +47,15 @@ lint() {
 
 digest_of() {
   local ref=$1 line
-  line=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v ref="$ref" 'index($1, ref) { print; exit }')
+  line=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v ref="$ref" '$1 == ref { print; exit }')
   if [[ -z "$line" ]]; then
     echo "kind has no image matching ${ref}" >&2
     docker exec "${cluster}-control-plane" ctr -n k8s.io images ls >&2
+    exit 1
+  fi
+  if [[ "$line" == *index* ]]; then
+    echo "kind loaded ${ref} as an attestation index, not a runnable manifest" >&2
+    echo "$line" >&2
     exit 1
   fi
   awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^sha256:/) { print $i; exit } }' <<<"$line"
@@ -190,13 +195,17 @@ install_on_kind() {
   kind create cluster --name "$cluster" \
     --image "kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5" &
   local kind_pid=$!
-  docker build -t ghcr.io/ipsofacto-io/ipso-server:ci "$root"
-  docker build -t ghcr.io/ipsofacto-io/ipso-server:n-2 "$copy"
+  # Provenance would publish an attestation index. kind would then pin that index, and the
+  # kubelet cannot run it, so the chart's digest would sit in ImagePullBackOff.
+  docker build --provenance=false --sbom=false -t ghcr.io/ipsofacto-io/ipso-server:ci "$root"
+  docker build --provenance=false --sbom=false -t ghcr.io/ipsofacto-io/ipso-server:n-2 "$copy"
   wait "$kind_pid"
   kind load docker-image ghcr.io/ipsofacto-io/ipso-server:ci --name "$cluster"
   kind load docker-image ghcr.io/ipsofacto-io/ipso-server:n-2 --name "$cluster"
   n2_image=$(digest_of ghcr.io/ipsofacto-io/ipso-server:n-2)
   full_image=$(digest_of ghcr.io/ipsofacto-io/ipso-server:ci)
+  echo "n-2 image ${n2_image}"
+  echo "full image ${full_image}"
   full_digest=$full_image
 
   set -a
