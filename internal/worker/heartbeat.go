@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -93,12 +94,30 @@ func processStart() (time.Time, bool, error) {
 			break
 		}
 	}
-	if btime == 0 {
-		return time.Time{}, false, fmt.Errorf("unreadable /proc/stat")
+	started, err := startedAt(btime, ticks)
+	if err != nil {
+		return time.Time{}, false, err
 	}
-	// USER_HZ is 100 on the architectures this chart runs.
-	started := time.Unix(btime, 0).Add(time.Duration(ticks) * time.Second / 100)
 	return started, true, nil
+}
+
+// startedAt converts the kernel boot time and PID 1's starttime (USER_HZ ticks) into a wall time.
+// USER_HZ is 100 on the architectures this chart runs. The ticks value is converted only after it
+// fits in an int64, and the seconds are added before the sub-second part so the product cannot overflow.
+func startedAt(btime int64, ticks uint64) (time.Time, error) {
+	const userHZ = 100
+	if btime <= 0 {
+		return time.Time{}, fmt.Errorf("unreadable /proc/stat")
+	}
+	if ticks > math.MaxInt64 {
+		return time.Time{}, fmt.Errorf("unreadable /proc/1/stat")
+	}
+	whole := int64(ticks) / userHZ
+	part := int64(ticks) % userHZ
+	if whole > math.MaxInt64-btime {
+		return time.Time{}, fmt.Errorf("unreadable /proc/1/stat")
+	}
+	return time.Unix(btime+whole, part*int64(time.Second/userHZ)).UTC(), nil
 }
 
 // clearHeartbeat removes a file left by a previous process in this pod. The emptyDir outlives a

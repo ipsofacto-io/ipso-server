@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,6 +96,23 @@ func TestHeartbeatStopFinishesBeforeTheFileIsRemoved(t *testing.T) {
 	}
 	if err := Fresh(path, time.Now()); err == nil {
 		t.Fatal("the file was rewritten after stop")
+	}
+}
+
+func TestStartedAtAddsBootTimeAndTicks(t *testing.T) {
+	got, err := startedAt(1_700_000_000, 250)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Unix(1_700_000_002, 500*int64(time.Millisecond)).UTC()
+	if !got.Equal(want) {
+		t.Fatalf("startedAt = %s, want %s", got, want)
+	}
+	if _, err := startedAt(0, 1); err == nil {
+		t.Fatal("a missing boot time was accepted")
+	}
+	if _, err := startedAt(1, math.MaxUint64); err == nil {
+		t.Fatal("a tick count that does not fit in an int64 was accepted")
 	}
 }
 
