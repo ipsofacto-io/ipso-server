@@ -61,8 +61,28 @@ digest_of() {
   awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^sha256:/) { print $i; exit } }' <<<"$line"
 }
 
+# kind load stores the image by tag. containerd 2 does not answer a digest pull for that tag,
+# so the chart's repository@digest reference stays in ImagePullBackOff. Importing with --digests
+# records the same manifest under the digest name the kubelet requests.
+pin_loaded_image() {
+  local ref=$1 digest repo tar
+  digest=$(digest_of "$ref")
+  repo=${ref%:*}
+  tar=$(mktemp)
+  docker save "$ref" -o "$tar"
+  docker exec -i "${cluster}-control-plane" ctr -n k8s.io images import --digests - <"$tar"
+  rm -f "$tar"
+  if ! docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v want="${repo}@${digest}" '$1 == want { found = 1 } END { exit !found }'; then
+    echo "kind has ${ref} but not ${repo}@${digest}" >&2
+    docker exec "${cluster}-control-plane" ctr -n k8s.io images ls >&2
+    exit 1
+  fi
+  echo "$digest"
+}
+
 dump() {
   kubectl -n ipso get pods -o wide || true
+  kubectl -n ipso get events --sort-by=.lastTimestamp || true
   kubectl -n ipso describe pods || true
   kubectl -n ipso logs -l app.kubernetes.io/name=ipso --all-containers --tail=100 || true
 }
@@ -202,8 +222,8 @@ install_on_kind() {
   wait "$kind_pid"
   kind load docker-image ghcr.io/ipsofacto-io/ipso-server:ci --name "$cluster"
   kind load docker-image ghcr.io/ipsofacto-io/ipso-server:n-2 --name "$cluster"
-  n2_image=$(digest_of ghcr.io/ipsofacto-io/ipso-server:n-2)
-  full_image=$(digest_of ghcr.io/ipsofacto-io/ipso-server:ci)
+  n2_image=$(pin_loaded_image ghcr.io/ipsofacto-io/ipso-server:n-2)
+  full_image=$(pin_loaded_image ghcr.io/ipsofacto-io/ipso-server:ci)
   echo "n-2 image ${n2_image}"
   echo "full image ${full_image}"
   full_digest=$full_image
