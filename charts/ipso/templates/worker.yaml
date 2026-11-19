@@ -1,0 +1,64 @@
+{{- include "ipso.checks" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ipso.fullname" . }}-worker
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "worker") | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  progressDeadlineSeconds: 1800
+  selector:
+    matchLabels:
+      {{- include "ipso.selector" (dict "root" . "component" "worker") | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "ipso.selector" (dict "root" . "component" "worker") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ipso.fullname" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: {{ include "ipso.ref" (dict "repository" .Values.image.repository "digest" .Values.image.digest "label" "image.digest") }}
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/ipso-server", "--role=worker"]
+          env:
+            {{- include "ipso.appEnv" . | nindent 12 }}
+            - name: IPSO_PROBE_FILE
+              value: /var/run/ipso/heartbeat
+          volumeMounts:
+            - name: heartbeat
+              mountPath: /var/run/ipso
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/ipso-server", "probe"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/ipso-server", "probe"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: heartbeat
+          emptyDir:
+            sizeLimit: 1Mi

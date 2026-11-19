@@ -1,0 +1,96 @@
+{{- include "ipso.checks" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ipso.fullname" . }}-front
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "front") | nindent 4 }}
+data:
+  nginx.conf: |
+{{ include "ipso.nginx" . | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ipso.fullname" . }}-front
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "front") | nindent 4 }}
+spec:
+  replicas: 1
+  progressDeadlineSeconds: 1800
+  selector:
+    matchLabels:
+      {{- include "ipso.selector" (dict "root" . "component" "front") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ipso.selector" (dict "root" . "component" "front") | nindent 8 }}
+      annotations:
+        checksum/nginx: {{ include "ipso.nginx" . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "ipso.fullname" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: front
+          image: {{ include "ipso.ref" (dict "repository" .Values.front.image.repository "digest" .Values.front.image.digest "label" "front.image.digest") }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /nginx-health
+              port: http
+            periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /nginx-health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 12
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "ipso.fullname" . }}-front
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ipso.fullname" . }}-front
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "front") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ipso.selector" (dict "root" . "component" "front") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

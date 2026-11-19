@@ -1,0 +1,102 @@
+{{- include "ipso.checks" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ipso.fullname" . }}-api
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  progressDeadlineSeconds: 1800
+  selector:
+    matchLabels:
+      {{- include "ipso.selector" (dict "root" . "component" "api") | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "ipso.selector" (dict "root" . "component" "api") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ipso.fullname" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: {{ include "ipso.ref" (dict "repository" .Values.image.repository "digest" .Values.image.digest "label" "image.digest") }}
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/ipso-server", "--role=api"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            {{- include "ipso.appEnv" . | nindent 12 }}
+            - name: IPSO_OIDC_ISSUER
+              value: {{ .Values.oidc.issuer | quote }}
+            - name: IPSO_API_AUDIENCE
+              value: {{ .Values.oidc.audience | quote }}
+            - name: IPSO_LISTEN_ADDR
+              value: ":8080"
+            {{- if .Values.oidc.caSecretKey }}
+            - name: SSL_CERT_FILE
+              value: /certs/{{ .Values.oidc.caSecretKey }}
+            {{- end }}
+          {{- if .Values.oidc.caSecretKey }}
+          volumeMounts:
+            - name: oidc-ca
+              mountPath: /certs
+              readOnly: true
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      {{- if .Values.oidc.caSecretKey }}
+      volumes:
+        - name: oidc-ca
+          secret:
+            secretName: {{ .Values.existingSecret }}
+            items:
+              - key: {{ .Values.oidc.caSecretKey }}
+                path: {{ .Values.oidc.caSecretKey }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ipso.fullname" . }}-api
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ipso.selector" (dict "root" . "component" "api") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

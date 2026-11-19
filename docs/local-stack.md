@@ -1,6 +1,6 @@
 # Run the control plane on a laptop
 
-One Compose file starts the control plane with everything it needs: PostgreSQL 18, the migrations, a seeded tenant, Dex as the OIDC provider, and the worker that runs its jobs. It is for trying the API and for developing against it. It is not a supported install: the Helm chart and the bundle of IPSO-77 are.
+One Compose file starts the control plane with everything it needs: PostgreSQL 18, the migrations, a seeded tenant, Dex as the OIDC provider, and the worker that runs its jobs. It is for trying the API and for developing against it. It is not a supported install: the Helm chart and the bundle are [docs/install.md](install.md).
 
 You need Docker with Compose v2.
 

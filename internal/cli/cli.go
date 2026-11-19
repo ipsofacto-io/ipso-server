@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -86,6 +87,8 @@ const (
 	mcpResourceEnv = "IPSO_MCP_RESOURCE_URL"
 	// ciAudienceEnv turns on verdict uploads (ADR-0102) together with the GitHub App settings.
 	ciAudienceEnv = "IPSO_CI_AUDIENCE"
+	// probeFileEnv names the worker heartbeat file. Empty uses the chart's default path (ADR-0140).
+	probeFileEnv = "IPSO_PROBE_FILE"
 )
 
 // Version, Commit, and Date are set with -X at release time.
@@ -202,6 +205,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 			return 2
 		}
 		return runTasksCmd(ctx, stderr, d)
+	case "probe":
+		if len(args) != 1 {
+			fprintln(stderr, "usage: ipso-server probe")
+			return 2
+		}
+		return probeCmd(stderr, d)
 	case "-h", "--help", "help", "version", "--version", "-v":
 		fprintln(stdout, helpText())
 		return 0
@@ -225,6 +234,7 @@ usage:
   ipso-server audit-log verify
   ipso-server webhooks
   ipso-server runtasks
+  ipso-server probe
 
 --role=api serves the control plane API on ` + listenAddrEnv + ` (default ` + defaultListen + `) as the application role. It
 reads ` + databaseEnv + `, ` + tenantEnv + `, ` + oidcIssuerEnv + `, and ` + apiAudienceEnv + `, and optionally
@@ -237,8 +247,12 @@ tenant with no row, or when it holds the migration credential.
 --role=worker works the jobs of the control plane on River, in the registry's PostgreSQL, as the
 application role. It reads ` + databaseEnv + ` and ` + tenantEnv + `, serves no request, and runs the waiver notice
 sweep and the premise sweep every hour. It refuses to start as a role that can bypass row-level security, for a tenant with no
-row, before the schema is migrated, or when it holds the migration credential. The role all is not built
+row, before the schema is migrated, or when it holds the migration credential. After those gates it writes
+a heartbeat file, ` + probeFileEnv + ` or the default path, for the chart's probe. The role all is not built
 yet.
+
+probe reads that heartbeat file and exits 0 when it is fresh. It opens no database and serves nothing. The
+chart runs it in the worker container.
 
 migrate applies the pending schema migrations and exits. It reads the
 connection string from ` + migrateDatabaseEnv + ` and must run as the migration role.
@@ -417,12 +431,30 @@ func workerCmd(ctx context.Context, stderr io.Writer, d deps) int {
 		return 1
 	}
 	err = d.runWorker(ctx, worker.Config{
-		Pool:   pool,
-		Tenant: tenant,
-		Log:    slog.New(slog.NewJSONHandler(stderr, nil)),
+		Pool:          pool,
+		Tenant:        tenant,
+		Log:           slog.New(slog.NewJSONHandler(stderr, nil)),
+		HeartbeatPath: heartbeatPath(d.getenv),
 	})
 	if err != nil {
 		fprintf(stderr, "worker: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// heartbeatPath is the file the worker writes. The probe reads the same variable.
+func heartbeatPath(getenv func(string) string) string {
+	if path := getenv(probeFileEnv); path != "" {
+		return path
+	}
+	return worker.HeartbeatPath
+}
+
+// probeCmd is the chart's liveness check for a worker that opens no listener (ADR-0140).
+func probeCmd(stderr io.Writer, d deps) int {
+	if err := worker.Fresh(d.getenv(probeFileEnv), time.Now()); err != nil {
+		fprintf(stderr, "probe: %v\n", err)
 		return 1
 	}
 	return 0

@@ -1,0 +1,6 @@
+{{- include "ipso.checks" . -}}
+The release is in this namespace. The front is a ClusterIP Service named {{ include "ipso.fullname" . }}-front on port 8080.
+Sign-in is the identity provider in oidc.issuer. This chart creates no person unless bootstrap.enabled is true.
+An issuer in another namespace needs oidc.namespace and oidc.port. A public issuer does not.
+Secrets are read from {{ .Values.existingSecret }}. The chart does not store them in values.
+The install notes are docs/install.md in the ipso-server repository.

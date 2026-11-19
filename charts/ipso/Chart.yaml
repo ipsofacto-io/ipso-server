@@ -1,0 +1,7 @@
+apiVersion: v2
+name: ipso
+description: ipso control plane for a self-hosted cluster
+type: application
+version: 0.1.0
+appVersion: dev
+kubeVersion: ">=1.29.0-0"
