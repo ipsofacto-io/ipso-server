@@ -38,6 +38,8 @@ const (
 	// A tracker binding holds sealed vendor credentials and is unique per connector across tenants,
 	// so an export leaves it out (ADR-0133).
 	trackerBindingTable = "integrations.tracker_binding"
+	// A chat destination holds a sealed webhook URL, so an export leaves it out (ADR-0138).
+	chatDestinationTable = "integrations.chat_destination"
 	// The exports a tenant admin asks for through the API (ADR-0111). An archive never holds the archive
 	// before it, so neither table is exported or restored. Offboarding purges both.
 	exportTable     = "tenancy.export"
@@ -108,14 +110,14 @@ func catalog(ctx context.Context, q queryer) ([]Table, error) {
 
 // exported is the tables an export carries: every tenant table except the wrapped key, which never leaves
 // the database, the sessions and the invitations, which hold credential hashes and end on their own, the
-// tombstone, and the installation bindings. A binding is unique across tenants, so a restore into a fresh tenant would find it
+// tombstone, the installation bindings, and the sealed tracker and chat credentials. A binding is unique across tenants, so a restore into a fresh tenant would find it
 // taken by the tenant it was exported from, and moving a live installation to a copy is the operator's
 // choice (ADR-0101). The two tables of the exports made through the API are left out as well (ADR-0111).
 func exported(all []Table) []Table {
 	var out []Table
 	for _, t := range all {
 		switch t.String() {
-		case tenantKeyTable, sessionTable, invitationTable, scimUserTable, scimTokenTable, tombstoneTable, installationTable, trackerBindingTable, exportTable, exportPartTable:
+		case tenantKeyTable, sessionTable, invitationTable, scimUserTable, scimTokenTable, tombstoneTable, installationTable, trackerBindingTable, chatDestinationTable, exportTable, exportPartTable:
 			continue
 		}
 		out = append(out, t)

@@ -585,6 +585,67 @@ func TestTrackerRoutesStayOffUntilTheFeatureIsAllowed(t *testing.T) {
 	}
 }
 
+type allowChat struct{}
+
+func (allowChat) Allow(feature string) bool { return feature == eehooks.FeatureChat }
+
+type stubChatAdmin struct{}
+
+func (stubChatAdmin) Put(context.Context, uuid.UUID, string, string) (uuid.UUID, error) {
+	return uuid.Nil, nil
+}
+
+func (stubChatAdmin) Delete(context.Context, uuid.UUID, string) error { return nil }
+
+func (stubChatAdmin) List(context.Context) ([]eehooks.ChatDestination, error) { return nil, nil }
+
+func TestChatRoutesStayOffUntilTheFeatureIsAllowed(t *testing.T) {
+	t.Cleanup(eehooks.ResetForTest)
+	for _, rt := range routes(nil, time.Now, nil, "") {
+		if strings.Contains(rt.pattern, "/v1/chat") {
+			t.Fatalf("community routes include %s", rt.pattern)
+		}
+	}
+	eehooks.SetGate(allowChat{})
+	eehooks.SetChatAdmin(stubChatAdmin{})
+	if got := routes(nil, time.Now, nil, ""); chatPatterns(got) != nil {
+		t.Fatalf("routes without a registration: %v", chatPatterns(got))
+	}
+	eehooks.RegisterChatGuarded([]eehooks.GuardedRoute{
+		{Pattern: "GET /v1/chat", Op: "list_chat", Serve: func(http.ResponseWriter, *http.Request, uuid.UUID) {}},
+		{Pattern: "PUT /v1/chat/{connector}", Op: "put_chat", Serve: func(http.ResponseWriter, *http.Request, uuid.UUID) {}},
+		{Pattern: "DELETE /v1/chat/{connector}", Op: "delete_chat", Serve: func(http.ResponseWriter, *http.Request, uuid.UUID) {}},
+	})
+	var actions []string
+	for _, rt := range routes(nil, time.Now, nil, "") {
+		if strings.Contains(rt.pattern, "/v1/chat") {
+			if rt.action != authz.PrincipalManage {
+				t.Errorf("%s asks for %s", rt.pattern, rt.action)
+			}
+			actions = append(actions, rt.pattern+" "+rt.op)
+		}
+	}
+	want := []string{
+		"DELETE /v1/chat/{connector} delete_chat",
+		"GET /v1/chat list_chat",
+		"PUT /v1/chat/{connector} put_chat",
+	}
+	slices.Sort(actions)
+	if !slices.Equal(actions, want) {
+		t.Fatalf("chat routes %v", actions)
+	}
+}
+
+func chatPatterns(routes []route) []string {
+	var out []string
+	for _, rt := range routes {
+		if strings.Contains(rt.pattern, "/v1/chat") {
+			out = append(out, rt.pattern)
+		}
+	}
+	return out
+}
+
 func TestListTrackerProposalsRefusesABadPage(t *testing.T) {
 	h := &writeHandlers{log: slog.New(slog.DiscardHandler)}
 	tenant := uuid.MustParse("00000000-0000-4000-8000-0000000000aa")

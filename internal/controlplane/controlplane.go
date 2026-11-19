@@ -21,6 +21,7 @@ import (
 
 	"github.com/ipsofacto-io/ipso/pkg/mcptools"
 
+	"github.com/ipsofacto-io/ipso-server/chat"
 	"github.com/ipsofacto-io/ipso-server/eehooks"
 	"github.com/ipsofacto-io/ipso-server/internal/api"
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
@@ -152,8 +153,13 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		}
 		uploads = &api.Uploads{Verifier: ciVerifier, Lookup: newUploadMapper(cfg.DB, cfg.Tenant, cfg.Repositories, cfg.Log).lookup}
 	}
-	if key := eehooks.ConnectorKey(); eehooks.Allow(eehooks.FeatureTrackers) && len(key) == 32 {
-		eehooks.SetTrackerAdmin(trackers.NewAdmin(cfg.DB, cfg.Tenant, key))
+	if key := eehooks.ConnectorKey(); len(key) == 32 {
+		if eehooks.Allow(eehooks.FeatureTrackers) {
+			eehooks.SetTrackerAdmin(trackers.NewAdmin(cfg.DB, cfg.Tenant, key))
+		}
+		if eehooks.Allow(eehooks.FeatureChat) {
+			eehooks.SetChatAdmin(chatAdmin{store: chat.NewStore(cfg.DB, cfg.Tenant, key)})
+		}
 	}
 	apiHandler, err := api.New(api.Config{
 		DB:       cfg.DB,

@@ -378,6 +378,12 @@ func smuggleInserts() []smuggle {
 		{"integrations.tracker_binding", `
 			INSERT INTO integrations.tracker_binding (tenant_id, connector, external_account, token_sealed, webhook_sealed)
 			VALUES ($1::uuid, 'jira', 'smuggled.atlassian.net/OPS', decode(repeat('ab', 29), 'hex'), decode(repeat('ab', 29), 'hex'))`, []any{tenantA}, true},
+		{"integrations.chat_destination", `
+			INSERT INTO integrations.chat_destination (tenant_id, connector, url_sealed)
+			VALUES ($1::uuid, 'slack', decode(repeat('ab', 29), 'hex'))`, []any{tenantA}, true},
+		{"integrations.chat_delivery", `
+			INSERT INTO integrations.chat_delivery (tenant_id, connector, kind, subject_id)
+			VALUES ($1::uuid, 'slack', 'waiver', $1::uuid)`, []any{tenantA}, true},
 		{"integrations.tracker_link", `
 			INSERT INTO integrations.tracker_link (tenant_id, connector, external_id, url, kind, proposal_id, status)
 			VALUES ($1::uuid, 'jira', 'OPS-8', 'https://acme.atlassian.net/browse/OPS-8', 'decision', $1::uuid, 'open')`, []any{tenantA}, true},
@@ -500,6 +506,8 @@ func policies(ctx context.Context, db *sql.DB) ([]string, error) {
 func policyTables() []string {
 	tables := []string{
 		"identity.action_log",
+		"integrations.chat_delivery",
+		"integrations.chat_destination",
 		"integrations.tracker_binding",
 		"integrations.tracker_link",
 		"identity.invitation",
@@ -554,6 +562,8 @@ func policyTables() []string {
 func expectedPolicies() []string {
 	app := map[string]string{
 		"identity.action_log":               "SELECT INSERT",
+		"integrations.chat_delivery":        "SELECT INSERT",
+		"integrations.chat_destination":     "SELECT INSERT DELETE",
 		"integrations.tracker_binding":      "SELECT INSERT DELETE",
 		"integrations.tracker_link":         "SELECT INSERT UPDATE",
 		"identity.invitation":               "SELECT INSERT DELETE",
@@ -619,6 +629,8 @@ func expectedPolicies() []string {
 	migrate["tenancy.installation"] = "SELECT DELETE"
 	// A tracker binding holds sealed vendor credentials and is unique across tenants (ADR-0133).
 	migrate["integrations.tracker_binding"] = "SELECT DELETE"
+	// A chat destination holds a sealed webhook URL, so an export leaves it out (ADR-0138).
+	migrate["integrations.chat_destination"] = "SELECT DELETE"
 	// An export made through the API is never in an archive, so a restore writes neither table (ADR-0111).
 	migrate["tenancy.export"] = "SELECT DELETE"
 	migrate["tenancy.export_part"] = "SELECT DELETE"

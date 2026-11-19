@@ -1,7 +1,7 @@
 // Package worker runs the job runtime of ADR-0096 for one tenant: River on the registry's PostgreSQL,
 // started only after the gates of the api role (ADR-0097). The jobs built so far are the hourly waiver
-// notice sweep, the premise sweep with its probes, and the sweep of the exports a tenant admin asks for
-// with the job that builds each one (ADR-0111).
+// notice sweep, the premise sweep with its probes, the sweep of the exports a tenant admin asks for
+// with the job that builds each one (ADR-0111), and the hourly chat digest (ADR-0138).
 package worker
 
 import (
@@ -116,6 +116,7 @@ func newClient(cfg Config, db *sql.DB, notify notifyFunc, probe prober) (*river.
 	river.AddWorker(workers, &tenantExport{
 		db: db, tenant: cfg.Tenant, log: cfg.Log, run: tenancy.RunStoredExport, fail: tenancy.FailExport,
 	})
+	river.AddWorker(workers, &chatDigests{db: db, tenant: cfg.Tenant, log: cfg.Log})
 	return river.NewClient(riverpgxv5.New(cfg.Pool), &river.Config{
 		Logger:  cfg.Log,
 		Schema:  riverSchema,
@@ -127,11 +128,13 @@ func newClient(cfg Config, db *sql.DB, notify notifyFunc, probe prober) (*river.
 			// One export at a time: a tenant holds one, and each reads the whole tenant (ADR-0111).
 			tenantExportSweepQueue: {MaxWorkers: 1},
 			tenantExportQueue:      {MaxWorkers: 1},
+			chatDigestsQueue:       {MaxWorkers: 1},
 		},
 		PeriodicJobs: []*river.PeriodicJob{
 			waiverNoticesPeriodic(cfg.Tenant),
 			premiseSweepPeriodic(cfg.Tenant),
 			tenantExportSweepPeriodic(cfg.Tenant),
+			chatDigestsPeriodic(cfg.Tenant),
 		},
 		ReindexerSchedule: river.NeverSchedule(),
 		SoftStopTimeout:   softStop,
