@@ -1,0 +1,65 @@
+# The operator fills these at install time. This file has no password and no client secret.
+# image.digest is required. A tag is refused. There is no published server image yet (IPSO-13).
+
+image:
+  repository: ghcr.io/ipsofacto-io/ipso-server
+  digest: ""
+
+# Name of a Secret the operator creates. The chart does not create one.
+# Keys: database-url, migrate-database-url, and, when PostgreSQL is in the cluster,
+# postgres-password, migrate-password, app-password. Optional key named by oidc.caSecretKey.
+existingSecret: ""
+
+# The one tenant this release serves. Not a secret.
+tenantID: ""
+
+oidc:
+  # https issuer the api discovers at start. No provider is bundled.
+  issuer: ""
+  # Client id the api accepts as the token audience.
+  audience: ""
+  # Key in existingSecret that holds a PEM CA. Empty uses the image's public roots.
+  # Setting it replaces the process trust store for the api only.
+  caSecretKey: ""
+  # Namespace of an issuer that is not in this namespace and not on a public address.
+  # Empty leaves that path closed. It does not open the private ranges.
+  namespace: ""
+  # Port in the issuer URL. Used only when namespace is set.
+  port: 443
+
+# First person. Off unless the operator turns it on, and then only the bootstrap Job
+# reads the key encryption key. Turn it off and delete that Secret after it succeeds.
+bootstrap:
+  enabled: false
+  tenantName: ""
+  person: ""
+  personName: ""
+  subject: ""
+  # Secret name. Key tenant-kek is the base64 of 32 bytes.
+  kekSecret: ""
+
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    digest: "sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4"
+  storage: 10Gi
+  # Used only when enabled is false. Empty allows TCP 5432 to any address except link-local.
+  cidr: ""
+
+front:
+  image:
+    repository: nginxinc/nginx-unprivileged
+    digest: "sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e"
+  # Adds HSTS on the nginx response. The chart does not terminate TLS.
+  tls:
+    enabled: false
+
+api:
+  replicas: 1
+
+worker:
+  replicas: 1
+
+networkPolicy:
+  enabled: true

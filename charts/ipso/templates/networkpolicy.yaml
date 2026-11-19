@@ -1,0 +1,340 @@
+{{- include "ipso.checks" . -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ipso.fullname" . }}-api
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ipso.selector" (dict "root" . "component" "api") | nindent 6 }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "ipso.selector" (dict "root" . "component" "front") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: coredns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector: {}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- if .Values.oidc.namespace }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.oidc.namespace | quote }}
+          podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.oidc.port }}
+    {{- end }}
+    {{- if not .Values.postgresql.enabled }}
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.postgresql.cidr | default "0.0.0.0/0" | quote }}
+            {{- if not .Values.postgresql.cidr }}
+            except:
+              - 169.254.0.0/16
+            {{- end }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ipso.fullname" . }}-worker
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "worker") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ipso.selector" (dict "root" . "component" "worker") | nindent 6 }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: coredns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- if .Values.postgresql.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "ipso.selector" (dict "root" . "component" "postgresql") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- else }}
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.postgresql.cidr | default "0.0.0.0/0" | quote }}
+            {{- if not .Values.postgresql.cidr }}
+            except:
+              - 169.254.0.0/16
+            {{- end }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ipso.fullname" . }}-migrate
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "migrate") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ipso.selector" (dict "root" . "component" "migrate") | nindent 6 }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: coredns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- if .Values.postgresql.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "ipso.selector" (dict "root" . "component" "postgresql") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- else }}
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.postgresql.cidr | default "0.0.0.0/0" | quote }}
+            {{- if not .Values.postgresql.cidr }}
+            except:
+              - 169.254.0.0/16
+            {{- end }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ipso.fullname" . }}-front
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "front") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ipso.selector" (dict "root" . "component" "front") | nindent 6 }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: coredns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "ipso.selector" (dict "root" . "component" "api") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+{{- if .Values.postgresql.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ipso.fullname" . }}-postgresql
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "postgresql") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ipso.selector" (dict "root" . "component" "postgresql") | nindent 6 }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 5432
+  egress: []
+{{- end }}
+{{- if .Values.bootstrap.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ipso.fullname" . }}-bootstrap
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "bootstrap") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ipso.selector" (dict "root" . "component" "bootstrap") | nindent 6 }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: coredns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- if .Values.postgresql.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "ipso.selector" (dict "root" . "component" "postgresql") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- else }}
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.postgresql.cidr | default "0.0.0.0/0" | quote }}
+            {{- if not .Values.postgresql.cidr }}
+            except:
+              - 169.254.0.0/16
+            {{- end }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,56 @@
+{{- include "ipso.checks" . -}}
+{{- if .Values.bootstrap.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "ipso.fullname" . }}-bootstrap
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "bootstrap") | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 20
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        {{- include "ipso.selector" (dict "root" . "component" "bootstrap") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "ipso.fullname" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: {{ include "ipso.ref" (dict "repository" .Values.image.repository "digest" .Values.image.digest "label" "image.digest") }}
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/ipso-server"]
+          args:
+            - tenant
+            - create
+            - --tenant={{ .Values.tenantID }}
+            - --name={{ .Values.bootstrap.tenantName }}
+            - --person={{ .Values.bootstrap.person }}
+            - --person-name={{ .Values.bootstrap.personName }}
+            - --issuer={{ .Values.oidc.issuer }}
+            - --subject={{ .Values.bootstrap.subject }}
+          env:
+            {{- include "ipso.appEnv" . | nindent 12 }}
+            - name: IPSO_TENANT_KEK
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.bootstrap.kekSecret }}
+                  key: tenant-kek
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+{{- end }}

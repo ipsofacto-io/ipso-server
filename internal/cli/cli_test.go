@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,6 +48,7 @@ func TestUsage(t *testing.T) {
 		{"extra argument to migrate", []string{"migrate", "up"}, 2, "usage: ipso-server migrate"},
 		{"extra argument to webhooks", []string{"webhooks", "now"}, 2, "usage: ipso-server webhooks"},
 		{"extra argument to runtasks", []string{"runtasks", "now"}, 2, "usage: ipso-server runtasks"},
+		{"extra argument to probe", []string{"probe", "now"}, 2, "usage: ipso-server probe"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -68,10 +70,26 @@ func TestHelp(t *testing.T) {
 			if code != 0 {
 				t.Errorf("exit code = %d, want 0", code)
 			}
-			if !strings.Contains(stdout, "ipso-server migrate") {
+			if !strings.Contains(stdout, "ipso-server migrate") || !strings.Contains(stdout, "ipso-server probe") {
 				t.Errorf("stdout = %q, want the usage text", stdout)
 			}
 		})
+	}
+}
+
+func TestProbeReadsTheHeartbeatFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "heartbeat")
+	code, _, stderr := invoke(t, deps{getenv: env(map[string]string{probeFileEnv: path})}, "probe")
+	if code != 1 || !strings.Contains(stderr, "heartbeat") {
+		t.Fatalf("missing file: code = %d, stderr = %q", code, stderr)
+	}
+	if err := os.WriteFile(path, []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr = invoke(t, deps{getenv: env(map[string]string{probeFileEnv: path})}, "probe")
+	if code != 0 {
+		t.Fatalf("fresh file: code = %d, stderr = %q", code, stderr)
 	}
 }
 
@@ -681,6 +699,17 @@ func TestRoleWorkerStartsTheWorkerForTheTenantOfTheEnvironment(t *testing.T) {
 	}
 	if got.Tenant.String() != testTenant || got.Pool == nil || got.Log == nil {
 		t.Errorf("config = %+v", got)
+	}
+	if got.HeartbeatPath != worker.HeartbeatPath {
+		t.Errorf("heartbeat = %q, want the default path", got.HeartbeatPath)
+	}
+	custom := filepath.Join(t.TempDir(), "beat")
+	code, _, stderr = invoke(t, workerDeps(workerEnv(map[string]string{probeFileEnv: custom}), &got), "--role=worker")
+	if code != 0 {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if got.HeartbeatPath != custom {
+		t.Errorf("heartbeat = %q, want %s", got.HeartbeatPath, custom)
 	}
 }
 

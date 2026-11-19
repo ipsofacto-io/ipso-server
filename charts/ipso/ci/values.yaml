@@ -1,0 +1,7 @@
+image:
+  digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+existingSecret: ci-secret
+tenantID: 00000000-0000-4000-8000-000000000001
+oidc:
+  issuer: https://idp.example.test/dex
+  audience: ipso-api

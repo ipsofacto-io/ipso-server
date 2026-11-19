@@ -157,6 +157,10 @@ services:
     depends_on:
       seed:
         condition: service_completed_successfully
+    tmpfs:
+      # The chart's probe reads a heartbeat file here. Compose has no probe, and the process still
+      # writes the file after its start gates (ADR-0140). The root file system is read-only.
+      - /var/run/ipso
     restart: on-failure
 
   front:

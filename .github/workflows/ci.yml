@@ -255,6 +255,41 @@ jobs:
         if: always()
         run: ${COMPOSE} down --volumes
 
+  chart:
+    name: ci / chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Helm, kind, and kubectl
+        run: |
+          set -euo pipefail
+          bin="${RUNNER_TEMP}/bin"
+          mkdir -p "$bin"
+          install_archive() {
+            local url="$1" sum="$2" inside="$3" tmp
+            tmp="$(mktemp -d)"
+            curl -fsSL -o "${tmp}/archive.tar.gz" "$url"
+            echo "${sum}  ${tmp}/archive.tar.gz" | sha256sum -c -
+            tar -xzf "${tmp}/archive.tar.gz" -C "$tmp"
+            install -m 0755 "${tmp}/${inside}" "${bin}/$(basename "$inside")"
+          }
+          install_file() {
+            local url="$1" sum="$2" name="$3" tmp
+            tmp="$(mktemp -d)"
+            curl -fsSL -o "${tmp}/${name}" "$url"
+            echo "${sum}  ${tmp}/${name}" | sha256sum -c -
+            install -m 0755 "${tmp}/${name}" "${bin}/${name}"
+          }
+          install_archive https://get.helm.sh/helm-v4.3.1-linux-amd64.tar.gz 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b linux-amd64/helm
+          install_file https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d kind
+          install_file https://dl.k8s.io/release/v1.37.0/bin/linux/amd64/kubectl 6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f kubectl
+          echo "$bin" >> "$GITHUB_PATH"
+      - name: Lint the chart and install it on kind
+        run: bash charts/ipso/ci.sh kind
+
   lint:
     name: ci / lint
     runs-on: ubuntu-latest

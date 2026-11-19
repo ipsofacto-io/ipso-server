@@ -1,0 +1,120 @@
+# The supported single-node install (ADR-0140). It is not the laptop stack in the repository root:
+# there is no Dex and no seeded password. Set every variable in .env. An empty value refuses to start.
+# `docker compose -f deploy/bundle/compose.yaml --env-file deploy/bundle/.env up --build`
+# Then, once, create the tenant:
+# `docker compose -f deploy/bundle/compose.yaml --env-file deploy/bundle/.env --profile bootstrap run --rm bootstrap`
+# PostgreSQL and the front are pinned by digest. The server image is built from this repository
+# until the release workflow publishes one.
+name: ipso
+
+x-hardened: &hardened
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+x-ipso-server: &ipso-server
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+  image: ipso-server:bundle
+
+services:
+  postgres:
+    <<: *hardened
+    image: postgres:18.6@sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set the database superuser password}
+      IPSO_MIGRATE_PASSWORD: ${IPSO_MIGRATE_PASSWORD:?set the migration role password}
+      IPSO_APP_PASSWORD: ${IPSO_APP_PASSWORD:?set the application role password}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ../compose/postgres-init.sh:/docker-entrypoint-initdb.d/10-ipso.sh:ro
+    tmpfs:
+      - /tmp
+      - /run/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d ipso"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    <<: [*hardened, *ipso-server]
+    command: ["migrate"]
+    environment:
+      IPSO_MIGRATE_DATABASE_URL: postgres://ipso_migrate:${IPSO_MIGRATE_PASSWORD:?set the migration role password}@postgres:5432/ipso?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  bootstrap:
+    profiles: ["bootstrap"]
+    <<: [*hardened, *ipso-server]
+    command:
+      - tenant
+      - create
+      - --tenant=${IPSO_TENANT_ID:?set the tenant id}
+      - --name=${IPSO_TENANT_NAME:?set the tenant name}
+      - --person=${IPSO_PERSON_ID:?set the person id}
+      - --person-name=${IPSO_PERSON_NAME:?set the person name}
+      - --issuer=${IPSO_OIDC_ISSUER:?set the https issuer}
+      - --subject=${IPSO_OIDC_SUBJECT:?set the subject}
+    environment:
+      IPSO_DATABASE_URL: postgres://ipso_app:${IPSO_APP_PASSWORD:?set the application role password}@postgres:5432/ipso?sslmode=disable
+      IPSO_TENANT_KEK: ${IPSO_TENANT_KEK:?set the key encryption key}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  api:
+    <<: [*hardened, *ipso-server]
+    command: ["--role=api"]
+    environment:
+      IPSO_DATABASE_URL: postgres://ipso_app:${IPSO_APP_PASSWORD:?set the application role password}@postgres:5432/ipso?sslmode=disable
+      IPSO_TENANT_ID: ${IPSO_TENANT_ID:?set the tenant id}
+      IPSO_OIDC_ISSUER: ${IPSO_OIDC_ISSUER:?set the https issuer}
+      IPSO_API_AUDIENCE: ${IPSO_API_AUDIENCE:?set the API audience}
+      IPSO_LISTEN_ADDR: ":8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  worker:
+    <<: [*hardened, *ipso-server]
+    command: ["--role=worker"]
+    environment:
+      IPSO_DATABASE_URL: postgres://ipso_app:${IPSO_APP_PASSWORD:?set the application role password}@postgres:5432/ipso?sslmode=disable
+      IPSO_TENANT_ID: ${IPSO_TENANT_ID:?set the tenant id}
+    tmpfs:
+      - /var/run/ipso
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  front:
+    <<: *hardened
+    image: nginxinc/nginx-unprivileged:1.31.7-alpine3.24@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e
+    volumes:
+      - ../compose/nginx.conf:/etc/nginx/nginx.conf:ro
+    tmpfs:
+      - /tmp
+    ports:
+      - "8080:8080"
+    depends_on:
+      - api
+    restart: on-failure
+
+volumes:
+  postgres-data:

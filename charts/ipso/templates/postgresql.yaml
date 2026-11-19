@@ -1,0 +1,126 @@
+{{- include "ipso.checks" . -}}
+{{- if .Values.postgresql.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ipso.fullname" . }}-postgresql-init
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "postgresql") | nindent 4 }}
+data:
+  10-ipso.sh: |
+{{ .Files.Get "files/postgres-init.sh" | indent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ipso.fullname" . }}-postgresql
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "postgresql") | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "ipso.selector" (dict "root" . "component" "postgresql") | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "ipso.fullname" . }}-postgresql
+  labels:
+    {{- include "ipso.labels" (dict "root" . "component" "postgresql") | nindent 4 }}
+spec:
+  serviceName: {{ include "ipso.fullname" . }}-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ipso.selector" (dict "root" . "component" "postgresql") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ipso.selector" (dict "root" . "component" "postgresql") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ipso.fullname" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 0
+        runAsNonRoot: false
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ include "ipso.ref" (dict "repository" .Values.postgresql.image.repository "digest" .Values.postgresql.image.digest "label" "postgresql.image.digest") }}
+          imagePullPolicy: IfNotPresent
+          args: ["postgres"]
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: postgres-password
+            - name: IPSO_MIGRATE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: migrate-password
+            - name: IPSO_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: app-password
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"]
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "ipso"]
+            periodSeconds: 3
+            timeoutSeconds: 3
+            failureThreshold: 40
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "ipso"]
+            periodSeconds: 10
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d/10-ipso.sh
+              subPath: 10-ipso.sh
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: run
+              mountPath: /run/postgresql
+      volumes:
+        - name: init
+          configMap:
+            name: {{ include "ipso.fullname" . }}-postgresql-init
+            defaultMode: 0555
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+        - name: run
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.storage }}
+{{- end }}

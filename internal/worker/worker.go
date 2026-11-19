@@ -43,6 +43,9 @@ type Config struct {
 	// job that names another tenant is cancelled before it runs.
 	Tenant uuid.UUID
 	Log    *slog.Logger
+	// HeartbeatPath is the file the chart's probe reads (ADR-0140). Empty skips the file, which is how
+	// the tests run. The command sets it, and the first write happens after the start gates pass.
+	HeartbeatPath string
 }
 
 // Run runs the start gates, then works jobs until ctx ends. It fails before any job is fetched when the
@@ -61,6 +64,23 @@ func run(ctx context.Context, cfg Config, probe prober) error {
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.DiscardHandler)
 	}
+	if cfg.HeartbeatPath != "" {
+		// The emptyDir outlives a container restart. Drop a file left by the previous process before the
+		// gates. The exit path stops the writer and drops the file again, so a restart is not probed as
+		// healthy. A kill that skips that exit can only look healthy until this process reaches this line.
+		if err := clearHeartbeat(cfg.HeartbeatPath); err != nil {
+			return fmt.Errorf("clear the heartbeat: %w", err)
+		}
+	}
+	var beat *heart
+	defer func() {
+		if beat != nil {
+			beat.stop()
+		}
+		if cfg.HeartbeatPath != "" {
+			_ = clearHeartbeat(cfg.HeartbeatPath)
+		}
+	}()
 	// The same pool serves River and the registry. Closing db does not close the pool.
 	db := stdlib.OpenDBFromPool(cfg.Pool)
 	defer func() { _ = db.Close() }()
@@ -74,13 +94,21 @@ func run(ctx context.Context, cfg Config, probe prober) error {
 	if err := requireRiverTables(ctx, db); err != nil {
 		return err
 	}
-
 	client, err := newClient(cfg, db, registry.Notify, probe)
 	if err != nil {
 		return err
 	}
 	if err := client.Start(ctx); err != nil {
 		return fmt.Errorf("start the job client: %w", err)
+	}
+	if cfg.HeartbeatPath != "" {
+		// The probe is a second process in this container. It can only see a file, because the worker
+		// opens no listener (ADR-0097, ADR-0140). Write only after the job client is running, then keep
+		// the file fresh until stop, which finishes before the exit path removes it.
+		if err := writeHeartbeat(cfg.HeartbeatPath); err != nil {
+			return fmt.Errorf("write the heartbeat: %w", err)
+		}
+		beat = startHeartbeat(ctx, cfg.HeartbeatPath, cfg.Log)
 	}
 	<-client.Stopped()
 	if ctx.Err() == nil {
