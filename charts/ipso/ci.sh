@@ -68,7 +68,7 @@ pin_loaded_image() {
   digest=$(digest_of "$ref")
   repo=${ref%:*}
   name="${repo}@${digest}"
-  docker exec "${cluster}-control-plane" ctr -n k8s.io images tag "$ref" "$name"
+  docker exec "${cluster}-control-plane" ctr -n k8s.io images tag "$ref" "$name" >/dev/null
   if ! docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v want="$name" '$1 == want { found = 1 } END { exit !found }'; then
     echo "kind has ${ref} but not ${name}" >&2
     docker exec "${cluster}-control-plane" ctr -n k8s.io images ls >&2
