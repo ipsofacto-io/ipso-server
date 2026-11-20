@@ -421,7 +421,7 @@ tag_digest() {
   if docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v want="$name" '$1 == want { found = 1 } END { exit !found }'; then
     return
   fi
-  src=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v d="$digest" 'index($0, d) && index($0, "index") == 0 { print $1; exit }')
+  src=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v d="$digest" 'index($0, d) && $0 ~ /manifest/ && index($0, "index") == 0 { print $1; exit }')
   if [[ -z "$src" ]]; then
     echo "kind has no runnable image for ${digest}" >&2
     docker exec "${cluster}-control-plane" ctr -n k8s.io images ls >&2
@@ -467,10 +467,10 @@ wait_health() {
 }
 
 wait_rollout() {
-  kubectl -n ipso rollout status statefulset/ipso-postgresql --timeout=10m
-  kubectl -n ipso rollout status deploy/ipso-api --timeout=10m
-  kubectl -n ipso rollout status deploy/ipso-worker --timeout=10m
-  kubectl -n ipso rollout status deploy/ipso-front --timeout=10m
+  kubectl -n ipso rollout status statefulset/ipso-postgresql --timeout=5m
+  kubectl -n ipso rollout status deploy/ipso-api --timeout=5m
+  kubectl -n ipso rollout status deploy/ipso-worker --timeout=5m
+  kubectl -n ipso rollout status deploy/ipso-front --timeout=5m
 }
 
 refuse_foreign_image() {
@@ -657,22 +657,29 @@ EOF
   helm upgrade --install ipso "$chart" --namespace ipso \
     -f "${extract}/airgap-values.yaml" \
     -f "$ci_values" \
-    --timeout 15m
+    --timeout 8m
   wait_rollout
   wait_health
   refuse_foreign_image
 }
 
-pack() {
+prepare_stage() {
   mkdir -p "$stage/signatures" "$stage/sbom" "$stage/images" "$stage/chart" \
     "$stage/runtime" "$stage/deploy/bundle" "$stage/deploy/compose"
-  phase "build server image"
-  bounded 8m docker build --provenance=false --sbom=false -t "${server_repo}:airgap" "$root"
+}
+
+# crane does not use the docker daemon, so these pulls run while kind starts.
+pull_pinned() {
+  prepare_stage
   # docker pull of an index digest fetches every architecture and does not finish in this job.
   phase "pull pinned images"
-  bounded 10m crane pull --platform linux/amd64 --format tarball "postgres@${pg}" "${stage}/runtime/postgres.tar"
-  bounded 10m crane pull --platform linux/amd64 --format tarball "nginxinc/nginx-unprivileged@${ngx}" "${stage}/runtime/nginx.tar"
+  bounded 8m crane pull --platform linux/amd64 --format tarball "postgres@${pg}" "${stage}/runtime/postgres.tar"
+  bounded 8m crane pull --platform linux/amd64 --format tarball "nginxinc/nginx-unprivileged@${ngx}" "${stage}/runtime/nginx.tar"
+}
 
+pack() {
+  phase "build server image"
+  bounded 8m docker build --provenance=false --sbom=false -t "${server_repo}:airgap" "$root"
   phase "push server image"
   docker tag "${server_repo}:airgap" 127.0.0.1:5000/ipso-server:airgap
   bounded 8m docker push 127.0.0.1:5000/ipso-server:airgap
@@ -791,10 +798,11 @@ wait_kind() {
 phase "registry"
 docker run -d --name "$registry_name" -p 127.0.0.1:5000:5000 "$registry_image" >/dev/null
 wait_registry
-# Kind and the image build both use the docker daemon. Finish kind first.
+# Kind and the image build both use the docker daemon. Pull with crane while kind starts.
 phase "kind"
 kind create cluster --name "$cluster" --image "$kind_node" >"$out/kind.log" 2>&1 &
 kind_pid=$!
+pull_pinned
 wait_kind
 pack
 
