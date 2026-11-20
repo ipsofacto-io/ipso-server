@@ -112,7 +112,8 @@ require_same_digest() {
 
 write_sbom() {
   local source=$1 dest=$2
-  syft "$source" -o "cyclonedx-json=${dest}"
+  phase "sbom ${dest}"
+  bounded 8m syft "$source" -o "cyclonedx-json=${dest}"
   python3 - "$dest" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
@@ -126,14 +127,22 @@ phase() {
   echo "airgap: $* ($(date -u +%H:%M:%S))" >&2
 }
 
+# GNU timeout only sends TERM unless asked. Docker and crane can ignore that and
+# keep the job at the limit, which drops the log. KILL the process group.
+bounded() {
+  local limit=$1
+  shift
+  timeout --kill-after=20s "$limit" "$@"
+}
+
 sign_ref() {
   local remote=$1 digest=$2 name=$3
   local ref="${remote}@${digest}"
   phase "sign ${name}"
-  timeout 8m cosign sign --yes --allow-http-registry \
+  bounded 8m cosign sign --yes --allow-http-registry \
     --bundle "${stage}/signatures/${name}.sigstore.json" \
     "$ref"
-  timeout 8m cosign attest --yes --allow-http-registry --type cyclonedx \
+  bounded 8m cosign attest --yes --allow-http-registry --type cyclonedx \
     --predicate "${stage}/sbom/${name}.cdx.json" \
     --bundle "${stage}/signatures/${name}.att.sigstore.json" \
     "$ref"
@@ -141,7 +150,8 @@ sign_ref() {
 
 sign_one() {
   sign_ref "$@"
-  cosign save --allow-http-registry --dir "${stage}/images/$3" "${1}@${2}"
+  phase "save $3"
+  bounded 5m cosign save --allow-http-registry --dir "${stage}/images/$3" "${1}@${2}"
 }
 
 # The chart pins an index digest. Copying every architecture does not fit the job.
@@ -411,9 +421,9 @@ tag_digest() {
   if docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v want="$name" '$1 == want { found = 1 } END { exit !found }'; then
     return
   fi
-  src=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v d="$digest" 'index($0, d) { print $1; exit }')
+  src=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v d="$digest" 'index($0, d) && index($0, "index") == 0 { print $1; exit }')
   if [[ -z "$src" ]]; then
-    echo "kind has no image for ${digest}" >&2
+    echo "kind has no runnable image for ${digest}" >&2
     docker exec "${cluster}-control-plane" ctr -n k8s.io images ls >&2
     exit 1
   fi
@@ -493,6 +503,7 @@ EOF
 }
 
 install_from_tar() {
+  phase "load images"
   import_layout "${extract}/images/ipso-server"
   tag_digest "$server_digest" "${server_repo}@${server_digest}"
   local pg_src ngx_src
@@ -618,8 +629,10 @@ spec:
         - name: tmp
           emptyDir: {}
 EOF
+  phase "dex"
   kubectl -n ipso rollout status deploy/dex --timeout=300s
 
+  phase "cut egress"
   cut_egress
 
   local chart ci_values
@@ -640,6 +653,7 @@ bootstrap:
   subject: ${IPSO_SEED_SUBJECT}
   kekSecret: ipso-ci-kek
 EOF
+  phase "helm install"
   helm upgrade --install ipso "$chart" --namespace ipso \
     -f "${extract}/airgap-values.yaml" \
     -f "$ci_values" \
@@ -653,15 +667,15 @@ pack() {
   mkdir -p "$stage/signatures" "$stage/sbom" "$stage/images" "$stage/chart" \
     "$stage/runtime" "$stage/deploy/bundle" "$stage/deploy/compose"
   phase "build server image"
-  timeout 15m docker build --provenance=false --sbom=false -t "${server_repo}:airgap" "$root"
+  bounded 8m docker build --provenance=false --sbom=false -t "${server_repo}:airgap" "$root"
   # docker pull of an index digest fetches every architecture and does not finish in this job.
   phase "pull pinned images"
-  timeout 10m crane pull --platform linux/amd64 --format tarball "postgres@${pg}" "${stage}/runtime/postgres.tar"
-  timeout 10m crane pull --platform linux/amd64 --format tarball "nginxinc/nginx-unprivileged@${ngx}" "${stage}/runtime/nginx.tar"
+  bounded 10m crane pull --platform linux/amd64 --format tarball "postgres@${pg}" "${stage}/runtime/postgres.tar"
+  bounded 10m crane pull --platform linux/amd64 --format tarball "nginxinc/nginx-unprivileged@${ngx}" "${stage}/runtime/nginx.tar"
 
   phase "push server image"
   docker tag "${server_repo}:airgap" 127.0.0.1:5000/ipso-server:airgap
-  timeout 8m docker push 127.0.0.1:5000/ipso-server:airgap
+  bounded 8m docker push 127.0.0.1:5000/ipso-server:airgap
   server_digest=$(digest_of 127.0.0.1:5000/ipso-server:airgap)
   publish_pinned "postgres@${pg}" 127.0.0.1:5000/postgres "$pg" postgres
   publish_pinned "nginxinc/nginx-unprivileged@${ngx}" 127.0.0.1:5000/nginx "$ngx" nginx
@@ -670,7 +684,7 @@ pack() {
   write_sbom "docker:${server_repo}:airgap" "${stage}/sbom/ipso-server.cdx.json"
   write_sbom "docker-archive:${stage}/runtime/postgres.tar" "${stage}/sbom/postgres.cdx.json"
   write_sbom "docker-archive:${stage}/runtime/nginx.tar" "${stage}/sbom/nginx.cdx.json"
-  timeout 5m cosign trusted-root create --with-default-services --out "${stage}/trusted-root.json"
+  bounded 5m cosign trusted-root create --with-default-services --out "${stage}/trusted-root.json"
 
   sign_one 127.0.0.1:5000/ipso-server "$server_digest" ipso-server
   sign_ref 127.0.0.1:5000/postgres "$pg" postgres
@@ -681,7 +695,7 @@ pack() {
   helm package charts/ipso --destination "${stage}/chart"
   local chart
   chart=$(find "${stage}/chart" -name '*.tgz' -print -quit)
-  timeout 5m cosign sign-blob --yes --bundle "${stage}/signatures/chart.sigstore.json" "$chart"
+  bounded 5m cosign sign-blob --yes --bundle "${stage}/signatures/chart.sigstore.json" "$chart"
 
   python3 - "$root/deploy/bundle/compose.yaml" "${stage}/deploy/bundle/compose.yaml" "$server_digest" <<'PY'
 import pathlib, sys
@@ -757,30 +771,38 @@ rm -rf "$out"
 mkdir -p "$out"
 trap cleanup EXIT
 
-docker run -d --name "$registry_name" -p 127.0.0.1:5000:5000 "$registry_image" >/dev/null
-kind create cluster --name "$cluster" --image "$kind_node" >"$out/kind.log" 2>&1 &
-kind_pid=$!
-wait_registry
-pack
-waited=0
-while kill -0 "$kind_pid" 2>/dev/null; do
-  if (( waited >= 120 )); then
-    echo "kind did not finish within 10 minutes" >&2
+wait_kind() {
+  local waited=0
+  while kill -0 "$kind_pid" 2>/dev/null; do
+    if (( waited >= 120 )); then
+      echo "kind did not finish within 10 minutes" >&2
+      exit 1
+    fi
+    sleep 5
+    waited=$((waited + 1))
+  done
+  if ! wait "$kind_pid"; then
+    echo "kind did not start" >&2
     exit 1
   fi
-  sleep 5
-  waited=$((waited + 1))
-done
-if ! wait "$kind_pid"; then
-  echo "kind did not start" >&2
-  exit 1
-fi
-kind_pid=
+  kind_pid=
+}
+
+phase "registry"
+docker run -d --name "$registry_name" -p 127.0.0.1:5000:5000 "$registry_image" >/dev/null
+wait_registry
+# Kind and the image build both use the docker daemon. Finish kind first.
+phase "kind"
+kind create cluster --name "$cluster" --image "$kind_node" >"$out/kind.log" 2>&1 &
+kind_pid=$!
+wait_kind
+pack
 
 rm -rf "$extract"
 mkdir -p "$extract"
 tar -C "$extract" -xf "$archive"
 assert_archive
+phase "verify"
 verify_offline
 check_pointers
 
