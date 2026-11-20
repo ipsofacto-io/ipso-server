@@ -177,3 +177,34 @@ The front listens on port 8080. There is no default user. The api restarts until
 For browser sign-in, set `IPSO_PUBLIC_URL` and `IPSO_LOGIN_PROVIDERS` on the api the way [docs/login.md](login.md) describes. A private CA is a file you mount on the api only, with `SSL_CERT_FILE` pointing at it. That variable replaces the public roots for that process, so the worker does not get it.
 
 `docker compose -f deploy/bundle/compose.yaml down --volumes` removes the database.
+
+## Air-gapped bundle
+
+`ci / airgap` builds `ghcr.io/ipsofacto-io/ipso-server` from this repository and packs it with the PostgreSQL and nginx digests the chart already pins, the packaged chart, and `deploy/bundle` ([ADR-0142](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0142-air-gapped-oci-bundle.md)). The tar also has a CycloneDX SBOM for each image, a sigstore bundle for each signature and each SBOM attestation, the public Sigstore trusted root captured when the tar was built, and `airgap-values.yaml`, which sets only `image.digest`. Dex and the kind node are not in the tar. The job signs with keyless cosign 3.1.4 and does not push to GHCR. The tar from a pull request proves that run. Publishing `oci://ghcr.io/ipsofacto-io/charts/ipso` stays the release workflow.
+
+The signature covers the manifest digest. This cosign release checks that digest from the saved layout and the trusted root in the tar, and it does not contact a registry to do so. The certificate is the `ci` workflow in `ipsofacto-io/ipso-server`, issued by `https://token.actions.githubusercontent.com`. PostgreSQL and nginx are the upstream bytes, signed by that workflow. `airgap-values.yaml` and the Compose file are not signed. The server digest in both has to be the digest `cosign verify` reported for `images/ipso-server`. The trusted root is the one in the tar. Replacing the tar replaces that root.
+
+```sh
+cosign verify --local-image images/ipso-server \
+  --trusted-root trusted-root.json \
+  --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify-attestation --local-image images/ipso-server --type cyclonedx \
+  --trusted-root trusted-root.json \
+  --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify-blob --bundle signatures/chart.sigstore.json \
+  --trusted-root trusted-root.json \
+  --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  chart/ipso-*.tgz
+```
+
+Repeat `verify` and `verify-attestation` with `images/postgres` and `images/nginx`. Load each saved image into the cluster and tag `repository@digest` for the server digest in `airgap-values.yaml` and for the PostgreSQL and nginx digests in the chart. With registry egress closed:
+
+```sh
+helm upgrade --install ipso chart/ipso-*.tgz --namespace ipso \
+  -f airgap-values.yaml -f your-values.yaml
+```
+
+`your-values.yaml` names the Secret, the tenant, and the issuer, as in the chart section above. The Compose file in the tar has no build. Load the same three images into Docker and start it with `--env-file deploy/bundle/.env`.
