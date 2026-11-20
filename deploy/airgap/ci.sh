@@ -122,9 +122,14 @@ if doc.get("bomFormat") != "CycloneDX":
 PY
 }
 
-sign_one() {
+phase() {
+  echo "airgap: $* ($(date -u +%H:%M:%S))" >&2
+}
+
+sign_ref() {
   local remote=$1 digest=$2 name=$3
   local ref="${remote}@${digest}"
+  phase "sign ${name}"
   cosign sign --yes --allow-http-registry \
     --bundle "${stage}/signatures/${name}.sigstore.json" \
     "$ref"
@@ -132,7 +137,111 @@ sign_one() {
     --predicate "${stage}/sbom/${name}.cdx.json" \
     --bundle "${stage}/signatures/${name}.att.sigstore.json" \
     "$ref"
-  cosign save --allow-http-registry --dir "${stage}/images/${name}" "$ref"
+}
+
+sign_one() {
+  sign_ref "$@"
+  cosign save --allow-http-registry --dir "${stage}/images/$3" "${1}@${2}"
+}
+
+# The chart pins an index digest. Copying every architecture does not fit the job.
+# Publish linux/amd64 for the node, then the original index bytes so the digest is unchanged.
+publish_pinned() {
+  local src=$1 dest=$2 pin=$3 what=$4
+  phase "publish ${what}"
+  python3 - "$src" "$dest" "$pin" "$what" <<'PY'
+import json, subprocess, sys, urllib.error, urllib.request
+src, dest, pin, what = sys.argv[1:]
+raw = subprocess.check_output(["crane", "manifest", src])
+manifest = json.loads(raw)
+media = manifest.get("mediaType", "")
+host, repo = dest.split("/", 1)
+base = f"http://{host}/v2/{repo}"
+
+def put(ref_name, body, content_type):
+    req = urllib.request.Request(
+        f"{base}/manifests/{ref_name}",
+        data=body,
+        method="PUT",
+        headers={"Content-Type": content_type},
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            if resp.status not in (201, 202):
+                raise SystemExit(f"publish {what} {ref_name}: HTTP {resp.status}")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode()[:500]
+        raise SystemExit(f"publish {what} {ref_name}: HTTP {exc.code} {detail}")
+
+if "index" in media or "list" in media:
+    subprocess.check_call(["crane", "copy", "--platform", "linux/amd64", src, f"{dest}:platform"])
+    put(pin, raw, media)
+    put("pinned", raw, media)
+else:
+    subprocess.check_call(["crane", "copy", src, f"{dest}:pinned"])
+PY
+  require_same_digest "$(digest_of "${dest}:pinned")" "$pin" "$what"
+}
+
+# The layout cosign verifies: the pinned index, plus the referrer bundles. The node
+# loads the linux/amd64 image separately and tags the pinned digest onto it.
+write_signed_layout() {
+  local src=$1 dest=$2 pin=$3 dir=$4
+  phase "layout ${dir}"
+  python3 - "$src" "$dest" "$pin" "$dir" <<'PY'
+import hashlib, json, pathlib, subprocess, sys, urllib.request
+src, dest, pin, directory = sys.argv[1:]
+root = pathlib.Path(directory)
+blobs = root / "blobs" / "sha256"
+blobs.mkdir(parents=True)
+(root / "oci-layout").write_text('{"imageLayoutVersion":"1.0.0"}\n')
+raw = subprocess.check_output(["crane", "manifest", src])
+if "sha256:" + hashlib.sha256(raw).hexdigest() != pin:
+    raise SystemExit("the source manifest is not the pinned digest")
+(blobs / pin.split(":", 1)[1]).write_bytes(raw)
+manifest = json.loads(raw)
+host, repo = dest.split("/", 1)
+base = f"http://{host}/v2/{repo}"
+
+def fetch(url, accept=None):
+    headers = {"Accept": accept} if accept else {}
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req) as resp:
+        return resp.read()
+
+referrers = json.loads(fetch(
+    f"{base}/referrers/{pin}",
+    "application/vnd.oci.image.index.v1+json",
+))
+found = False
+for desc in referrers.get("manifests", []):
+    body = fetch(f"{base}/manifests/{desc['digest']}", desc.get("mediaType"))
+    digest = "sha256:" + hashlib.sha256(body).hexdigest()
+    if digest != desc["digest"]:
+        raise SystemExit(f"referrer digest mismatch for {desc['digest']}")
+    (blobs / digest.split(":", 1)[1]).write_bytes(body)
+    for layer in json.loads(body).get("layers", []):
+        layer_body = fetch(f"{base}/blobs/{layer['digest']}")
+        layer_digest = "sha256:" + hashlib.sha256(layer_body).hexdigest()
+        if layer_digest != layer["digest"]:
+            raise SystemExit(f"bundle blob mismatch for {layer['digest']}")
+        (blobs / layer_digest.split(":", 1)[1]).write_bytes(layer_body)
+        if str(layer.get("mediaType", "")).startswith("application/vnd.dev.sigstore.bundle"):
+            found = True
+if not found:
+    raise SystemExit(f"no sigstore bundle was attached to {pin}")
+index = {
+    "schemaVersion": 2,
+    "mediaType": "application/vnd.oci.image.index.v1+json",
+    "manifests": [{
+        "mediaType": manifest["mediaType"],
+        "digest": pin,
+        "size": len(raw),
+        "annotations": {"kind": "dev.cosignproject.cosign/imageIndex"},
+    }],
+}
+(root / "index.json").write_text(json.dumps(index))
+PY
 }
 
 offline() {
@@ -208,6 +317,8 @@ assert_archive() {
     images/postgres/index.json \
     images/nginx/oci-layout \
     images/nginx/index.json \
+    runtime/postgres.tar \
+    runtime/nginx.tar \
     airgap-values.yaml \
     deploy/bundle/compose.yaml \
     deploy/compose/postgres-init.sh \
@@ -235,16 +346,41 @@ for arg in sys.argv[1:]:
 PY
 }
 
+import_tar() {
+  local file=$1
+  docker cp "$file" "${cluster}-control-plane:/tmp/airgap-import.tar"
+  docker exec "${cluster}-control-plane" ctr -n k8s.io images import --all-platforms --digests /tmp/airgap-import.tar >&2
+  docker exec "${cluster}-control-plane" rm -f /tmp/airgap-import.tar
+}
+
 import_layout() {
   local dir=$1 tar_in
   tar_in=$(mktemp)
   tar -C "$dir" -cf "$tar_in" .
-  docker cp "$tar_in" "${cluster}-control-plane:/tmp/airgap-import.tar"
+  import_tar "$tar_in"
   rm -f "$tar_in"
-  # The layout names the image with a cosign annotation, not a repository. --digests
-  # records repository-independent name@digest so the chart reference can be tagged.
-  docker exec "${cluster}-control-plane" ctr -n k8s.io images import --all-platforms --digests /tmp/airgap-import.tar
-  docker exec "${cluster}-control-plane" rm -f /tmp/airgap-import.tar
+}
+
+import_named() {
+  local file=$1 marker=$2 src
+  import_tar "$file"
+  src=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v marker="$marker" 'index($1, marker) { print $1; exit }')
+  if [[ -z "$src" ]]; then
+    echo "kind did not import ${marker}" >&2
+    docker exec "${cluster}-control-plane" ctr -n k8s.io images ls >&2
+    exit 1
+  fi
+  printf '%s\n' "$src"
+}
+
+tag_exact() {
+  local src=$1 dest=$2
+  docker exec "${cluster}-control-plane" ctr -n k8s.io images tag "$src" "$dest" >/dev/null
+  if ! docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v want="$dest" '$1 == want { found = 1 } END { exit !found }'; then
+    echo "kind did not keep ${dest}" >&2
+    docker exec "${cluster}-control-plane" ctr -n k8s.io images ls >&2
+    exit 1
+  fi
 }
 
 tag_digest() {
@@ -335,13 +471,14 @@ EOF
 
 install_from_tar() {
   import_layout "${extract}/images/ipso-server"
-  import_layout "${extract}/images/postgres"
-  import_layout "${extract}/images/nginx"
   tag_digest "$server_digest" "${server_repo}@${server_digest}"
-  tag_digest "$pg" "postgres@${pg}"
-  tag_digest "$pg" "docker.io/library/postgres@${pg}"
-  tag_digest "$ngx" "nginxinc/nginx-unprivileged@${ngx}"
-  tag_digest "$ngx" "docker.io/nginxinc/nginx-unprivileged@${ngx}"
+  local pg_src ngx_src
+  pg_src=$(import_named "${extract}/runtime/postgres.tar" "ipso-airgap-postgres:pinned")
+  tag_exact "$pg_src" "postgres@${pg}"
+  tag_exact "$pg_src" "docker.io/library/postgres@${pg}"
+  ngx_src=$(import_named "${extract}/runtime/nginx.tar" "ipso-airgap-nginx:pinned")
+  tag_exact "$ngx_src" "nginxinc/nginx-unprivileged@${ngx}"
+  tag_exact "$ngx_src" "docker.io/nginxinc/nginx-unprivileged@${ngx}"
 
   kubectl create namespace ipso
   local certs dex_config dex_image
@@ -491,29 +628,35 @@ EOF
 
 pack() {
   mkdir -p "$stage/signatures" "$stage/sbom" "$stage/images" "$stage/chart" \
-    "$stage/deploy/bundle" "$stage/deploy/compose"
+    "$stage/runtime" "$stage/deploy/bundle" "$stage/deploy/compose"
+  phase "build server image"
   docker build --provenance=false --sbom=false -t "${server_repo}:airgap" "$root"
+  phase "pull pinned images"
   docker pull "postgres@${pg}"
   docker pull "nginxinc/nginx-unprivileged@${ngx}"
   docker tag "postgres@${pg}" ipso-airgap-postgres:pinned
   docker tag "nginxinc/nginx-unprivileged@${ngx}" ipso-airgap-nginx:pinned
+  docker save ipso-airgap-postgres:pinned -o "${stage}/runtime/postgres.tar"
+  docker save ipso-airgap-nginx:pinned -o "${stage}/runtime/nginx.tar"
 
+  phase "push server image"
   docker tag "${server_repo}:airgap" 127.0.0.1:5000/ipso-server:airgap
   docker push 127.0.0.1:5000/ipso-server:airgap
   server_digest=$(digest_of 127.0.0.1:5000/ipso-server:airgap)
-  crane copy "postgres@${pg}" 127.0.0.1:5000/postgres:pinned
-  crane copy "nginxinc/nginx-unprivileged@${ngx}" 127.0.0.1:5000/nginx:pinned
-  require_same_digest "$(digest_of 127.0.0.1:5000/postgres:pinned)" "$pg" postgres
-  require_same_digest "$(digest_of 127.0.0.1:5000/nginx:pinned)" "$ngx" nginx
+  publish_pinned "postgres@${pg}" 127.0.0.1:5000/postgres "$pg" postgres
+  publish_pinned "nginxinc/nginx-unprivileged@${ngx}" 127.0.0.1:5000/nginx "$ngx" nginx
 
+  phase "sbom and trusted root"
   write_sbom "${server_repo}:airgap" "${stage}/sbom/ipso-server.cdx.json"
   write_sbom ipso-airgap-postgres:pinned "${stage}/sbom/postgres.cdx.json"
   write_sbom ipso-airgap-nginx:pinned "${stage}/sbom/nginx.cdx.json"
   cosign trusted-root create --with-default-services --out "${stage}/trusted-root.json"
 
   sign_one 127.0.0.1:5000/ipso-server "$server_digest" ipso-server
-  sign_one 127.0.0.1:5000/postgres "$pg" postgres
-  sign_one 127.0.0.1:5000/nginx "$ngx" nginx
+  sign_ref 127.0.0.1:5000/postgres "$pg" postgres
+  write_signed_layout "postgres@${pg}" 127.0.0.1:5000/postgres "$pg" "${stage}/images/postgres"
+  sign_ref 127.0.0.1:5000/nginx "$ngx" nginx
+  write_signed_layout "nginxinc/nginx-unprivileged@${ngx}" 127.0.0.1:5000/nginx "$ngx" "${stage}/images/nginx"
 
   helm package charts/ipso --destination "${stage}/chart"
   local chart
@@ -599,6 +742,15 @@ kind create cluster --name "$cluster" --image "$kind_node" >"$out/kind.log" 2>&1
 kind_pid=$!
 wait_registry
 pack
+waited=0
+while kill -0 "$kind_pid" 2>/dev/null; do
+  if (( waited >= 120 )); then
+    echo "kind did not finish within 10 minutes" >&2
+    exit 1
+  fi
+  sleep 5
+  waited=$((waited + 1))
+done
 if ! wait "$kind_pid"; then
   echo "kind did not start" >&2
   exit 1
