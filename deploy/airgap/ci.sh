@@ -22,6 +22,7 @@ stage=$out/stage
 extract=$out/extract
 archive=$out/ipso-airgap.tar
 kind_pid=
+heartbeat_pid=
 
 require_tools() {
   local cmd
@@ -62,6 +63,10 @@ dump() {
 
 cleanup() {
   local code=$?
+  if [[ -n "${heartbeat_pid}" ]] && kill -0 "$heartbeat_pid" 2>/dev/null; then
+    kill "$heartbeat_pid" 2>/dev/null || true
+    wait "$heartbeat_pid" 2>/dev/null || true
+  fi
   if [[ -n "${kind_pid}" ]] && kill -0 "$kind_pid" 2>/dev/null; then
     kill "$kind_pid" 2>/dev/null || true
     wait "$kind_pid" 2>/dev/null || true
@@ -124,7 +129,28 @@ PY
 }
 
 phase() {
-  echo "airgap: $* ($(date -u +%H:%M:%S))" >&2
+  local msg="airgap: $* ($(date -u +%H:%M:%S))"
+  echo "$msg" >&2
+  echo "$msg" >"$out/phase"
+  # The runner records notices while the step is still going. The job log is not
+  # downloadable until the runner exits, and a job cancel drops that log.
+  echo "::notice::${msg}"
+}
+
+heartbeat() {
+  local msg="" last="" ticks=0
+  while true; do
+    msg="airgap: starting"
+    if [[ -f "$out/phase" ]]; then
+      msg=$(cat "$out/phase")
+    fi
+    ticks=$((ticks + 1))
+    if [[ "$msg" != "$last" || $((ticks % 4)) -eq 0 ]]; then
+      echo "::notice::${msg}"
+      last=$msg
+    fi
+    sleep 30
+  done
 }
 
 # GNU timeout only sends TERM unless asked. Docker and crane can ignore that and
@@ -777,6 +803,8 @@ require_pins
 rm -rf "$out"
 mkdir -p "$out"
 trap cleanup EXIT
+heartbeat &
+heartbeat_pid=$!
 
 wait_kind() {
   local waited=0
