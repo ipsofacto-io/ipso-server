@@ -25,7 +25,7 @@ kind_pid=
 
 require_tools() {
   local cmd
-  for cmd in docker helm kind kubectl cosign syft crane openssl python3 curl; do
+  for cmd in docker helm kind kubectl cosign syft crane openssl python3 curl timeout; do
     command -v "$cmd" >/dev/null
   done
   if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]]; then
@@ -111,8 +111,8 @@ require_same_digest() {
 }
 
 write_sbom() {
-  local tag=$1 dest=$2
-  syft "docker:${tag}" -o "cyclonedx-json=${dest}"
+  local source=$1 dest=$2
+  syft "$source" -o "cyclonedx-json=${dest}"
   python3 - "$dest" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
@@ -130,10 +130,10 @@ sign_ref() {
   local remote=$1 digest=$2 name=$3
   local ref="${remote}@${digest}"
   phase "sign ${name}"
-  cosign sign --yes --allow-http-registry \
+  timeout 8m cosign sign --yes --allow-http-registry \
     --bundle "${stage}/signatures/${name}.sigstore.json" \
     "$ref"
-  cosign attest --yes --allow-http-registry --type cyclonedx \
+  timeout 8m cosign attest --yes --allow-http-registry --type cyclonedx \
     --predicate "${stage}/sbom/${name}.cdx.json" \
     --bundle "${stage}/signatures/${name}.att.sigstore.json" \
     "$ref"
@@ -152,7 +152,10 @@ publish_pinned() {
   python3 - "$src" "$dest" "$pin" "$what" <<'PY'
 import json, subprocess, sys, urllib.error, urllib.request
 src, dest, pin, what = sys.argv[1:]
-raw = subprocess.check_output(["crane", "manifest", src])
+try:
+    raw = subprocess.check_output(["crane", "manifest", src], timeout=120)
+except subprocess.TimeoutExpired:
+    raise SystemExit(f"publish {what}: reading the manifest exceeded 2 minutes")
 manifest = json.loads(raw)
 media = manifest.get("mediaType", "")
 host, repo = dest.split("/", 1)
@@ -166,19 +169,26 @@ def put(ref_name, body, content_type):
         headers={"Content-Type": content_type},
     )
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             if resp.status not in (201, 202):
                 raise SystemExit(f"publish {what} {ref_name}: HTTP {resp.status}")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode()[:500]
         raise SystemExit(f"publish {what} {ref_name}: HTTP {exc.code} {detail}")
 
-if "index" in media or "list" in media:
-    subprocess.check_call(["crane", "copy", "--platform", "linux/amd64", src, f"{dest}:platform"])
-    put(pin, raw, media)
-    put("pinned", raw, media)
-else:
-    subprocess.check_call(["crane", "copy", src, f"{dest}:pinned"])
+try:
+    if "index" in media or "list" in media:
+        # zot accepts a sparse index, so the other architectures are not uploaded.
+        subprocess.check_call(
+            ["crane", "copy", "--platform", "linux/amd64", src, f"{dest}:platform"],
+            timeout=600,
+        )
+        put(pin, raw, media)
+        put("pinned", raw, media)
+    else:
+        subprocess.check_call(["crane", "copy", src, f"{dest}:pinned"], timeout=600)
+except subprocess.TimeoutExpired:
+    raise SystemExit(f"publish {what}: copying the image exceeded 10 minutes")
 PY
   require_same_digest "$(digest_of "${dest}:pinned")" "$pin" "$what"
 }
@@ -195,7 +205,10 @@ root = pathlib.Path(directory)
 blobs = root / "blobs" / "sha256"
 blobs.mkdir(parents=True)
 (root / "oci-layout").write_text('{"imageLayoutVersion":"1.0.0"}\n')
-raw = subprocess.check_output(["crane", "manifest", src])
+try:
+    raw = subprocess.check_output(["crane", "manifest", src], timeout=120)
+except subprocess.TimeoutExpired:
+    raise SystemExit("reading the pinned manifest exceeded 2 minutes")
 if "sha256:" + hashlib.sha256(raw).hexdigest() != pin:
     raise SystemExit("the source manifest is not the pinned digest")
 (blobs / pin.split(":", 1)[1]).write_bytes(raw)
@@ -206,7 +219,7 @@ base = f"http://{host}/v2/{repo}"
 def fetch(url, accept=None):
     headers = {"Accept": accept} if accept else {}
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=60) as resp:
         return resp.read()
 
 referrers = json.loads(fetch(
@@ -361,6 +374,16 @@ import_layout() {
   rm -f "$tar_in"
 }
 
+tar_repo_tag() {
+  local file=$1 tag
+  tag=$(tar -xOf "$file" manifest.json | python3 -c 'import json,sys; tags=json.load(sys.stdin)[0].get("RepoTags") or []; print(tags[0] if tags else "", end="")')
+  if [[ -z "$tag" ]]; then
+    echo "runtime tar ${file} has no image name" >&2
+    exit 1
+  fi
+  printf '%s\n' "$tag"
+}
+
 import_named() {
   local file=$1 marker=$2 src
   import_tar "$file"
@@ -473,10 +496,10 @@ install_from_tar() {
   import_layout "${extract}/images/ipso-server"
   tag_digest "$server_digest" "${server_repo}@${server_digest}"
   local pg_src ngx_src
-  pg_src=$(import_named "${extract}/runtime/postgres.tar" "ipso-airgap-postgres:pinned")
+  pg_src=$(import_named "${extract}/runtime/postgres.tar" "$(tar_repo_tag "${extract}/runtime/postgres.tar")")
   tag_exact "$pg_src" "postgres@${pg}"
   tag_exact "$pg_src" "docker.io/library/postgres@${pg}"
-  ngx_src=$(import_named "${extract}/runtime/nginx.tar" "ipso-airgap-nginx:pinned")
+  ngx_src=$(import_named "${extract}/runtime/nginx.tar" "$(tar_repo_tag "${extract}/runtime/nginx.tar")")
   tag_exact "$ngx_src" "nginxinc/nginx-unprivileged@${ngx}"
   tag_exact "$ngx_src" "docker.io/nginxinc/nginx-unprivileged@${ngx}"
 
@@ -630,27 +653,24 @@ pack() {
   mkdir -p "$stage/signatures" "$stage/sbom" "$stage/images" "$stage/chart" \
     "$stage/runtime" "$stage/deploy/bundle" "$stage/deploy/compose"
   phase "build server image"
-  docker build --provenance=false --sbom=false -t "${server_repo}:airgap" "$root"
+  timeout 15m docker build --provenance=false --sbom=false -t "${server_repo}:airgap" "$root"
+  # docker pull of an index digest fetches every architecture and does not finish in this job.
   phase "pull pinned images"
-  docker pull "postgres@${pg}"
-  docker pull "nginxinc/nginx-unprivileged@${ngx}"
-  docker tag "postgres@${pg}" ipso-airgap-postgres:pinned
-  docker tag "nginxinc/nginx-unprivileged@${ngx}" ipso-airgap-nginx:pinned
-  docker save ipso-airgap-postgres:pinned -o "${stage}/runtime/postgres.tar"
-  docker save ipso-airgap-nginx:pinned -o "${stage}/runtime/nginx.tar"
+  timeout 10m crane pull --platform linux/amd64 --format tarball "postgres@${pg}" "${stage}/runtime/postgres.tar"
+  timeout 10m crane pull --platform linux/amd64 --format tarball "nginxinc/nginx-unprivileged@${ngx}" "${stage}/runtime/nginx.tar"
 
   phase "push server image"
   docker tag "${server_repo}:airgap" 127.0.0.1:5000/ipso-server:airgap
-  docker push 127.0.0.1:5000/ipso-server:airgap
+  timeout 8m docker push 127.0.0.1:5000/ipso-server:airgap
   server_digest=$(digest_of 127.0.0.1:5000/ipso-server:airgap)
   publish_pinned "postgres@${pg}" 127.0.0.1:5000/postgres "$pg" postgres
   publish_pinned "nginxinc/nginx-unprivileged@${ngx}" 127.0.0.1:5000/nginx "$ngx" nginx
 
   phase "sbom and trusted root"
-  write_sbom "${server_repo}:airgap" "${stage}/sbom/ipso-server.cdx.json"
-  write_sbom ipso-airgap-postgres:pinned "${stage}/sbom/postgres.cdx.json"
-  write_sbom ipso-airgap-nginx:pinned "${stage}/sbom/nginx.cdx.json"
-  cosign trusted-root create --with-default-services --out "${stage}/trusted-root.json"
+  write_sbom "docker:${server_repo}:airgap" "${stage}/sbom/ipso-server.cdx.json"
+  write_sbom "docker-archive:${stage}/runtime/postgres.tar" "${stage}/sbom/postgres.cdx.json"
+  write_sbom "docker-archive:${stage}/runtime/nginx.tar" "${stage}/sbom/nginx.cdx.json"
+  timeout 5m cosign trusted-root create --with-default-services --out "${stage}/trusted-root.json"
 
   sign_one 127.0.0.1:5000/ipso-server "$server_digest" ipso-server
   sign_ref 127.0.0.1:5000/postgres "$pg" postgres
@@ -661,7 +681,7 @@ pack() {
   helm package charts/ipso --destination "${stage}/chart"
   local chart
   chart=$(find "${stage}/chart" -name '*.tgz' -print -quit)
-  cosign sign-blob --yes --bundle "${stage}/signatures/chart.sigstore.json" "$chart"
+  timeout 5m cosign sign-blob --yes --bundle "${stage}/signatures/chart.sigstore.json" "$chart"
 
   python3 - "$root/deploy/bundle/compose.yaml" "${stage}/deploy/bundle/compose.yaml" "$server_digest" <<'PY'
 import pathlib, sys
