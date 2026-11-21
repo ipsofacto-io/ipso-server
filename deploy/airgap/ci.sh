@@ -210,22 +210,28 @@ heartbeat() {
   done
 }
 
-# 42m total budget across all split steps inside the 45m GitHub job timeout, leaving
-# 3m for tool installs and post-job cleanup so a slow runner still leaves headroom
-# for kind/Helm install and exits with diagnostics before job cancellation.
-job_budget_seconds=2520
+# Independent per-step budgets (6m + 12m + 11m + 3m + 24m = 56m) fit strictly inside
+# the 60m GitHub job timeout while ensuring a slow build step never starves install.
+step_started_at=$(date +%s)
+step_budget_seconds=3360
+
+set_step_budget() {
+  case "$1" in
+    pull) step_budget_seconds=360 ;;
+    server) step_budget_seconds=720 ;;
+    sign) step_budget_seconds=660 ;;
+    verify) step_budget_seconds=180 ;;
+    install) step_budget_seconds=1440 ;;
+    all) step_budget_seconds=3360 ;;
+  esac
+}
 
 remaining_budget() {
-  local started now left
-  if [[ ! -f "$out/started_at" ]]; then
-    printf '%s\n' "$job_budget_seconds"
-    return
-  fi
-  started=$(cat "$out/started_at")
+  local now left
   now=$(date +%s)
-  left=$(( job_budget_seconds - (now - started) ))
+  left=$(( step_budget_seconds - (now - step_started_at) ))
   if (( left <= 0 )); then
-    echo "airgap: exceeded ${job_budget_seconds}s job budget" >&2
+    echo "airgap: exceeded ${step_budget_seconds}s step budget" >&2
     exit 124
   fi
   printf '%s\n' "$left"
@@ -1366,15 +1372,13 @@ case "$mode" in
     ;;
 esac
 
+set_step_budget "$mode"
 require_tools "$mode"
 require_pins
 if [[ "$mode" == "all" || "$mode" == "pull" ]]; then
   rm -rf "$out"
 fi
 mkdir -p "$out"
-if [[ ! -f "$out/started_at" ]]; then
-  date +%s >"$out/started_at"
-fi
 trap cleanup EXIT
 heartbeat &
 heartbeat_pid=$!
