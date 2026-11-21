@@ -499,14 +499,17 @@ PY
 import_tar() {
   local file=$1
   # kind mounts a tmpfs on /tmp inside the node, so docker cp to /tmp is not visible to exec.
-  docker exec -i "${cluster}-control-plane" ctr -n k8s.io images import --all-platforms --digests - <"$file" >&2
+  # Runtime archives carry RepoTags. Passing --digests without --base-name would add an
+  # unqualified import-YYYY-MM-DD reference that containerd 2 CRI fails to look up.
+  docker exec -i "${cluster}-control-plane" ctr -n k8s.io images import --all-platforms - <"$file" >&2
 }
 
 import_layout() {
-  local dir=$1 tar_in
+  local dir=$1 base_name=$2 tar_in
   tar_in=$(mktemp)
   tar -C "$dir" -cf "$tar_in" .
-  import_tar "$tar_in"
+  docker exec -i "${cluster}-control-plane" ctr -n k8s.io images import \
+    --base-name "$base_name" --all-platforms --digests - <"$tar_in" >&2
   rm -f "$tar_in"
 }
 
@@ -638,7 +641,7 @@ EOF
 
 install_from_tar() {
   phase "load images"
-  import_layout "${extract}/images/ipso-server"
+  import_layout "${extract}/images/ipso-server" "$server_repo"
   tag_digest "$server_digest" "${server_repo}@${server_digest}"
   local pg_tag pg_src ngx_tag ngx_src
   pg_tag=$(tar_repo_tag "${extract}/runtime/postgres.tar")

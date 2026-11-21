@@ -200,7 +200,7 @@ cosign verify-blob --bundle signatures/chart.sigstore.json \
   chart/ipso-*.tgz
 ```
 
-Repeat `verify` and `verify-attestation` with `images/postgres` and `images/nginx`. Load `images/ipso-server`, `runtime/postgres.tar`, and `runtime/nginx.tar` into the cluster, and tag `repository@digest` for the server digest in `airgap-values.yaml` and for the PostgreSQL and nginx digests in the chart. Tag those runtime archives, not the index layouts. With registry egress closed:
+Repeat `verify` and `verify-attestation` with `images/postgres` and `images/nginx`. Load `images/ipso-server`, `runtime/postgres.tar`, and `runtime/nginx.tar` into the cluster, and tag `repository@digest` for the server digest in `airgap-values.yaml` and for the PostgreSQL and nginx digests in the chart. When importing `images/ipso-server` with `ctr`, pass `--base-name ghcr.io/ipsofacto-io/ipso-server --digests` so containerd records the repository domain. Tag those runtime archives, not the index layouts. With registry egress closed:
 
 ```sh
 helm upgrade --install ipso chart/ipso-*.tgz --namespace ipso \
