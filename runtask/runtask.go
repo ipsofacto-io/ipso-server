@@ -268,7 +268,10 @@ func NewRunner(cfg RunnerConfig) *Runner {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	if cfg.RootCAs != nil {
-		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport := &http.Transport{Proxy: http.ProxyFromEnvironment, ForceAttemptHTTP2: true, TLSHandshakeTimeout: 10 * time.Second}
+		if base, ok := http.DefaultTransport.(*http.Transport); ok {
+			transport = base.Clone()
+		}
 		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: cfg.RootCAs}
 		client.Transport = transport
 	}
