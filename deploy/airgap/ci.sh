@@ -522,6 +522,8 @@ with tarfile.open(archive) as tar:
         target = (dest / member.name).resolve()
         if target != dest and dest not in target.parents:
             raise SystemExit(f"archive member escapes destination: {member.name}")
+        if member.issym() or member.islnk() or member.isdev() or member.isfifo():
+            raise SystemExit(f"forbidden link or device member in archive: {member.name}")
         if member.isdir():
             continue
         if not member.isfile():
@@ -572,6 +574,13 @@ for raw_line in (dest / "manifest.sha256").read_text().splitlines():
         raise SystemExit(f"unexpected or duplicate entry in manifest.sha256: {rel_path}")
     expected[rel_path] = digest
 
+allowed_dirs = {""}
+for rel_path in set(expected) | bootstrap:
+    parent = pathlib.PurePosixPath(rel_path).parent
+    while str(parent) not in ("", "."):
+        allowed_dirs.add(parent.as_posix())
+        parent = parent.parent
+
 seen = set()
 names = []
 with tarfile.open(archive) as tar:
@@ -582,7 +591,11 @@ with tarfile.open(archive) as tar:
         target = (dest / member.name).resolve()
         if target != dest and dest not in target.parents:
             raise SystemExit(f"archive member escapes destination: {member.name}")
+        if member.issym() or member.islnk() or member.isdev() or member.isfifo():
+            raise SystemExit(f"forbidden link or device member in archive: {member.name}")
         if member.isdir():
+            if clean.rstrip("/") not in allowed_dirs:
+                raise SystemExit(f"unlisted directory member in archive: {member.name}")
             target.mkdir(parents=True, exist_ok=True)
             continue
         if not member.isfile():
