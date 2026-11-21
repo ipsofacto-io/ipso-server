@@ -498,9 +498,8 @@ PY
 
 import_tar() {
   local file=$1
-  docker cp "$file" "${cluster}-control-plane:/tmp/airgap-import.tar"
-  docker exec "${cluster}-control-plane" ctr -n k8s.io images import --all-platforms --digests /tmp/airgap-import.tar >&2
-  docker exec "${cluster}-control-plane" rm -f /tmp/airgap-import.tar
+  # kind mounts a tmpfs on /tmp inside the node, so docker cp to /tmp is not visible to exec.
+  docker exec -i "${cluster}-control-plane" ctr -n k8s.io images import --all-platforms --digests - <"$file" >&2
 }
 
 import_layout() {
