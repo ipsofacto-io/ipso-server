@@ -512,7 +512,7 @@ import_layout() {
 
 tar_repo_tag() {
   local file=$1 tag
-  tag=$(tar -xOf "$file" manifest.json | python3 -c 'import json,sys; tags=json.load(sys.stdin)[0].get("RepoTags") or []; print(tags[0] if tags else "", end="")')
+  tag=$(tar -xOf "$file" manifest.json | python3 -c 'import json,sys; tags=json.load(sys.stdin)[0].get("RepoTags") or []; t=tags[0] if tags else ""; print(t.removeprefix("index.") if t.startswith("index.docker.io/") else t, end="")')
   if [[ -z "$tag" ]]; then
     echo "runtime tar ${file} has no image name" >&2
     exit 1
@@ -523,7 +523,7 @@ tar_repo_tag() {
 import_named() {
   local file=$1 marker=$2 src
   import_tar "$file"
-  src=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v marker="$marker" 'index($1, marker) { print $1; exit }')
+  src=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v marker="$marker" '$1 == marker || $1 == "index." marker { print $1; exit }')
   if [[ -z "$src" ]]; then
     echo "kind did not import ${marker}" >&2
     docker exec "${cluster}-control-plane" ctr -n k8s.io images ls >&2
