@@ -210,9 +210,10 @@ heartbeat() {
   done
 }
 
-# 26m total budget across all split steps inside the 30m GitHub job timeout, leaving
-# 4m for tool installs and post-job cleanup so a slow runner exits with diagnostics.
-job_budget_seconds=1560
+# 42m total budget across all split steps inside the 45m GitHub job timeout, leaving
+# 3m for tool installs and post-job cleanup so a slow runner still leaves headroom
+# for kind/Helm install and exits with diagnostics before job cancellation.
+job_budget_seconds=2520
 
 remaining_budget() {
   local started now left
