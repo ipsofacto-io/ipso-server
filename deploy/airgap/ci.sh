@@ -29,6 +29,9 @@ require_tools() {
   for cmd in docker helm kind kubectl cosign syft crane zot openssl python3 curl; do
     command -v "$cmd" >/dev/null
   done
+  if [[ "$want" == "all" || "$want" == "verify" || "$want" == "install" ]]; then
+    command -v unshare >/dev/null
+  fi
   if [[ "$want" == "all" || "$want" == "sign" ]]; then
     if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]]; then
       echo "keyless signing needs the Actions OIDC token" >&2
@@ -322,8 +325,8 @@ PY
   require_same_digest "$(digest_of "${dest}:pinned")" "$pin" "$what"
 }
 
-# The layout cosign verifies: the pinned index, plus the referrer bundles. The node
-# loads the linux/amd64 image separately and tags the pinned digest onto it.
+# Sparse OCI layout carrying the pinned index, the linux/amd64 manifest, config,
+# and layers from local zot, plus the cosign referrer bundles.
 write_signed_layout() {
   local src=$1 dest=$2 pin=$3 dir=$4
   phase "layout ${dir}"
@@ -351,10 +354,43 @@ def fetch(url, accept=None):
     with urllib.request.urlopen(req, timeout=60) as resp:
         return resp.read()
 
+def save_blob(digest):
+    target = blobs / digest.split(":", 1)[1]
+    if target.exists():
+        return
+    req = urllib.request.Request(f"{base}/blobs/{digest}")
+    h = hashlib.sha256()
+    with urllib.request.urlopen(req, timeout=180) as resp, target.open("wb") as out_f:
+        while True:
+            chunk = resp.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+            out_f.write(chunk)
+    if "sha256:" + h.hexdigest() != digest:
+        raise SystemExit(f"blob digest mismatch for {digest}")
+
 referrers = json.loads(fetch(
     f"{base}/referrers/{pin}",
     "application/vnd.oci.image.index.v1+json",
 ))
+amd64 = [
+    m for m in manifest.get("manifests", [])
+    if m.get("platform", {}).get("os") == "linux"
+    and m.get("platform", {}).get("architecture") == "amd64"
+    and "vnd.docker.reference.type" not in (m.get("annotations") or {})
+]
+if len(amd64) != 1:
+    raise SystemExit(f"expected one linux/amd64 manifest in {pin}, got {len(amd64)}")
+plat_desc = amd64[0]
+plat_body = fetch(f"{base}/manifests/{plat_desc['digest']}", plat_desc.get("mediaType"))
+if "sha256:" + hashlib.sha256(plat_body).hexdigest() != plat_desc["digest"]:
+    raise SystemExit(f"linux/amd64 manifest digest mismatch for {plat_desc['digest']}")
+(blobs / plat_desc["digest"].split(":", 1)[1]).write_bytes(plat_body)
+plat_doc = json.loads(plat_body)
+save_blob(plat_doc["config"]["digest"])
+for layer_desc in plat_doc.get("layers", []):
+    save_blob(layer_desc["digest"])
 found = False
 for desc in referrers.get("manifests", []):
     body = fetch(f"{base}/manifests/{desc['digest']}", desc.get("mediaType"))
@@ -389,22 +425,43 @@ PY
 # docker run --network none hung in this step and kept the runner from exiting.
 # Unshare the network namespace via sudo when available, or via a user namespace
 # otherwise. Both namespaces start with no interfaces up, so any socket fails.
+run_isolated() {
+  local home_dir=$1
+  shift
+  if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    bounded 2m sudo env HOME="$home_dir" unshare --net -- "$@"
+  else
+    bounded 2m env HOME="$home_dir" unshare --user --map-root-user --net -- "$@"
+  fi
+}
+
+assert_offline() {
+  local home_dir=$1
+  run_isolated "$home_dir" python3 -c '
+import errno, socket, sys
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    rc = sock.connect_ex(("192.0.2.1", 443))
+finally:
+    sock.close()
+if rc != errno.ENETUNREACH:
+    sys.exit(f"network namespace still has routes (connect_ex={rc})")
+'
+}
+
 offline() {
   local home_dir=$1
   shift
   local cosign_bin
   cosign_bin=$(command -v cosign)
-  if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-    bounded 2m sudo env HOME="$home_dir" unshare --net -- "$cosign_bin" "$@"
-  else
-    bounded 2m env HOME="$home_dir" unshare --user --map-root-user --net -- "$cosign_bin" "$@"
-  fi
+  run_isolated "$home_dir" "$cosign_bin" "$@"
 }
 
 verify_offline() {
   local name home_dir
   chmod -R a+rX "$extract"
   home_dir=$(mktemp -d)
+  assert_offline "$home_dir"
   for name in ipso-server postgres nginx; do
     phase "verify ${name}"
     offline "$home_dir" verify --local-image "${extract}/images/${name}" \
@@ -432,22 +489,108 @@ verify_offline() {
   rm -rf "$home_dir"
 }
 
+extract_archive() {
+  local src_tar=$1 dest_dir=$2 mode_filter=${3:-all}
+  rm -rf "$dest_dir"
+  mkdir -p "$dest_dir"
+  python3 - "$src_tar" "$dest_dir" "$out/listing" "$mode_filter" <<'PY'
+import pathlib, shutil, sys, tarfile
+
+archive = pathlib.Path(sys.argv[1])
+dest = pathlib.Path(sys.argv[2]).resolve()
+listing_out = pathlib.Path(sys.argv[3])
+mode_filter = sys.argv[4]
+signed_prefixes = ("images/", "signatures/", "chart/")
+names = []
+with tarfile.open(archive) as tar:
+    for member in tar.getmembers():
+        clean = member.name.removeprefix("./")
+        if member.name.startswith("/") or ".." in pathlib.PurePosixPath(member.name).parts:
+            raise SystemExit(f"unsafe path in archive: {member.name}")
+        target = (dest / member.name).resolve()
+        if target != dest and dest not in target.parents:
+            raise SystemExit(f"archive member escapes destination: {member.name}")
+        if member.isdir():
+            if mode_filter == "all" or clean == "." or clean.startswith(signed_prefixes):
+                target.mkdir(parents=True, exist_ok=True)
+            continue
+        if not member.isfile():
+            raise SystemExit(f"unsupported non-file member in archive: {member.name}")
+        if clean:
+            names.append(clean)
+        if mode_filter == "signed" and clean != "trusted-root.json" and not clean.startswith(signed_prefixes):
+            continue
+        src = tar.extractfile(member)
+        if src is None:
+            raise SystemExit(f"empty file member in archive: {member.name}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("wb") as out_f:
+            shutil.copyfileobj(src, out_f)
+if mode_filter == "all":
+    listing_out.write_text("\n".join(names) + ("\n" if names else ""))
+PY
+}
+
 check_pointers() {
-  python3 - "$extract/airgap-values.yaml" "$extract/deploy/bundle/compose.yaml" "$server_digest" <<'PY'
-import pathlib, sys
-values, compose, digest = sys.argv[1:]
-if f'digest: "{digest}"' not in pathlib.Path(values).read_text():
+  python3 - "$extract" "$server_digest" "$pg" "$ngx" <<'PY'
+import hashlib, json, pathlib, sys
+
+root = pathlib.Path(sys.argv[1])
+digest, pg_pin, ngx_pin = sys.argv[2:]
+values = (root / "airgap-values.yaml").read_text()
+if f'digest: "{digest}"' not in values:
     raise SystemExit("airgap-values.yaml does not name the signed server digest")
-body = pathlib.Path(compose).read_text()
+body = (root / "deploy/bundle/compose.yaml").read_text()
 if f"ghcr.io/ipsofacto-io/ipso-server@{digest}" not in body:
     raise SystemExit("the Compose file does not name the signed server digest")
 if "build:" in body:
     raise SystemExit("the Compose file still has a build")
+
+def check_blob(blobs, dgst, label):
+    path = blobs / dgst.split(":", 1)[1]
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    if "sha256:" + h.hexdigest() != dgst:
+        raise SystemExit(f"{label} blob digest mismatch for {dgst}")
+
+def verify_manifest_blobs(blobs, manifest_digest, label):
+    check_blob(blobs, manifest_digest, label)
+    doc = json.loads((blobs / manifest_digest.split(":", 1)[1]).read_text())
+    check_blob(blobs, doc["config"]["digest"], label)
+    for layer in doc.get("layers", []):
+        check_blob(blobs, layer["digest"], label)
+
+def verify_sparse_layout(layout_dir, pin, label):
+    idx = json.loads((layout_dir / "index.json").read_text())
+    entries = idx.get("manifests") or []
+    if len(entries) != 1 or entries[0].get("digest") != pin:
+        raise SystemExit(f"{label} layout index does not point to {pin}")
+    blobs = layout_dir / "blobs" / "sha256"
+    check_blob(blobs, pin, label)
+    idx_doc = json.loads((blobs / pin.split(":", 1)[1]).read_text())
+    amd64 = [
+        m for m in idx_doc.get("manifests", [])
+        if m.get("platform", {}).get("os") == "linux"
+        and m.get("platform", {}).get("architecture") == "amd64"
+        and "vnd.docker.reference.type" not in (m.get("annotations") or {})
+    ]
+    if len(amd64) != 1:
+        raise SystemExit(f"{label} index does not have one linux/amd64 manifest")
+    verify_manifest_blobs(blobs, amd64[0]["digest"], label)
+
+server_blobs = root / "images/ipso-server/blobs/sha256"
+verify_manifest_blobs(server_blobs, digest, "ipso-server")
+verify_sparse_layout(root / "images/postgres", pg_pin, "postgres")
+verify_sparse_layout(root / "images/nginx", ngx_pin, "nginx")
 PY
 }
 
 assert_archive() {
-  tar -tf "$archive" | sed 's#^\./##' >"$out/listing"
   local need
   for need in \
     sbom/ipso-server.cdx.json \
@@ -467,8 +610,6 @@ assert_archive() {
     images/postgres/index.json \
     images/nginx/oci-layout \
     images/nginx/index.json \
-    runtime/postgres.tar \
-    runtime/nginx.tar \
     airgap-values.yaml \
     deploy/bundle/compose.yaml \
     deploy/compose/postgres-init.sh \
@@ -496,54 +637,45 @@ for arg in sys.argv[1:]:
 PY
 }
 
-import_tar() {
-  local file=$1
-  # kind mounts a tmpfs on /tmp inside the node, so docker cp to /tmp is not visible to exec.
-  # Runtime archives carry RepoTags. Passing --digests without --base-name would add an
-  # unqualified import-YYYY-MM-DD reference that containerd 2 CRI fails to look up.
-  docker exec -i "${cluster}-control-plane" ctr -n k8s.io images import --all-platforms - <"$file" >&2
-}
-
 import_layout() {
   local dir=$1 base_name=$2 tar_in
   tar_in=$(mktemp)
   tar -C "$dir" -cf "$tar_in" .
+  # kind mounts a tmpfs on /tmp inside the node, so docker cp to /tmp is not visible to exec.
   docker exec -i "${cluster}-control-plane" ctr -n k8s.io images import \
     --base-name "$base_name" --all-platforms --digests - <"$tar_in" >&2
   rm -f "$tar_in"
 }
 
-tar_repo_tag() {
-  local file=$1 tag
-  tag=$(python3 - "$file" <<'PY'
-import json, sys, tarfile
-with tarfile.open(sys.argv[1]) as tar:
-    entry = tar.extractfile("manifest.json")
-    if entry is None:
-        raise SystemExit("manifest.json is empty")
-    tags = json.load(entry)[0].get("RepoTags") or []
-t = tags[0] if tags else ""
-print(t.removeprefix("index.") if t.startswith("index.docker.io/") else t, end="")
-PY
-)
-  if [[ -z "$tag" ]]; then
-    echo "runtime tar ${file} has no image name" >&2
-    exit 1
-  fi
-  printf '%s\n' "$tag"
-}
+import_sparse_index() {
+  local dir=$1 pin=$2 base_name=$3 index_ref=$4 tar_in listed
+  tar_in=$(mktemp)
+  python3 - "$dir" "$pin" "$tar_in" <<'PY'
+import io, pathlib, sys, tarfile
 
-import_named() {
-  local file=$1 marker=$2 listed src
-  import_tar "$file"
+root = pathlib.Path(sys.argv[1])
+pin = sys.argv[2]
+out_tar = pathlib.Path(sys.argv[3])
+idx_bytes = (root / "blobs" / "sha256" / pin.split(":", 1)[1]).read_bytes()
+with tarfile.open(out_tar, "w") as tar:
+    tar.add(root / "oci-layout", arcname="oci-layout")
+    info = tarfile.TarInfo("index.json")
+    info.size = len(idx_bytes)
+    info.mode = 0o644
+    tar.addfile(info, io.BytesIO(idx_bytes))
+    for blob in sorted((root / "blobs" / "sha256").iterdir()):
+        if blob.is_file():
+            tar.add(blob, arcname=f"blobs/sha256/{blob.name}")
+PY
+  docker exec -i "${cluster}-control-plane" ctr -n k8s.io images import \
+    --base-name "$base_name" --index-name "$index_ref" --platform linux/amd64 - <"$tar_in" >&2
+  rm -f "$tar_in"
   listed=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls)
-  src=$(awk -v marker="$marker" '!found && ($1 == marker || $1 == "index." marker) { found = $1 } END { if (found) print found }' <<<"$listed")
-  if [[ -z "$src" ]]; then
-    echo "kind did not import ${marker}" >&2
+  if ! awk -v want="$index_ref" -v d="$pin" '$1 == want && $3 == d { found = 1 } END { exit !found }' <<<"$listed"; then
+    echo "kind did not store ${index_ref} with index digest ${pin}" >&2
     printf '%s\n' "$listed" >&2
     exit 1
   fi
-  printf '%s\n' "$src"
 }
 
 tag_exact() {
@@ -604,10 +736,10 @@ wait_health() {
 }
 
 wait_rollout() {
-  kubectl -n ipso rollout status statefulset/ipso-postgresql --timeout=5m
-  kubectl -n ipso rollout status deploy/ipso-api --timeout=5m
-  kubectl -n ipso rollout status deploy/ipso-worker --timeout=5m
-  kubectl -n ipso rollout status deploy/ipso-front --timeout=5m
+  kubectl -n ipso rollout status statefulset/ipso-postgresql --timeout=10m
+  kubectl -n ipso rollout status deploy/ipso-api --timeout=10m
+  kubectl -n ipso rollout status deploy/ipso-worker --timeout=10m
+  kubectl -n ipso rollout status deploy/ipso-front --timeout=10m
 }
 
 refuse_foreign_image() {
@@ -643,15 +775,10 @@ install_from_tar() {
   phase "load images"
   import_layout "${extract}/images/ipso-server" "$server_repo"
   tag_digest "$server_digest" "${server_repo}@${server_digest}"
-  local pg_tag pg_src ngx_tag ngx_src
-  pg_tag=$(tar_repo_tag "${extract}/runtime/postgres.tar")
-  pg_src=$(import_named "${extract}/runtime/postgres.tar" "$pg_tag")
-  tag_exact "$pg_src" "postgres@${pg}"
-  tag_exact "$pg_src" "docker.io/library/postgres@${pg}"
-  ngx_tag=$(tar_repo_tag "${extract}/runtime/nginx.tar")
-  ngx_src=$(import_named "${extract}/runtime/nginx.tar" "$ngx_tag")
-  tag_exact "$ngx_src" "nginxinc/nginx-unprivileged@${ngx}"
-  tag_exact "$ngx_src" "docker.io/nginxinc/nginx-unprivileged@${ngx}"
+  import_sparse_index "${extract}/images/postgres" "$pg" "docker.io/library/postgres" "docker.io/library/postgres@${pg}"
+  tag_exact "docker.io/library/postgres@${pg}" "postgres@${pg}"
+  import_sparse_index "${extract}/images/nginx" "$ngx" "docker.io/nginxinc/nginx-unprivileged" "docker.io/nginxinc/nginx-unprivileged@${ngx}"
+  tag_exact "docker.io/nginxinc/nginx-unprivileged@${ngx}" "nginxinc/nginx-unprivileged@${ngx}"
 
   kubectl create namespace ipso
   local certs dex_config dex_image
@@ -804,7 +931,7 @@ EOF
 
 prepare_stage() {
   mkdir -p "$stage/signatures" "$stage/sbom" "$stage/images" "$stage/chart" \
-    "$stage/runtime" "$stage/deploy/bundle" "$stage/deploy/compose"
+    "$stage/deploy/bundle" "$stage/deploy/compose"
 }
 
 start_registry() {
@@ -832,9 +959,10 @@ stop_registry() {
 pull_pinned() {
   prepare_stage
   # docker pull of an index digest fetches every architecture and does not finish in this job.
+  # These archives live outside the staged tar and feed Syft only; the tar carries signed OCI layouts.
   phase "pull pinned images"
-  bounded 8m crane pull --platform linux/amd64 --format tarball "postgres@${pg}" "${stage}/runtime/postgres.tar"
-  bounded 8m crane pull --platform linux/amd64 --format tarball "nginxinc/nginx-unprivileged@${ngx}" "${stage}/runtime/nginx.tar"
+  bounded 8m crane pull --platform linux/amd64 --format tarball "postgres@${pg}" "${out}/postgres.tar"
+  bounded 8m crane pull --platform linux/amd64 --format tarball "nginxinc/nginx-unprivileged@${ngx}" "${out}/nginx.tar"
 }
 
 build_and_push_server() {
@@ -952,8 +1080,8 @@ sign_and_tar() {
 
   phase "sbom and trusted root"
   write_sbom "docker:${server_repo}:airgap" "${stage}/sbom/ipso-server.cdx.json"
-  write_sbom "docker-archive:${stage}/runtime/postgres.tar" "${stage}/sbom/postgres.cdx.json"
-  write_sbom "docker-archive:${stage}/runtime/nginx.tar" "${stage}/sbom/nginx.cdx.json"
+  write_sbom "docker-archive:${out}/postgres.tar" "${stage}/sbom/postgres.cdx.json"
+  write_sbom "docker-archive:${out}/nginx.tar" "${stage}/sbom/nginx.cdx.json"
   bounded 5m cosign trusted-root create --with-default-services --out "${stage}/trusted-root.json"
 
   sign_one 127.0.0.1:5000/ipso-server "$server_digest" ipso-server
@@ -1079,20 +1207,23 @@ wait_kind() {
 
 run_verify() {
   server_digest=$(cat "$out/server.digest")
-  rm -rf "$extract"
-  mkdir -p "$extract"
-  tar -C "$extract" -xf "$archive"
-  assert_archive
+  # Extract only the signed layouts, bundles, chart archive, and trusted root first,
+  # so unsigned files in the tar are not written to disk before cosign succeeds.
+  extract_archive "$archive" "$extract" signed
   phase "verify"
   verify_offline
+  extract_archive "$archive" "$extract" all
+  assert_archive
   check_pointers
+  touch "$out/verified"
 }
 
 run_install() {
   server_digest=$(cat "$out/server.digest")
-  if [[ ! -d "$extract/images" ]]; then
-    mkdir -p "$extract"
-    tar -C "$extract" -xf "$archive"
+  if [[ ! -f "$out/verified" || ! -d "$extract/images" ]]; then
+    run_verify
+  else
+    check_pointers
   fi
   phase "kind"
   python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
