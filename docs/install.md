@@ -196,8 +196,8 @@ unshare --user --map-root-user --net -- cosign verify-blob \
   manifest.sha256
 cmp -s trusted-root.json ../trusted-root-oob.json
 
-# 2. Extract the remaining regular files after checking tar -tvf (prefer deploy/airgap/ci.sh verify for streaming verification), then check every listed file digest.
-tar --no-same-owner --no-same-permissions -xf ../ipso-airgap.tar
+# 2. Prefer `AIRGAP_ARCHIVE=$PWD/../ipso-airgap.tar AIRGAP_TRUSTED_ROOT=$PWD/../trusted-root-oob.json bash deploy/airgap/ci.sh verify` for streaming extraction; if extracting manually after inspecting `tar -tvf`, extract only the paths listed in the verified manifest and check every digest.
+sed 's/^[0-9a-f]\{64\}  /\.\//' manifest.sha256 | tar --no-same-owner --no-same-permissions --no-recursion -xf ../ipso-airgap.tar -T -
 sha256sum -c manifest.sha256
 
 # 3. Verify image layouts, CycloneDX attestations, and the chart archive offline.
