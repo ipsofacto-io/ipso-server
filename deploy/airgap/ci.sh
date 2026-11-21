@@ -1045,6 +1045,7 @@ wait_health() {
     fi
     sleep 2
   done
+  disown "$pf_pid" 2>/dev/null || true
   kill -KILL -- "-${pf_pid}" 2>/dev/null || kill -KILL "$pf_pid" 2>/dev/null || true
   pf_pid=
   if (( ok != 1 )); then
@@ -1283,7 +1284,8 @@ assert_migrate_and_bootstrap() {
   bounded --stdout "$out/psql.out" 1m kubectl -n ipso exec ipso-postgresql-0 -- \
     env PGPASSWORD="$IPSO_APP_PASSWORD" \
     psql -q --host=127.0.0.1 --username=ipso_app --dbname=ipso --tuples-only --no-align \
-    -c "WITH cfg AS (SELECT set_config('ipso.tenant', '${IPSO_TENANT_ID}', true)) SELECT count(*) FROM tenancy.tenant, cfg"
+    -c "SET ipso.tenant = '${IPSO_TENANT_ID}'" \
+    -c "SELECT count(*) FROM tenancy.tenant"
   seeded=$(tr -d '[:space:]' <"$out/psql.out")
   rm -f "$out/psql.out"
   if [[ "$seeded" != "1" ]]; then
