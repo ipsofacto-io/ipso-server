@@ -39,7 +39,7 @@ identity=$(expected_identity)
 out=${RUNNER_TEMP:-/tmp}/ipso-airgap
 stage=$out/stage
 extract=$out/extract
-archive=$out/ipso-airgap.tar
+archive=${AIRGAP_ARCHIVE:-$out/ipso-airgap.tar}
 kind_pid=
 heartbeat_pid=
 zot_pid=
@@ -1383,9 +1383,39 @@ wait_kind() {
   kind_pid=
 }
 
+verified_server_digest() {
+  python3 - "${extract}/images/ipso-server" <<'PY'
+import json, pathlib, sys
+
+layout = pathlib.Path(sys.argv[1])
+idx = json.loads((layout / "index.json").read_text())
+blobs = layout / "blobs" / "sha256"
+found = []
+for entry in idx.get("manifests") or []:
+    dgst = entry.get("digest", "")
+    if not dgst.startswith("sha256:"):
+        continue
+    blob_path = blobs / dgst.split(":", 1)[1]
+    if not blob_path.is_file():
+        continue
+    doc = json.loads(blob_path.read_text())
+    if "subject" in doc:
+        continue
+    if (doc.get("config") or {}).get("mediaType") == "application/vnd.oci.image.config.v1+json":
+        found.append(dgst)
+unique = sorted(set(found))
+if len(unique) != 1:
+    raise SystemExit(f"expected one verified ipso-server image manifest, got {len(unique)}")
+print(unique[0])
+PY
+}
+
 run_verify() {
-  local home_dir root_file isolated_root
-  server_digest=$(cat "$out/server.digest")
+  local home_dir root_file isolated_root layout_digest
+  if [[ ! -r "$archive" || ! -f "$archive" ]]; then
+    echo "airgap archive is not a readable file: $archive" >&2
+    exit 1
+  fi
   rm -f "$out/verified"
   root_file=$(trusted_root_path)
   extract_bootstrap "$archive" "$extract"
@@ -1399,15 +1429,23 @@ run_verify() {
   verify_offline "$home_dir" "$isolated_root"
   rm -rf "$home_dir"
   assert_archive
+  layout_digest=$(verified_server_digest)
+  if [[ -f "$out/server.digest" ]]; then
+    require_same_digest "$layout_digest" "$(cat "$out/server.digest")" "ipso-server"
+  fi
+  server_digest=$layout_digest
   check_pointers
   touch "$out/verified"
 }
 
 run_install() {
-  server_digest=$(cat "$out/server.digest")
   if [[ ! -f "$out/verified" || ! -d "$extract/images" || "$archive" -nt "$out/verified" ]]; then
     run_verify
   else
+    server_digest=$(verified_server_digest)
+    if [[ -f "$out/server.digest" ]]; then
+      require_same_digest "$server_digest" "$(cat "$out/server.digest")" "ipso-server"
+    fi
     check_pointers
   fi
   phase "kind"
