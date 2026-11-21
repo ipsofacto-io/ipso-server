@@ -26,10 +26,10 @@ require_tools() {
       cmds=(crane python3)
       ;;
     server)
-      cmds=(docker python3 zot)
+      cmds=(curl docker python3 zot)
       ;;
     sign)
-      cmds=(cosign crane docker helm python3 syft zot)
+      cmds=(cosign crane curl docker helm python3 syft zot)
       ;;
     install)
       cmds=(cosign curl docker helm kind kubectl openssl python3 unshare)
@@ -81,6 +81,10 @@ issuer=https://token.actions.githubusercontent.com
 
 expected_identity() {
   local ref='refs/heads/main'
+  if [[ "$mode" == "verify" && -n "$explicit_archive" ]]; then
+    printf '^https://github\\.com/ipsofacto-io/ipso-server/\\.github/workflows/ci\\.yml@%s$\n' "$ref"
+    return
+  fi
   if [[ "${GITHUB_ACTIONS:-}" == "true" && -n "${GITHUB_RUN_ID:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
     if [[ -z "${GITHUB_REPOSITORY:-}" || "${GITHUB_HEAD_REPO:-}" != "${GITHUB_REPOSITORY}" ]]; then
       echo "refusing keyless signing for fork pull request: ${GITHUB_HEAD_REPO:-}" >&2
@@ -104,7 +108,7 @@ expected_identity() {
   printf '^https://github\\.com/ipsofacto-io/ipso-server/\\.github/workflows/ci\\.yml@%s$\n' "$ref"
 }
 
-identity=$(expected_identity)
+identity=
 
 out=${RUNNER_TEMP:-/tmp}/ipso-airgap
 stage=$out/stage
@@ -1452,6 +1456,7 @@ build_and_push_server() {
 }
 
 sign_and_tar() {
+  identity=$(expected_identity)
   server_digest=$(cat "$out/server.digest")
   if ! curl -fsS --max-time 5 \
     -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
@@ -1682,6 +1687,7 @@ PY
 
 run_verify() {
   local isolated_root layout_digest resolved_pins
+  identity=$(expected_identity)
   if [[ ! -r "$archive" || ! -f "$archive" ]]; then
     echo "airgap archive is not a readable file: $archive" >&2
     exit 1
@@ -1713,8 +1719,8 @@ ci_dex_config=${CI_DEX_CONFIG:-$root/deploy/compose/dex.yaml}
 ci_dex_image=
 
 load_ci_test_fixtures() {
-  if [[ "${GITHUB_ACTIONS:-}" != "true" && "${AIRGAP_ALLOW_LOCAL_HARNESS:-}" != "1" ]]; then
-    echo "install and all modes deploy mock local-dev credentials and Dex for CI self-testing; operators use verify (set AIRGAP_ALLOW_LOCAL_HARNESS=1 only on a disposable test host)" >&2
+  if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
+    echo "install and all modes deploy mock local-dev credentials and Dex for CI self-testing; operators use verify" >&2
     exit 1
   fi
   if [[ ! -r "$ci_test_env_file" || ! -r "$ci_dex_config" || ! -r "$root/compose.yaml" ]]; then

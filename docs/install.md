@@ -176,7 +176,7 @@ The front listens on port 8080. There is no default user. The api restarts until
 
 For browser sign-in, set `IPSO_PUBLIC_URL` and `IPSO_LOGIN_PROVIDERS` on the api the way [docs/login.md](login.md) describes. A private CA is a file you mount on the api only, with `SSL_CERT_FILE` pointing at it. That variable replaces the public roots for that process, so the worker does not get it.
 
-`docker compose -f deploy/bundle/compose.yaml down --volumes` removes the database.
+`docker compose -f deploy/bundle/compose.yaml down --volumes` removes the database. For air-gapped hosts, use the digest-pinned `deploy/bundle/compose.yaml` inside the verified `ipso-airgap.tar` below, which has no `build:` stanza.
 
 ## Air-gapped bundle
 
