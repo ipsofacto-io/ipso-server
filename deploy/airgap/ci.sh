@@ -112,20 +112,33 @@ archive=${AIRGAP_ARCHIVE:-$out/ipso-airgap.tar}
 kind_pid=
 heartbeat_pid=
 zot_pid=
+pf_pid=
 verify_home=
 pg=
 ngx=
+schema_version=
 
 pinned_digest() {
   local image=$1 compose_file=${2:-"$root/compose.yaml"}
   sed -n "s#.*image: ${image}:.*@##p" "$compose_file" | head -1
 }
 
+repo_schema_version() {
+  find "$root/internal/migrate/migrations" -name '*.sql' -print \
+    | sed -n 's#.*/0*\([0-9][0-9]*\)_.*#\1#p' \
+    | sort -n | tail -1
+}
+
 require_pins() {
   pg=$(pinned_digest 'postgres' "$root/compose.yaml")
   ngx=$(pinned_digest 'nginxinc/nginx-unprivileged' "$root/compose.yaml")
+  schema_version=$(repo_schema_version)
   if [[ ! "$pg" =~ ^sha256:[0-9a-f]{64}$ || ! "$ngx" =~ ^sha256:[0-9a-f]{64}$ ]]; then
     echo "could not read the pinned postgres and nginx digests" >&2
+    exit 1
+  fi
+  if [[ ! "$schema_version" =~ ^[1-9][0-9]*$ ]]; then
+    echo "could not read expected goose schema version" >&2
     exit 1
   fi
   grep -q "$pg" "$root/charts/ipso/values.yaml"
@@ -161,9 +174,9 @@ dump_quick() {
 
 cleanup() {
   local code=$? pid del
-  for pid in "$heartbeat_pid" "$kind_pid" "$zot_pid"; do
+  for pid in "$heartbeat_pid" "$kind_pid" "$zot_pid" "$pf_pid"; do
     if [[ -n "$pid" ]]; then
-      kill -KILL "$pid" 2>/dev/null || true
+      kill -KILL -- "-${pid}" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
     fi
   done
   if [[ -n "$verify_home" ]]; then
@@ -294,7 +307,28 @@ bounded() {
   if [[ "$out_file" == "$out/bounded.log" ]]; then
     python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" >"$out/bounded.log" 2>&1 &
   else
-    python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" >"$out_file" 2>"$out/bounded.log" &
+    python3 -c '
+import os, subprocess, sys
+os.setsid()
+cap = 65536
+out_path, err_path = sys.argv[1], sys.argv[2]
+with open(err_path, "wb") as err_f, open(out_path, "wb") as out_f:
+    proc = subprocess.Popen(sys.argv[3:], stdout=subprocess.PIPE, stderr=err_f)
+    assert proc.stdout is not None
+    total = 0
+    while True:
+        chunk = proc.stdout.read(8192)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > cap:
+            proc.kill()
+            proc.wait()
+            err_f.write(b"bounded --stdout exceeded 64 KiB cap\n")
+            raise SystemExit(1)
+        out_f.write(chunk)
+    raise SystemExit(proc.wait())
+' "$out_file" "$out/bounded.log" "$@" &
   fi
   pid=$!
   while [[ -d "/proc/${pid}" ]]; do
@@ -759,14 +793,25 @@ verify_offline() {
 }
 
 check_pointers() {
-  python3 - "$extract" "$server_digest" "${pg:-}" "${ngx:-}" <<'PY'
+  local expected_pg="" expected_ngx="" expected_schema=""
+  if [[ -f "$out/server.digest" ]]; then
+    expected_pg=${pg:-}
+    expected_ngx=${ngx:-}
+    expected_schema=${schema_version:-}
+  fi
+  python3 - "$extract" "$server_digest" "$expected_pg" "$expected_ngx" "$expected_schema" <<'PY'
 import hashlib, json, pathlib, re, sys, tarfile
 
 root = pathlib.Path(sys.argv[1])
-digest, want_pg, want_ngx = sys.argv[2:]
+digest, want_pg, want_ngx, want_schema = sys.argv[2:]
 values = (root / "airgap-values.yaml").read_text()
 if f'digest: "{digest}"' not in values:
     raise SystemExit("airgap-values.yaml does not name the signed server digest")
+schema_matches = re.findall(r"^# schemaVersion: ([1-9][0-9]*)$", values, flags=re.MULTILINE)
+if len(schema_matches) != 1:
+    raise SystemExit("airgap-values.yaml is missing the single # schemaVersion header")
+if want_schema and schema_matches[0] != want_schema:
+    raise SystemExit(f"schemaVersion mismatch: bundle has {schema_matches[0]}, repo has {want_schema}")
 body = (root / "deploy/bundle/compose.yaml").read_text()
 if f"ghcr.io/ipsofacto-io/ipso-server@{digest}" not in body:
     raise SystemExit("the Compose file does not name the signed server digest")
@@ -985,9 +1030,11 @@ cut_egress() {
 }
 
 wait_health() {
-  local pf code ok
-  kubectl -n ipso port-forward svc/ipso-front 18080:8080 >/tmp/ipso-airgap-port-forward.log 2>&1 &
-  pf=$!
+  local code ok
+  : >"$out/port-forward.log"
+  python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
+    kubectl -n ipso port-forward svc/ipso-front 18080:8080 >"$out/port-forward.log" 2>&1 &
+  pf_pid=$!
   ok=0
   for _ in $(seq 1 60); do
     code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/healthz || true)
@@ -997,11 +1044,11 @@ wait_health() {
     fi
     sleep 2
   done
-  kill "$pf" 2>/dev/null || true
-  wait "$pf" 2>/dev/null || true
+  kill -KILL -- "-${pf_pid}" 2>/dev/null || kill -KILL "$pf_pid" 2>/dev/null || true
+  pf_pid=
   if (( ok != 1 )); then
     echo "the front did not return 204 from /healthz" >&2
-    cat /tmp/ipso-airgap-port-forward.log >&2 || true
+    cat "$out/port-forward.log" >&2 || true
     exit 1
   fi
 }
@@ -1202,37 +1249,14 @@ EOF
   refuse_foreign_image
 }
 
-verified_image_schema_version() {
-  python3 - "${extract}/images/ipso-server" "$server_digest" <<'PY'
-import json, pathlib, re, sys, tarfile
-
-blobs = pathlib.Path(sys.argv[1]) / "blobs" / "sha256"
-manifest_digest = sys.argv[2]
-doc = json.loads((blobs / manifest_digest.split(":", 1)[1]).read_text())
-for layer in reversed(doc.get("layers") or []):
-    layer_path = blobs / layer["digest"].split(":", 1)[1]
-    with tarfile.open(layer_path, mode="r:*") as tar:
-        for member in tar.getmembers():
-            rel = member.name.lstrip("./")
-            if rel == "usr/local/bin/.wh.ipso-server":
-                raise SystemExit("usr/local/bin/ipso-server was whiteout-removed in image layer")
-            if rel != "usr/local/bin/ipso-server":
-                continue
-            if member.issym() or member.islnk() or not member.isfile():
-                raise SystemExit("usr/local/bin/ipso-server in image layer is not a regular file")
-            if member.size > 512 * 1024 * 1024:
-                raise SystemExit("usr/local/bin/ipso-server exceeds 512 MiB cap")
-            src = tar.extractfile(member)
-            if src is None:
-                raise SystemExit("could not read usr/local/bin/ipso-server from image layer")
-            data = src.read(512 * 1024 * 1024 + 1)
-            nums = [int(m.group(1)) for m in re.finditer(rb"([0-9]{5})_[a-z0-9_]+\.sql", data)]
-            if not nums:
-                raise SystemExit("no embedded goose migrations found in usr/local/bin/ipso-server")
-            print(max(nums))
-            raise SystemExit(0)
-raise SystemExit("usr/local/bin/ipso-server not found in verified ipso-server image layers")
-PY
+verified_bundle_schema_version() {
+  local want
+  want=$(sed -n 's/^# schemaVersion: \([1-9][0-9]*\)$/\1/p' "${extract}/airgap-values.yaml")
+  if [[ ! "$want" =~ ^[1-9][0-9]*$ ]]; then
+    echo "verified airgap-values.yaml is missing a valid # schemaVersion header" >&2
+    exit 1
+  fi
+  printf '%s\n' "$want"
 }
 
 assert_migrate_and_bootstrap() {
@@ -1250,9 +1274,9 @@ assert_migrate_and_bootstrap() {
     echo "migrate hook did not apply schema migrations (got=${got})" >&2
     exit 1
   fi
-  want=$(verified_image_schema_version)
+  want=$(verified_bundle_schema_version)
   if [[ "$got" != "$want" ]]; then
-    echo "schema after air-gapped install is ${got}, want ${want} from verified image" >&2
+    echo "schema after air-gapped install is ${got}, want ${want} from signed bundle" >&2
     exit 1
   fi
   bounded --stdout "$out/psql.out" 1m kubectl -n ipso exec ipso-postgresql-0 -- \
@@ -1481,6 +1505,7 @@ PY
   cp deploy/compose/postgres-init.sh "${stage}/deploy/compose/postgres-init.sh"
   cp deploy/compose/nginx.conf "${stage}/deploy/compose/nginx.conf"
   cat >"${stage}/airgap-values.yaml" <<EOF
+# schemaVersion: ${schema_version}
 image:
   repository: ${server_repo}
   digest: "${server_digest}"
