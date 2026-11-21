@@ -386,27 +386,33 @@ index = {
 PY
 }
 
+# docker run --network none hung in this step and kept the runner from exiting.
+# Unshare the network namespace via sudo when available, or via a user namespace
+# otherwise. Both namespaces start with no interfaces up, so any socket fails.
 offline() {
-  docker run --rm --network none \
-    --tmpfs /tmp \
-    -e HOME=/tmp \
-    -v "$(command -v cosign)":/cosign:ro \
-    -v "${extract}":/work:ro \
-    --entrypoint /cosign \
-    "${server_repo}:airgap" \
-    "$@"
+  local home_dir=$1
+  shift
+  local cosign_bin
+  cosign_bin=$(command -v cosign)
+  if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    bounded 2m sudo env HOME="$home_dir" unshare --net -- "$cosign_bin" "$@"
+  else
+    bounded 2m env HOME="$home_dir" unshare --user --map-root-user --net -- "$cosign_bin" "$@"
+  fi
 }
 
 verify_offline() {
-  local name digest
+  local name home_dir
   chmod -R a+rX "$extract"
+  home_dir=$(mktemp -d)
   for name in ipso-server postgres nginx; do
-    offline verify --local-image "/work/images/${name}" \
-      --trusted-root /work/trusted-root.json \
+    phase "verify ${name}"
+    offline "$home_dir" verify --local-image "${extract}/images/${name}" \
+      --trusted-root "${extract}/trusted-root.json" \
       --certificate-identity-regexp "$identity" \
       --certificate-oidc-issuer "$issuer"
-    offline verify-attestation --local-image "/work/images/${name}" --type cyclonedx \
-      --trusted-root /work/trusted-root.json \
+    offline "$home_dir" verify-attestation --local-image "${extract}/images/${name}" --type cyclonedx \
+      --trusted-root "${extract}/trusted-root.json" \
       --certificate-identity-regexp "$identity" \
       --certificate-oidc-issuer "$issuer"
   done
@@ -416,12 +422,14 @@ verify_offline() {
     echo "the tar has no chart archive" >&2
     exit 1
   fi
-  offline verify-blob \
-    --bundle /work/signatures/chart.sigstore.json \
-    --trusted-root /work/trusted-root.json \
+  phase "verify chart"
+  offline "$home_dir" verify-blob \
+    --bundle "${extract}/signatures/chart.sigstore.json" \
+    --trusted-root "${extract}/trusted-root.json" \
     --certificate-identity-regexp "$identity" \
     --certificate-oidc-issuer "$issuer" \
-    "/work/${chart#"${extract}/"}"
+    "$chart"
+  rm -rf "$home_dir"
 }
 
 check_pointers() {
