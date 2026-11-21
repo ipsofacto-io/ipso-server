@@ -35,6 +35,8 @@ ipso-server runtasks
 | `IPSO_RUNTASK_PLAN_HOSTS` | Optional. Comma-separated hosts a plan download may redirect to, `archivist.terraform.io` by default. Set it with `IPSO_RUNTASK_HOST` |
 | `IPSO_LISTEN_ADDR` | Listen address, `:8080` by default |
 
+For a customer who keeps plans inside their own network, the enterprise binary splits this service in two: a gateway in the control plane that checks the signature and queues the task, and an agent in the customer cluster that downloads the plan, evaluates it with its own bundle, and reports to the run (ADR-0144). The package `runtask` holds both halves. The control plane never reads the plan.
+
 The listener speaks plain HTTP, so put TLS and a rate limit in front of it. HCP Terraform has to reach the host over HTTPS. `GET /healthz` answers 204. It says nothing about HCP Terraform.
 
 ## Create the run task

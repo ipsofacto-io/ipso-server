@@ -34,6 +34,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
 	"github.com/ipsofacto-io/ipso-server/internal/webapp"
 	"github.com/ipsofacto-io/ipso-server/internal/worker"
+	"github.com/ipsofacto-io/ipso-server/runtask"
 	"github.com/ipsofacto-io/ipso-server/trackers"
 )
 
@@ -106,7 +107,7 @@ type deps struct {
 	serve   func(ctx context.Context, listener net.Listener, cfg integrations.Config) error
 	// runTasks and loadBundle serve the run task command. Tests inject both.
 	runTasks   func(ctx context.Context, listener net.Listener, cfg integrations.RunTaskConfig) error
-	loadBundle func(layout, digest, publicKey string) (integrations.PlanEvaluator, error)
+	loadBundle func(layout, digest, publicKey string) (runtask.PlanEvaluator, error)
 	// openDB and controlPlane serve --role=api. Tests inject both.
 	openDB       func(databaseURL string) (*sql.DB, error)
 	controlPlane func(ctx context.Context, listener net.Listener, cfg controlplane.Config) error
@@ -168,7 +169,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		unbindInstallation:   tenancy.UnbindInstallation,
 		requireInstallations: tenancy.RequireInstallationLookup,
 		verifyLog:            identity.VerifyLog,
-		loadBundle: func(layout, digest, publicKey string) (integrations.PlanEvaluator, error) {
+		loadBundle: func(layout, digest, publicKey string) (runtask.PlanEvaluator, error) {
 			return plancheck.Load(layout, digest, publicKey)
 		},
 	})
@@ -215,6 +216,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 		fprintln(stdout, helpText())
 		return 0
 	default:
+		// An enterprise binary adds commands. A name of this process is answered above, so a registered
+		// command never replaces one.
+		if command, ok := eehooks.Command(args[0]); ok {
+			return command(ctx, args[1:], d.getenv, stderr)
+		}
 		fprintf(stderr, "unknown command %q\n%s\n", args[0], usage)
 		return 2
 	}

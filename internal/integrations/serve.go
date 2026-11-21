@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/ipsofacto-io/ipso-server/internal/httpserve"
+	"github.com/ipsofacto-io/ipso-server/runtask"
 )
 
 // minSecretBytes refuses a webhook secret short enough to guess.
@@ -43,17 +44,17 @@ func ServeRunTasks(ctx context.Context, listener net.Listener, cfg RunTaskConfig
 	if cfg.Bundle == nil {
 		return errors.New("the run task service has no policy bundle")
 	}
-	if cfg.APIHost != "" && !validHost.MatchString(cfg.APIHost) {
+	if cfg.APIHost != "" && !runtask.ValidHost(cfg.APIHost) {
 		return errors.New("the API host is not a host name")
 	}
 	for _, host := range cfg.PlanHosts {
-		if !validHost.MatchString(host) {
+		if !runtask.ValidHost(host) {
 			return errors.New("a plan host is not a host name")
 		}
 	}
 	service := NewRunTaskService(cfg)
 	mux := http.NewServeMux()
-	mux.Handle(runTaskPath, service.Handler())
+	mux.Handle(runtask.Path, service.Handler())
 	return listen(ctx, listener, mux, service.Run)
 }
 

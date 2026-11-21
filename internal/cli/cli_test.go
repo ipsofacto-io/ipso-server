@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/pem"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -19,10 +20,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ipsofacto-io/ipso-server/eehooks"
 	"github.com/ipsofacto-io/ipso-server/internal/controlplane"
 	"github.com/ipsofacto-io/ipso-server/internal/integrations"
 	"github.com/ipsofacto-io/ipso-server/internal/migrate"
 	"github.com/ipsofacto-io/ipso-server/internal/worker"
+	"github.com/ipsofacto-io/ipso-server/runtask"
 )
 
 func env(values map[string]string) func(string) string {
@@ -60,6 +63,35 @@ func TestUsage(t *testing.T) {
 				t.Errorf("stderr = %q, want it to contain %q", stderr, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestARegisteredCommandRunsWithTheRestOfTheArguments(t *testing.T) {
+	eehooks.ResetForTest()
+	t.Cleanup(eehooks.ResetForTest)
+	var gotArgs []string
+	var gotEnv string
+	eehooks.RegisterCommand("dataplane", func(_ context.Context, args []string, getenv func(string) string, stderr io.Writer) int {
+		gotArgs, gotEnv = args, getenv("IPSO_X")
+		_, _ = io.WriteString(stderr, "ran")
+		return 7
+	})
+	code, _, stderr := invoke(t, deps{getenv: env(map[string]string{"IPSO_X": "v"})}, "dataplane", "a", "b")
+	if code != 7 || stderr != "ran" || strings.Join(gotArgs, ",") != "a,b" || gotEnv != "v" {
+		t.Fatalf("code %d stderr %q args %v env %q", code, stderr, gotArgs, gotEnv)
+	}
+}
+
+func TestARegisteredCommandNeverReplacesOneOfTheProcess(t *testing.T) {
+	eehooks.ResetForTest()
+	t.Cleanup(eehooks.ResetForTest)
+	eehooks.RegisterCommand("migrate", func(context.Context, []string, func(string) string, io.Writer) int {
+		t.Error("a registered command replaced migrate")
+		return 0
+	})
+	code, _, stderr := invoke(t, deps{getenv: env(nil)}, "migrate", "up")
+	if code != 2 || !strings.Contains(stderr, "usage: ipso-server migrate") {
+		t.Fatalf("code %d stderr %q", code, stderr)
 	}
 }
 
@@ -423,7 +455,7 @@ func TestRunTasksReadsItsConfiguration(t *testing.T) {
 	t.Run("a bundle that does not verify stops the start", func(t *testing.T) {
 		d := deps{
 			getenv: env(complete),
-			loadBundle: func(string, string, string) (integrations.PlanEvaluator, error) {
+			loadBundle: func(string, string, string) (runtask.PlanEvaluator, error) {
 				return nil, errors.New("bundle-unsigned")
 			},
 			runTasks: func(context.Context, net.Listener, integrations.RunTaskConfig) error {
@@ -441,7 +473,7 @@ func TestRunTasksReadsItsConfiguration(t *testing.T) {
 		var layout, digest, key string
 		d := deps{
 			getenv: env(complete),
-			loadBundle: func(gotLayout, gotDigest, gotKey string) (integrations.PlanEvaluator, error) {
+			loadBundle: func(gotLayout, gotDigest, gotKey string) (runtask.PlanEvaluator, error) {
 				layout, digest, key = gotLayout, gotDigest, gotKey
 				return nil, nil
 			},

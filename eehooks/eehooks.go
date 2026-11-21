@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -23,6 +24,9 @@ const FeatureTrackers = "connectors.trackers"
 
 // FeatureChat is the feature key that gates outbound Slack and Teams digests (ADR-0138).
 const FeatureChat = "connectors.chat"
+
+// FeatureDataPlane is the feature key that gates the BYOC data-plane gateway (ADR-0144).
+const FeatureDataPlane = "byoc.agent"
 
 // Gate says whether a feature key is allowed for this process.
 type Gate interface {
@@ -103,6 +107,31 @@ func LookupKind(kind string) (KindFactory, bool) {
 	defer mu.RUnlock()
 	factory, ok := kinds[kind]
 	return factory, ok
+}
+
+// CommandFunc runs an enterprise command and returns its exit code. args follow the command name. getenv
+// is the environment the process was given, so a command reads nothing else.
+type CommandFunc func(ctx context.Context, args []string, getenv func(string) string, stderr io.Writer) int
+
+var commands = map[string]CommandFunc{}
+
+// RegisterCommand adds a command to the process. The community binary registers none. A command whose name
+// is one of the process's own is never reached, because those are answered first.
+func RegisterCommand(name string, fn CommandFunc) {
+	mu.Lock()
+	defer mu.Unlock()
+	if name == "" || fn == nil {
+		return
+	}
+	commands[name] = fn
+}
+
+// Command returns the command registered under name.
+func Command(name string) (CommandFunc, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	fn, ok := commands[name]
+	return fn, ok
 }
 
 // User is one SCIM user. ID is the principal id and the SCIM id.
@@ -478,13 +507,14 @@ func DeliverChat(ctx context.Context, db *sql.DB, tenant uuid.UUID) error {
 	return fn(ctx, db, tenant)
 }
 
-// ResetForTest clears the gate, kinds, directory, routes, mounts, and connector hooks. A test that
+// ResetForTest clears the gate, kinds, commands, directory, routes, mounts, and connector hooks. A test that
 // changes them calls it from t.Cleanup.
 func ResetForTest() {
 	mu.Lock()
 	defer mu.Unlock()
 	gate = denyAll{}
 	kinds = map[string]KindFactory{}
+	commands = map[string]CommandFunc{}
 	directory = nil
 	guarded = nil
 	mounts = nil
