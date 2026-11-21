@@ -478,18 +478,28 @@ offline() {
 }
 
 trusted_root_path() {
+  local candidate
   if [[ -n "${AIRGAP_TRUSTED_ROOT:-}" ]]; then
     if [[ ! -r "$AIRGAP_TRUSTED_ROOT" || ! -f "$AIRGAP_TRUSTED_ROOT" ]]; then
       echo "AIRGAP_TRUSTED_ROOT is not a readable file: $AIRGAP_TRUSTED_ROOT" >&2
       exit 1
     fi
-    printf '%s\n' "$AIRGAP_TRUSTED_ROOT"
+    candidate="$AIRGAP_TRUSTED_ROOT"
   elif [[ -r "$out/trusted-root.json" && -f "$out/trusted-root.json" ]]; then
-    printf '%s\n' "$out/trusted-root.json"
+    candidate="$out/trusted-root.json"
   else
     echo "set AIRGAP_TRUSTED_ROOT to an out-of-band Sigstore trusted-root.json before running verify" >&2
     exit 1
   fi
+  python3 - "$candidate" "$extract" <<'PY'
+import pathlib, sys
+
+root_path = pathlib.Path(sys.argv[1]).resolve()
+extract_dir = pathlib.Path(sys.argv[2]).resolve()
+if root_path == extract_dir or extract_dir in root_path.parents:
+    raise SystemExit("out-of-band trusted root must not resolve inside the archive extraction directory")
+print(root_path)
+PY
 }
 
 extract_bootstrap() {
@@ -630,6 +640,7 @@ verify_manifest_offline() {
 verify_offline() {
   local home_dir=$1 root_file=$2 name
   chmod -R a+rX "$extract"
+  assert_offline "$home_dir"
   for name in ipso-server postgres nginx; do
     phase "verify ${name}"
     offline "$home_dir" verify --local-image "${extract}/images/${name}" \
