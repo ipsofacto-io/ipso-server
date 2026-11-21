@@ -505,11 +505,16 @@ offline() {
 
 trusted_root_path() {
   if [[ -n "${AIRGAP_TRUSTED_ROOT:-}" ]]; then
+    if [[ ! -r "$AIRGAP_TRUSTED_ROOT" || ! -f "$AIRGAP_TRUSTED_ROOT" ]]; then
+      echo "AIRGAP_TRUSTED_ROOT is not a readable file: $AIRGAP_TRUSTED_ROOT" >&2
+      exit 1
+    fi
     printf '%s\n' "$AIRGAP_TRUSTED_ROOT"
-  elif [[ -f "$out/trusted-root.json" ]]; then
+  elif [[ -r "$out/trusted-root.json" && -f "$out/trusted-root.json" ]]; then
     printf '%s\n' "$out/trusted-root.json"
   else
-    printf '%s\n' "${extract}/trusted-root.json"
+    echo "set AIRGAP_TRUSTED_ROOT to an out-of-band Sigstore trusted-root.json before running verify" >&2
+    exit 1
   fi
 }
 
@@ -566,9 +571,12 @@ listing_out = pathlib.Path(sys.argv[3])
 oob_root = pathlib.Path(sys.argv[4])
 bootstrap = {"trusted-root.json", "manifest.sha256", "signatures/manifest.sigstore.json"}
 
-if oob_root.resolve() != (dest / "trusted-root.json").resolve():
-    if (dest / "trusted-root.json").read_bytes() != oob_root.read_bytes():
-        raise SystemExit("embedded trusted-root.json does not match out-of-band trusted root")
+dest_root = (dest / "trusted-root.json").resolve()
+oob_resolved = oob_root.resolve()
+if oob_resolved == dest_root or dest in oob_resolved.parents:
+    raise SystemExit("out-of-band trusted root must not resolve inside the archive extraction directory")
+if dest_root.read_bytes() != oob_resolved.read_bytes():
+    raise SystemExit("embedded trusted-root.json does not match out-of-band trusted root")
 
 expected = {}
 line_re = re.compile(r"^([0-9a-f]{64})  (.+)$")
@@ -1395,17 +1403,19 @@ wait_kind() {
 }
 
 run_verify() {
-  local home_dir root_file
+  local home_dir root_file isolated_root
   server_digest=$(cat "$out/server.digest")
   rm -f "$out/verified"
-  extract_bootstrap "$archive" "$extract"
   root_file=$(trusted_root_path)
-  chmod a+r "$root_file"
+  extract_bootstrap "$archive" "$extract"
   home_dir=$(mktemp -d)
+  isolated_root="${home_dir}/trusted-root.json"
+  cp "$root_file" "$isolated_root"
+  chmod 0644 "$isolated_root"
   phase "verify"
-  verify_manifest_offline "$home_dir" "$root_file"
+  verify_manifest_offline "$home_dir" "$isolated_root"
   extract_verified_archive "$archive" "$extract" "$root_file"
-  verify_offline "$home_dir" "$root_file"
+  verify_offline "$home_dir" "$isolated_root"
   rm -rf "$home_dir"
   assert_archive
   check_pointers
