@@ -172,8 +172,61 @@ docker compose -f deploy/bundle/compose.yaml --env-file deploy/bundle/.env up --
 docker compose -f deploy/bundle/compose.yaml --env-file deploy/bundle/.env --profile bootstrap run --rm bootstrap
 ```
 
+The repository `deploy/bundle/compose.yaml` above builds the server image locally with `--build`; for air-gapped hosts, use the digest-pinned `deploy/bundle/compose.yaml` inside the verified `ipso-airgap.tar` in [Air-gapped bundle](#air-gapped-bundle), which has no `build:` stanza.
+
 The front listens on port 8080. There is no default user. The api restarts until the issuer answers and the bootstrap command has created the tenant. PostgreSQL is not published on the host.
 
 For browser sign-in, set `IPSO_PUBLIC_URL` and `IPSO_LOGIN_PROVIDERS` on the api the way [docs/login.md](login.md) describes. A private CA is a file you mount on the api only, with `SSL_CERT_FILE` pointing at it. That variable replaces the public roots for that process, so the worker does not get it.
 
 `docker compose -f deploy/bundle/compose.yaml down --volumes` removes the database.
+
+## Air-gapped bundle
+
+`ci / airgap` builds `ghcr.io/ipsofacto-io/ipso-server` from this repository and packs it with the PostgreSQL and nginx digests the chart already pins, the packaged chart, and `deploy/bundle` ([ADR-0143](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0143-air-gapped-bundle-manifest-signature.md)). The tar also has a CycloneDX SBOM for each image, a sigstore bundle for each signature and each SBOM attestation, a signed `manifest.sha256` (`signatures/manifest.sigstore.json`) covering every non-bootstrap file in the tar (every file except `manifest.sha256` and `signatures/manifest.sigstore.json`, including `trusted-root.json`, the SBOMs, and the image and chart `.sigstore.json` bundles), the public Sigstore trusted root captured when the tar was built, and `airgap-values.yaml`, which sets only `image.digest`. Dex and the kind node are not in the tar. The job signs with keyless cosign 3.1.4, does not push to GHCR, and uploads the `ipso-airgap` artifact only on `push` to `main`. Publishing `oci://ghcr.io/ipsofacto-io/charts/ipso` stays the release workflow.
+
+The image signature covers the manifest digest, and `signatures/manifest.sigstore.json` covers `manifest.sha256` (`trusted-root.json`, `airgap-values.yaml`, `deploy/bundle/compose.yaml`, `deploy/bundle/.env.example`, `deploy/compose/postgres-init.sh`, `deploy/compose/nginx.conf`, the SBOMs, `chart/ipso-*.tgz`, the image and chart `.sigstore.json` bundles, and the image layout blobs). The certificate is the `ci` workflow on `refs/heads/main` in `ipsofacto-io/ipso-server`, issued by `https://token.actions.githubusercontent.com` (same-repository `pull_request` and `merge_group` CI self-tests sign against that run's exact PR or merge-queue ref and upload no artifact). In production, fetch `trusted-root-oob.json` out of band on an online workstation from Sigstore TUF with `cosign trusted-root create --with-default-services --out trusted-root-oob.json && sha256sum trusted-root-oob.json > trusted-root-oob.json.sha256`, verify `sha256sum -c trusted-root-oob.json.sha256` on the air-gapped host after media transfer, and keep `trusted-root-oob.json` outside the extraction directory, inspect `tar -tf ipso-airgap.tar` for unexpected paths or non-regular entries, extract only `manifest.sha256` and `signatures/manifest.sigstore.json` first (at most 4 MiB each), verify `manifest.sha256` offline inside `unshare --net` against `trusted-root-oob.json`, and then extract and verify the remaining regular files (including `trusted-root.json`) against `manifest.sha256` (or run `AIRGAP_ARCHIVE=$PWD/ipso-airgap.tar AIRGAP_TRUSTED_ROOT=$PWD/trusted-root-oob.json AIRGAP_TRUSTED_ROOT_SHA256=$(awk '{print $1}' trusted-root-oob.json.sha256) bash deploy/airgap/ci.sh verify`, which verifies `AIRGAP_TRUSTED_ROOT` against `AIRGAP_TRUSTED_ROOT_SHA256` before bootstrap extraction) before checking the image layouts and chart archive against `trusted-root-oob.json`. PostgreSQL and nginx are the pinned index digests, signed by that workflow, and `images/postgres` and `images/nginx` are sparse OCI layouts carrying each signed index, its linux/amd64 manifest, config, and layers, and the referrer bundles. Also check after verification that `airgap-values.yaml` and `deploy/bundle/compose.yaml` name the server digest `cosign verify` reported for `images/ipso-server`.
+
+```sh
+# 0. Verify the external TUF root across sneakernet transfer; keep trusted-root-oob.json outside airgap-extract.
+sha256sum -c trusted-root-oob.json.sha256
+
+# 1. Extract only the two bootstrap files into a fresh directory.
+mkdir airgap-extract && cd airgap-extract
+tar --no-same-owner --no-same-permissions -xf ../ipso-airgap.tar manifest.sha256 signatures/manifest.sigstore.json
+unshare --user --map-root-user --net -- cosign verify-blob \
+  --bundle signatures/manifest.sigstore.json \
+  --trusted-root ../trusted-root-oob.json \
+  --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@refs/heads/main$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  manifest.sha256
+
+# 2. If you transferred deploy/airgap/ci.sh from a verified checkout of the matching git commit alongside the archive (ci.sh is not packaged inside ipso-airgap.tar), prefer `AIRGAP_ARCHIVE=$PWD/../ipso-airgap.tar AIRGAP_TRUSTED_ROOT=$PWD/../trusted-root-oob.json AIRGAP_TRUSTED_ROOT_SHA256=$(awk '{print $1}' ../trusted-root-oob.json.sha256) bash deploy/airgap/ci.sh verify` for streaming extraction; otherwise run the manual `cosign` steps here after inspecting `tar -tvf`, extracting only the canonical relative paths listed in the verified manifest and checking every digest.
+sed 's/^[0-9a-f]\{64\}  //' manifest.sha256 > ../manifest.files
+tar --no-same-owner --no-same-permissions --no-recursion -xf ../ipso-airgap.tar -T ../manifest.files
+rm -f ../manifest.files
+sha256sum -c manifest.sha256
+
+# 3. Verify image layouts, CycloneDX attestations, and the chart archive offline against ../trusted-root-oob.json (never pass the extracted in-tar trusted-root.json to --trusted-root).
+unshare --user --map-root-user --net -- cosign verify --local-image images/ipso-server \
+  --trusted-root ../trusted-root-oob.json \
+  --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@refs/heads/main$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+unshare --user --map-root-user --net -- cosign verify-attestation --local-image images/ipso-server --type cyclonedx \
+  --trusted-root ../trusted-root-oob.json \
+  --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@refs/heads/main$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+unshare --user --map-root-user --net -- cosign verify-blob --bundle signatures/chart.sigstore.json \
+  --trusted-root ../trusted-root-oob.json \
+  --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@refs/heads/main$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  chart/ipso-*.tgz
+```
+
+Repeat `verify` and `verify-attestation` with `images/postgres` and `images/nginx` (the v1 air-gapped tar ships `linux/amd64` container layers). Load `images/ipso-server`, `images/postgres`, and `images/nginx` into the cluster, and tag `repository@digest` for the server digest in `airgap-values.yaml` and for the PostgreSQL and nginx index digests in the chart. When importing `images/ipso-server` with `ctr`, pass `--base-name ghcr.io/ipsofacto-io/ipso-server --digests`; when importing `images/postgres` and `images/nginx`, replace `index.json` in the import stream with `blobs/sha256/<index-digest>` and pass `--index-name <repository>@<index-digest> --platform linux/amd64` (as `deploy/airgap/ci.sh` does) so containerd stores the exact signed index digest. With registry egress closed:
+
+```sh
+helm upgrade --install ipso chart/ipso-*.tgz --namespace ipso \
+  -f airgap-values.yaml -f your-values.yaml
+```
+
+`your-values.yaml` names the Secret, the tenant, and the issuer, as in the chart section above (`deploy/airgap/ci.sh` is a repository script outside `ipso-airgap.tar`: `verify` is the standalone operator verifier requiring only `cosign`, `python3`, and `unshare`, whereas `install` is a CI-only `kind` and Dex self-test harness that blocks TCP 80 and 443 on the test node; production air-gapped environments must enforce full perimeter network isolation independently). The Compose file in the tar has no build. Load those same three runnable images into Docker and start it with `--env-file deploy/bundle/.env`.
