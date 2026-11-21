@@ -797,10 +797,12 @@ pull_pinned() {
 pack() {
   phase "build server image"
   bounded 8m docker build --provenance=false --sbom=false -t "${server_repo}:airgap" "$root"
-  # docker save emits a schema 2 manifest. zot converts it. docker push is not used.
+  # A schema 2 upload makes zot convert the manifest, and that conversion kept the
+  # job from exiting. BuildKit pushes OCI over HTTP, which zot stores as-is.
   phase "push server image"
-  bounded 8m docker save -o "${out}/server.tar" "${server_repo}:airgap"
-  bounded 8m crane push "${out}/server.tar" 127.0.0.1:5000/ipso-server:airgap
+  bounded 8m docker build --provenance=false --sbom=false \
+    --output "type=registry,name=127.0.0.1:5000/ipso-server:airgap,oci-mediatypes=true,insecure=true" \
+    "$root"
   server_digest=$(digest_of 127.0.0.1:5000/ipso-server:airgap)
   publish_pinned "postgres@${pg}" 127.0.0.1:5000/postgres "$pg" postgres
   publish_pinned "nginxinc/nginx-unprivileged@${ngx}" 127.0.0.1:5000/nginx "$ngx" nginx
@@ -926,13 +928,11 @@ wait_kind() {
 }
 
 phase "registry"
-# docker save emits a schema 2 manifest. zot converts that to OCI on ingest.
-# The upload is crane, not docker push: that client wedged the daemon here.
 cat >"$out/zot-config.json" <<'EOF'
 {
   "distSpecVersion": "1.1.1",
   "storage": {"rootDirectory": "/tmp/ipso-airgap-zot"},
-  "http": {"address": "127.0.0.1", "port": "5000", "compat": ["docker2s2"]},
+  "http": {"address": "127.0.0.1", "port": "5000"},
   "log": {"level": "info"}
 }
 EOF
