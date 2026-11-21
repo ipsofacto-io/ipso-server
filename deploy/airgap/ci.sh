@@ -1380,6 +1380,15 @@ PY
   bounded 2m cosign sign-blob --yes \
     --bundle "${stage}/signatures/manifest.sigstore.json" \
     "${stage}/manifest.sha256"
+  python3 - "$stage" <<'PY'
+import pathlib, sys
+
+stage = pathlib.Path(sys.argv[1])
+for rel in ("manifest.sha256", "signatures/manifest.sigstore.json"):
+    size = (stage / rel).stat().st_size
+    if size > 4 * 1024 * 1024:
+        raise SystemExit(f"bootstrap file exceeds 4 MiB cap: {rel} ({size} bytes)")
+PY
 
   tar -C "$stage" -cf "$archive" .
   stop_registry
@@ -1414,7 +1423,7 @@ wait_kind() {
       break
     fi
     if (( waited >= 120 )); then
-      echo "kind did not finish within 10 minutes" >&2
+      echo "kind create cluster did not finish after 120 checks (~10m)" >&2
       exit 1
     fi
     sleep 5
@@ -1460,7 +1469,6 @@ run_verify() {
     echo "airgap archive is not a readable file: $archive" >&2
     exit 1
   fi
-  rm -f "$out/verified"
   verify_home=$(mktemp -d)
   isolated_root="${verify_home}/trusted-root.json"
   prepare_trusted_root "$isolated_root"
@@ -1478,7 +1486,6 @@ run_verify() {
   fi
   server_digest=$layout_digest
   check_pointers
-  touch "$out/verified"
 }
 
 run_install() {
