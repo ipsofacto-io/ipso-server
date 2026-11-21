@@ -174,7 +174,7 @@ require_same_digest() {
 write_sbom() {
   local source=$1 dest=$2
   phase "sbom ${dest}"
-  bounded 8m syft "$source" -o "cyclonedx-json=${dest}"
+  bounded 2m syft "$source" -o "cyclonedx-json=${dest}"
   python3 - "$dest" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
@@ -210,40 +210,13 @@ heartbeat() {
   done
 }
 
-# Independent per-step budgets (6m + 12m + 11m + 3m + 24m = 56m) fit strictly inside
-# the 60m GitHub job timeout while ensuring a slow build step never starves install.
-step_started_at=$(date +%s)
-step_budget_seconds=3360
-
-set_step_budget() {
-  case "$1" in
-    pull) step_budget_seconds=360 ;;
-    server) step_budget_seconds=720 ;;
-    sign) step_budget_seconds=660 ;;
-    verify) step_budget_seconds=180 ;;
-    install) step_budget_seconds=1440 ;;
-    all) step_budget_seconds=3360 ;;
-  esac
-}
-
-remaining_budget() {
-  local now left
-  now=$(date +%s)
-  left=$(( step_budget_seconds - (now - step_started_at) ))
-  if (( left <= 0 )); then
-    echo "airgap: exceeded ${step_budget_seconds}s step budget" >&2
-    exit 124
-  fi
-  printf '%s\n' "$left"
-}
-
 # A child in uninterruptible sleep ignores KILL, and waiting for it holds the
 # step open until the job is cancelled. A cancelled job drops the log. The child
 # runs in its own session. This shell only sleeps, and it exits without waiting.
 bounded() {
   local limit=$1
   shift
-  local seconds=0 left=0 elapsed=0 pid rc state
+  local seconds=0 elapsed=0 pid rc state
   case "$limit" in
     *m) seconds=$(( ${limit%m} * 60 )) ;;
     *s) seconds=$(( ${limit%s} )) ;;
@@ -252,12 +225,6 @@ bounded() {
       exit 1
       ;;
   esac
-  if ! left=$(remaining_budget); then
-    exit 124
-  fi
-  if (( left < seconds )); then
-    seconds=$left
-  fi
   : >"$out/bounded.log"
   python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" >"$out/bounded.log" 2>&1 &
   pid=$!
@@ -297,10 +264,10 @@ sign_ref() {
   local remote=$1 digest=$2 name=$3
   local ref="${remote}@${digest}"
   phase "sign ${name}"
-  bounded 8m cosign sign --yes --allow-http-registry \
+  bounded 2m cosign sign --yes --allow-http-registry \
     --bundle "${stage}/signatures/${name}.sigstore.json" \
     "$ref"
-  bounded 8m cosign attest --yes --allow-http-registry --type cyclonedx \
+  bounded 2m cosign attest --yes --allow-http-registry --type cyclonedx \
     --predicate "${stage}/sbom/${name}.cdx.json" \
     --bundle "${stage}/signatures/${name}.att.sigstore.json" \
     "$ref"
@@ -309,7 +276,7 @@ sign_ref() {
 sign_one() {
   sign_ref "$@"
   phase "save $3"
-  bounded 5m cosign save --allow-http-registry --dir "${stage}/images/$3" "${1}@${2}"
+  bounded 1m cosign save --allow-http-registry --dir "${stage}/images/$3" "${1}@${2}"
 }
 
 # The chart pins an index digest. Copying every architecture does not fit the job.
@@ -482,9 +449,9 @@ run_isolated() {
   local home_dir=$1
   shift
   if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-    bounded 2m sudo env HOME="$home_dir" unshare --net -- "$@"
+    bounded 1m sudo env HOME="$home_dir" unshare --net -- "$@"
   else
-    bounded 2m env HOME="$home_dir" unshare --user --map-root-user --net -- "$@"
+    bounded 1m env HOME="$home_dir" unshare --user --map-root-user --net -- "$@"
   fi
 }
 
@@ -897,10 +864,12 @@ wait_health() {
 }
 
 wait_rollout() {
-  bounded 10m kubectl -n ipso rollout status statefulset/ipso-postgresql --timeout=10m
-  bounded 10m kubectl -n ipso rollout status deploy/ipso-api --timeout=10m
-  bounded 10m kubectl -n ipso rollout status deploy/ipso-worker --timeout=10m
-  bounded 10m kubectl -n ipso rollout status deploy/ipso-front --timeout=10m
+  bounded 10m bash -euo pipefail -c '
+    kubectl -n ipso rollout status statefulset/ipso-postgresql --timeout=10m
+    kubectl -n ipso rollout status deploy/ipso-api --timeout=10m
+    kubectl -n ipso rollout status deploy/ipso-worker --timeout=10m
+    kubectl -n ipso rollout status deploy/ipso-front --timeout=10m
+  '
 }
 
 refuse_foreign_image() {
@@ -1124,8 +1093,8 @@ pull_pinned() {
   # docker pull of an index digest fetches every architecture and does not finish in this job.
   # These archives live outside the staged tar and feed Syft only; the tar carries signed OCI layouts.
   phase "pull pinned images"
-  bounded 8m crane pull --platform linux/amd64 --format tarball "postgres@${pg}" "${out}/postgres.tar"
-  bounded 8m crane pull --platform linux/amd64 --format tarball "nginxinc/nginx-unprivileged@${ngx}" "${out}/nginx.tar"
+  bounded 5m crane pull --platform linux/amd64 --format tarball "postgres@${pg}" "${out}/postgres.tar"
+  bounded 5m crane pull --platform linux/amd64 --format tarball "nginxinc/nginx-unprivileged@${ngx}" "${out}/nginx.tar"
 }
 
 push_saved_server() {
@@ -1256,7 +1225,7 @@ sign_and_tar() {
   write_sbom "docker-archive:${out}/server.tar" "${stage}/sbom/ipso-server.cdx.json"
   write_sbom "docker-archive:${out}/postgres.tar" "${stage}/sbom/postgres.cdx.json"
   write_sbom "docker-archive:${out}/nginx.tar" "${stage}/sbom/nginx.cdx.json"
-  bounded 5m cosign trusted-root create --with-default-services --out "${stage}/trusted-root.json"
+  bounded 2m cosign trusted-root create --with-default-services --out "${stage}/trusted-root.json"
   cp "${stage}/trusted-root.json" "$out/trusted-root.json"
 
   sign_one 127.0.0.1:5000/ipso-server "$server_digest" ipso-server
@@ -1268,7 +1237,7 @@ sign_and_tar() {
   helm package charts/ipso --destination "${stage}/chart"
   local chart
   chart=$(find "${stage}/chart" -name '*.tgz' -print -quit)
-  bounded 5m cosign sign-blob --yes --bundle "${stage}/signatures/chart.sigstore.json" "$chart"
+  bounded 2m cosign sign-blob --yes --bundle "${stage}/signatures/chart.sigstore.json" "$chart"
 
   python3 - "$root/deploy/bundle/compose.yaml" "${stage}/deploy/bundle/compose.yaml" "$server_digest" <<'PY'
 import pathlib, sys
@@ -1355,7 +1324,7 @@ for path in sorted(p for p in stage.rglob("*") if p.is_file()):
     lines.append(f"{h.hexdigest()}  {rel}")
 (stage / "manifest.sha256").write_text("\n".join(lines) + "\n")
 PY
-  bounded 5m cosign sign-blob --yes \
+  bounded 2m cosign sign-blob --yes \
     --bundle "${stage}/signatures/manifest.sigstore.json" \
     "${stage}/manifest.sha256"
 
@@ -1372,7 +1341,6 @@ case "$mode" in
     ;;
 esac
 
-set_step_budget "$mode"
 require_tools "$mode"
 require_pins
 if [[ "$mode" == "all" || "$mode" == "pull" ]]; then
@@ -1386,7 +1354,6 @@ heartbeat_pid=$!
 wait_kind() {
   local waited=0 state
   while [[ -n "${kind_pid}" && -d "/proc/${kind_pid}" ]]; do
-    remaining_budget >/dev/null
     state=$(cat "/proc/${kind_pid}/stat" 2>/dev/null || true)
     state=${state#*) }
     state=${state%% *}
