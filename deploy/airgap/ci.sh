@@ -511,7 +511,7 @@ import pathlib, sys, tarfile
 
 archive = pathlib.Path(sys.argv[1])
 dest = pathlib.Path(sys.argv[2]).resolve()
-allowed = {"trusted-root.json", "manifest.sha256", "signatures/manifest.sigstore.json"}
+allowed = {"manifest.sha256", "signatures/manifest.sigstore.json"}
 seen = set()
 max_bytes = 4 * 1024 * 1024
 with tarfile.open(archive) as tar:
@@ -553,14 +553,11 @@ archive = pathlib.Path(sys.argv[1])
 dest = pathlib.Path(sys.argv[2]).resolve()
 listing_out = pathlib.Path(sys.argv[3])
 oob_root = pathlib.Path(sys.argv[4])
-bootstrap = {"trusted-root.json", "manifest.sha256", "signatures/manifest.sigstore.json"}
+bootstrap = {"manifest.sha256", "signatures/manifest.sigstore.json"}
 
-dest_root = (dest / "trusted-root.json").resolve()
 oob_resolved = oob_root.resolve()
-if oob_resolved == dest_root or dest in oob_resolved.parents:
+if oob_resolved == dest or dest in oob_resolved.parents:
     raise SystemExit("out-of-band trusted root must not resolve inside the archive extraction directory")
-if dest_root.read_bytes() != oob_resolved.read_bytes():
-    raise SystemExit("embedded trusted-root.json does not match out-of-band trusted root")
 
 expected = {}
 line_re = re.compile(r"^([0-9a-f]{64})  (.+)$")
@@ -1328,7 +1325,7 @@ EOF
 import hashlib, pathlib, sys
 
 stage = pathlib.Path(sys.argv[1]).resolve()
-skip = {"manifest.sha256", "signatures/manifest.sigstore.json", "trusted-root.json"}
+skip = {"manifest.sha256", "signatures/manifest.sigstore.json"}
 lines = []
 for path in sorted(p for p in stage.rglob("*") if p.is_file()):
     rel = path.relative_to(stage).as_posix()
