@@ -797,12 +797,95 @@ pull_pinned() {
 pack() {
   phase "build server image"
   bounded 8m docker build --provenance=false --sbom=false -t "${server_repo}:airgap" "$root"
-  # A schema 2 upload makes zot convert the manifest, and that conversion kept the
-  # job from exiting. BuildKit pushes OCI over HTTP, which zot stores as-is.
+  # Schema 2 conversion and BuildKit's registry export both held the job open
+  # until it was cancelled. docker save is local. The manifest PUT is OCI, so
+  # zot stores those bytes unchanged.
+  phase "save server image"
+  bounded 8m docker save -o "${out}/server.tar" "${server_repo}:airgap"
   phase "push server image"
-  bounded 8m docker build --provenance=false --sbom=false \
-    --output "type=registry,name=127.0.0.1:5000/ipso-server:airgap,oci-mediatypes=true,insecure=true" \
-    "$root"
+  python3 - "${out}/server.tar" <<'PY'
+import gzip, hashlib, json, pathlib, sys, tarfile, urllib.error, urllib.request
+
+archive = pathlib.Path(sys.argv[1])
+extract = archive.with_suffix("")
+extract.mkdir(parents=True)
+with tarfile.open(archive) as tar:
+    root = extract.resolve()
+    for member in tar.getmembers():
+        target = (extract / member.name).resolve()
+        if target != root and root not in target.parents:
+            raise SystemExit(f"docker save path escapes the archive: {member.name}")
+        if member.isdir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        if not member.isfile():
+            continue
+        src = tar.extractfile(member)
+        if src is None:
+            raise SystemExit(f"docker save entry is empty: {member.name}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(src.read())
+listed = json.loads((extract / "manifest.json").read_text())
+if len(listed) != 1:
+    raise SystemExit(f"docker save produced {len(listed)} images")
+image = listed[0]
+host = "http://127.0.0.1:5000"
+base = f"{host}/v2/ipso-server"
+
+def call(method, url, data=None, headers=None, ok=(200, 201, 202)):
+    req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = resp.read()
+            if resp.status not in ok:
+                raise SystemExit(f"{method} {url}: HTTP {resp.status} {body[:300]!r}")
+            return resp.headers, body
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode()[:500]
+        raise SystemExit(f"{method} {url}: HTTP {exc.code} {detail}")
+
+def upload(digest, data):
+    headers, _ = call("POST", f"{base}/blobs/uploads/", b"", {"Content-Length": "0"})
+    loc = headers.get("Location")
+    if not loc:
+        raise SystemExit(f"blob upload for {digest} returned no Location")
+    if loc.startswith("/"):
+        loc = host + loc
+    sep = "&" if "?" in loc else "?"
+    call(
+        "PUT",
+        f"{loc}{sep}digest={digest}",
+        data,
+        {"Content-Type": "application/octet-stream", "Content-Length": str(len(data))},
+        ok=(201,),
+    )
+
+def blob(data, media):
+    digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    upload(digest, data)
+    return {"mediaType": media, "digest": digest, "size": len(data)}
+
+config = (extract / image["Config"]).read_bytes()
+layers = []
+for name in image["Layers"]:
+    raw = (extract / name).read_bytes()
+    layers.append(blob(gzip.compress(raw, mtime=0), "application/vnd.oci.image.layer.v1.tar+gzip"))
+manifest = {
+    "schemaVersion": 2,
+    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+    "config": blob(config, "application/vnd.oci.image.config.v1+json"),
+    "layers": layers,
+}
+body = json.dumps(manifest, separators=(",", ":")).encode()
+call(
+    "PUT",
+    f"{base}/manifests/airgap",
+    body,
+    {"Content-Type": manifest["mediaType"], "Content-Length": str(len(body))},
+    ok=(201,),
+)
+print(f"pushed {len(layers)} layers", file=sys.stderr)
+PY
   server_digest=$(digest_of 127.0.0.1:5000/ipso-server:airgap)
   publish_pinned "postgres@${pg}" 127.0.0.1:5000/postgres "$pg" postgres
   publish_pinned "nginxinc/nginx-unprivileged@${ngx}" 127.0.0.1:5000/nginx "$ngx" nginx
