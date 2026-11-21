@@ -485,7 +485,7 @@ trusted_root_path() {
       exit 1
     fi
     candidate="$AIRGAP_TRUSTED_ROOT"
-  elif [[ -r "$out/trusted-root.json" && -f "$out/trusted-root.json" ]]; then
+  elif [[ "${GITHUB_ACTIONS:-}" == "true" && -r "$out/trusted-root.json" && -f "$out/trusted-root.json" ]]; then
     candidate="$out/trusted-root.json"
   else
     echo "set AIRGAP_TRUSTED_ROOT to an out-of-band Sigstore trusted-root.json before running verify" >&2
