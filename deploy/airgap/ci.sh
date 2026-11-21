@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pack the ADR-0140 install into one tar, sign it, and install that tar on kind
-# with the node's registry egress cut (ADR-0142).
+# with the node's registry egress cut (ADR-0142, ADR-0143).
 # Keyless signing needs the Actions OIDC token. There is no second key.
 set -euo pipefail
 
@@ -13,8 +13,28 @@ cluster=ipso-airgap
 # The binary serves that registry. A container pull is not part of signing.
 server_repo=ghcr.io/ipsofacto-io/ipso-server
 kind_node=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
-identity='^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@'
 issuer=https://token.actions.githubusercontent.com
+
+expected_identity() {
+  local ref='refs/heads/main'
+  if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
+    if [[ -n "${GITHUB_HEAD_REPO:-}" && "${GITHUB_HEAD_REPO}" != "${GITHUB_REPOSITORY:-}" ]]; then
+      echo "refusing keyless signing for fork pull request: ${GITHUB_HEAD_REPO}" >&2
+      exit 1
+    fi
+    if [[ ! "${GITHUB_REF:-}" =~ ^refs/pull/[0-9]+/(merge|head)$ ]]; then
+      echo "unexpected pull_request GITHUB_REF: ${GITHUB_REF:-}" >&2
+      exit 1
+    fi
+    ref=$GITHUB_REF
+  elif [[ -n "${GITHUB_REF:-}" && "${GITHUB_REF}" != "refs/heads/main" ]]; then
+    echo "refusing non-main ref outside pull_request CI: ${GITHUB_REF}" >&2
+    exit 1
+  fi
+  printf '^https://github\\.com/ipsofacto-io/ipso-server/\\.github/workflows/ci\\.yml@%s$\n' "$ref"
+}
+
+identity=$(expected_identity)
 
 out=${RUNNER_TEMP:-/tmp}/ipso-airgap
 stage=$out/stage
@@ -190,13 +210,33 @@ heartbeat() {
   done
 }
 
+# 26m total budget across all split steps inside the 30m GitHub job timeout, leaving
+# 4m for tool installs and post-job cleanup so a slow runner exits with diagnostics.
+job_budget_seconds=1560
+
+remaining_budget() {
+  local started now left
+  if [[ ! -f "$out/started_at" ]]; then
+    printf '%s\n' "$job_budget_seconds"
+    return
+  fi
+  started=$(cat "$out/started_at")
+  now=$(date +%s)
+  left=$(( job_budget_seconds - (now - started) ))
+  if (( left <= 0 )); then
+    echo "airgap: exceeded ${job_budget_seconds}s job budget" >&2
+    exit 124
+  fi
+  printf '%s\n' "$left"
+}
+
 # A child in uninterruptible sleep ignores KILL, and waiting for it holds the
 # step open until the job is cancelled. A cancelled job drops the log. The child
 # runs in its own session. This shell only sleeps, and it exits without waiting.
 bounded() {
   local limit=$1
   shift
-  local seconds=0 elapsed=0 pid rc state
+  local seconds=0 left=0 elapsed=0 pid rc state
   case "$limit" in
     *m) seconds=$(( ${limit%m} * 60 )) ;;
     *s) seconds=$(( ${limit%s} )) ;;
@@ -205,6 +245,12 @@ bounded() {
       exit 1
       ;;
   esac
+  if ! left=$(remaining_budget); then
+    exit 124
+  fi
+  if (( left < seconds )); then
+    seconds=$left
+  fi
   : >"$out/bounded.log"
   python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" >"$out/bounded.log" 2>&1 &
   pid=$!
@@ -444,7 +490,7 @@ try:
     rc = sock.connect_ex(("192.0.2.1", 443))
 finally:
     sock.close()
-if rc != errno.ENETUNREACH:
+if rc not in (errno.ENETUNREACH, errno.EHOSTUNREACH, errno.ENETDOWN):
     sys.exit(f"network namespace still has routes (connect_ex={rc})")
 '
 }
@@ -457,19 +503,159 @@ offline() {
   run_isolated "$home_dir" "$cosign_bin" "$@"
 }
 
-verify_offline() {
-  local name home_dir
+trusted_root_path() {
+  if [[ -n "${AIRGAP_TRUSTED_ROOT:-}" ]]; then
+    printf '%s\n' "$AIRGAP_TRUSTED_ROOT"
+  elif [[ -f "$out/trusted-root.json" ]]; then
+    printf '%s\n' "$out/trusted-root.json"
+  else
+    printf '%s\n' "${extract}/trusted-root.json"
+  fi
+}
+
+extract_bootstrap() {
+  local src_tar=$1 dest_dir=$2
+  rm -rf "$dest_dir"
+  mkdir -p "$dest_dir"
+  python3 - "$src_tar" "$dest_dir" <<'PY'
+import pathlib, sys, tarfile
+
+archive = pathlib.Path(sys.argv[1])
+dest = pathlib.Path(sys.argv[2]).resolve()
+allowed = {"trusted-root.json", "manifest.sha256", "signatures/manifest.sigstore.json"}
+seen = set()
+max_bytes = 4 * 1024 * 1024
+with tarfile.open(archive) as tar:
+    for member in tar.getmembers():
+        clean = member.name.removeprefix("./")
+        if member.name.startswith("/") or ".." in pathlib.PurePosixPath(member.name).parts:
+            raise SystemExit(f"unsafe path in archive: {member.name}")
+        target = (dest / member.name).resolve()
+        if target != dest and dest not in target.parents:
+            raise SystemExit(f"archive member escapes destination: {member.name}")
+        if member.isdir():
+            continue
+        if not member.isfile():
+            raise SystemExit(f"unsupported non-file member in archive: {member.name}")
+        if clean not in allowed:
+            continue
+        if clean in seen:
+            raise SystemExit(f"duplicate bootstrap member in archive: {clean}")
+        if member.size > max_bytes:
+            raise SystemExit(f"bootstrap member exceeds {max_bytes} bytes: {clean}")
+        src = tar.extractfile(member)
+        if src is None:
+            raise SystemExit(f"empty file member in archive: {member.name}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(src.read())
+        seen.add(clean)
+missing = sorted(allowed - seen)
+if missing:
+    raise SystemExit(f"archive is missing bootstrap files: {', '.join(missing)}")
+PY
+}
+
+extract_verified_archive() {
+  local src_tar=$1 dest_dir=$2 oob_root=$3
+  python3 - "$src_tar" "$dest_dir" "$out/listing" "$oob_root" <<'PY'
+import hashlib, pathlib, re, sys, tarfile
+
+archive = pathlib.Path(sys.argv[1])
+dest = pathlib.Path(sys.argv[2]).resolve()
+listing_out = pathlib.Path(sys.argv[3])
+oob_root = pathlib.Path(sys.argv[4])
+bootstrap = {"trusted-root.json", "manifest.sha256", "signatures/manifest.sigstore.json"}
+
+if oob_root.resolve() != (dest / "trusted-root.json").resolve():
+    if (dest / "trusted-root.json").read_bytes() != oob_root.read_bytes():
+        raise SystemExit("embedded trusted-root.json does not match out-of-band trusted root")
+
+expected = {}
+line_re = re.compile(r"^([0-9a-f]{64})  (.+)$")
+for raw_line in (dest / "manifest.sha256").read_text().splitlines():
+    m = line_re.match(raw_line)
+    if not m:
+        raise SystemExit(f"malformed manifest.sha256 line: {raw_line!r}")
+    digest, rel_path = m.groups()
+    if rel_path.startswith("/") or ".." in pathlib.PurePosixPath(rel_path).parts:
+        raise SystemExit(f"unsafe path in manifest.sha256: {rel_path}")
+    if rel_path in bootstrap or rel_path in expected:
+        raise SystemExit(f"unexpected or duplicate entry in manifest.sha256: {rel_path}")
+    expected[rel_path] = digest
+
+seen = set()
+names = []
+with tarfile.open(archive) as tar:
+    for member in tar.getmembers():
+        clean = member.name.removeprefix("./")
+        if member.name.startswith("/") or ".." in pathlib.PurePosixPath(member.name).parts:
+            raise SystemExit(f"unsafe path in archive: {member.name}")
+        target = (dest / member.name).resolve()
+        if target != dest and dest not in target.parents:
+            raise SystemExit(f"archive member escapes destination: {member.name}")
+        if member.isdir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        if not member.isfile():
+            raise SystemExit(f"unsupported non-file member in archive: {member.name}")
+        if not clean or clean in seen:
+            raise SystemExit(f"empty or duplicate member in archive: {member.name}")
+        seen.add(clean)
+        names.append(clean)
+        if clean in bootstrap:
+            continue
+        want_sum = expected.get(clean)
+        if want_sum is None:
+            raise SystemExit(f"unlisted member in archive not covered by manifest.sha256: {clean}")
+        src = tar.extractfile(member)
+        if src is None:
+            raise SystemExit(f"empty file member in archive: {member.name}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp_target = target.with_name(f".tmp.{target.name}")
+        h = hashlib.sha256()
+        with tmp_target.open("wb") as out_f:
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                h.update(chunk)
+                out_f.write(chunk)
+        if h.hexdigest() != want_sum:
+            tmp_target.unlink(missing_ok=True)
+            raise SystemExit(f"sha256 mismatch against signed manifest.sha256 for {clean}")
+        tmp_target.replace(target)
+
+missing = sorted(set(expected) - seen)
+if missing:
+    raise SystemExit(f"archive is missing files listed in manifest.sha256: {', '.join(missing[:5])}")
+listing_out.write_text("\n".join(names) + ("\n" if names else ""))
+PY
+}
+
+verify_manifest_offline() {
+  local home_dir=$1 root_file=$2
   chmod -R a+rX "$extract"
-  home_dir=$(mktemp -d)
   assert_offline "$home_dir"
+  phase "verify manifest"
+  offline "$home_dir" verify-blob \
+    --bundle "${extract}/signatures/manifest.sigstore.json" \
+    --trusted-root "$root_file" \
+    --certificate-identity-regexp "$identity" \
+    --certificate-oidc-issuer "$issuer" \
+    "${extract}/manifest.sha256"
+}
+
+verify_offline() {
+  local home_dir=$1 root_file=$2 name
+  chmod -R a+rX "$extract"
   for name in ipso-server postgres nginx; do
     phase "verify ${name}"
     offline "$home_dir" verify --local-image "${extract}/images/${name}" \
-      --trusted-root "${extract}/trusted-root.json" \
+      --trusted-root "$root_file" \
       --certificate-identity-regexp "$identity" \
       --certificate-oidc-issuer "$issuer"
     offline "$home_dir" verify-attestation --local-image "${extract}/images/${name}" --type cyclonedx \
-      --trusted-root "${extract}/trusted-root.json" \
+      --trusted-root "$root_file" \
       --certificate-identity-regexp "$identity" \
       --certificate-oidc-issuer "$issuer"
   done
@@ -482,53 +668,10 @@ verify_offline() {
   phase "verify chart"
   offline "$home_dir" verify-blob \
     --bundle "${extract}/signatures/chart.sigstore.json" \
-    --trusted-root "${extract}/trusted-root.json" \
+    --trusted-root "$root_file" \
     --certificate-identity-regexp "$identity" \
     --certificate-oidc-issuer "$issuer" \
     "$chart"
-  rm -rf "$home_dir"
-}
-
-extract_archive() {
-  local src_tar=$1 dest_dir=$2 mode_filter=${3:-all}
-  rm -rf "$dest_dir"
-  mkdir -p "$dest_dir"
-  python3 - "$src_tar" "$dest_dir" "$out/listing" "$mode_filter" <<'PY'
-import pathlib, shutil, sys, tarfile
-
-archive = pathlib.Path(sys.argv[1])
-dest = pathlib.Path(sys.argv[2]).resolve()
-listing_out = pathlib.Path(sys.argv[3])
-mode_filter = sys.argv[4]
-signed_prefixes = ("images/", "signatures/", "chart/")
-names = []
-with tarfile.open(archive) as tar:
-    for member in tar.getmembers():
-        clean = member.name.removeprefix("./")
-        if member.name.startswith("/") or ".." in pathlib.PurePosixPath(member.name).parts:
-            raise SystemExit(f"unsafe path in archive: {member.name}")
-        target = (dest / member.name).resolve()
-        if target != dest and dest not in target.parents:
-            raise SystemExit(f"archive member escapes destination: {member.name}")
-        if member.isdir():
-            if mode_filter == "all" or clean == "." or clean.startswith(signed_prefixes):
-                target.mkdir(parents=True, exist_ok=True)
-            continue
-        if not member.isfile():
-            raise SystemExit(f"unsupported non-file member in archive: {member.name}")
-        if clean:
-            names.append(clean)
-        if mode_filter == "signed" and clean != "trusted-root.json" and not clean.startswith(signed_prefixes):
-            continue
-        src = tar.extractfile(member)
-        if src is None:
-            raise SystemExit(f"empty file member in archive: {member.name}")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("wb") as out_f:
-            shutil.copyfileobj(src, out_f)
-if mode_filter == "all":
-    listing_out.write_text("\n".join(names) + ("\n" if names else ""))
-PY
 }
 
 check_pointers() {
@@ -593,9 +736,11 @@ PY
 assert_archive() {
   local need
   for need in \
+    manifest.sha256 \
     sbom/ipso-server.cdx.json \
     sbom/postgres.cdx.json \
     sbom/nginx.cdx.json \
+    signatures/manifest.sigstore.json \
     signatures/ipso-server.sigstore.json \
     signatures/ipso-server.att.sigstore.json \
     signatures/postgres.sigstore.json \
@@ -611,6 +756,7 @@ assert_archive() {
     images/nginx/oci-layout \
     images/nginx/index.json \
     airgap-values.yaml \
+    deploy/bundle/.env.example \
     deploy/bundle/compose.yaml \
     deploy/compose/postgres-init.sh \
     deploy/compose/nginx.conf
@@ -736,10 +882,10 @@ wait_health() {
 }
 
 wait_rollout() {
-  kubectl -n ipso rollout status statefulset/ipso-postgresql --timeout=10m
-  kubectl -n ipso rollout status deploy/ipso-api --timeout=10m
-  kubectl -n ipso rollout status deploy/ipso-worker --timeout=10m
-  kubectl -n ipso rollout status deploy/ipso-front --timeout=10m
+  bounded 10m kubectl -n ipso rollout status statefulset/ipso-postgresql --timeout=10m
+  bounded 10m kubectl -n ipso rollout status deploy/ipso-api --timeout=10m
+  bounded 10m kubectl -n ipso rollout status deploy/ipso-worker --timeout=10m
+  bounded 10m kubectl -n ipso rollout status deploy/ipso-front --timeout=10m
 }
 
 refuse_foreign_image() {
@@ -896,7 +1042,7 @@ spec:
           emptyDir: {}
 EOF
   phase "dex"
-  kubectl -n ipso rollout status deploy/dex --timeout=300s
+  bounded 5m kubectl -n ipso rollout status deploy/dex --timeout=300s
 
   phase "cut egress"
   cut_egress
@@ -920,10 +1066,11 @@ bootstrap:
   kekSecret: ipso-ci-kek
 EOF
   phase "helm install"
-  bounded 8m helm upgrade --install ipso "$chart" --namespace ipso \
+  bounded 15m helm upgrade --install ipso "$chart" --namespace ipso \
     -f "${extract}/airgap-values.yaml" \
     -f "$ci_values" \
-    --timeout 8m
+    --timeout 15m
+  rm -f "$ci_values"
   wait_rollout
   wait_health
   refuse_foreign_image
@@ -936,10 +1083,11 @@ prepare_stage() {
 
 start_registry() {
   phase "registry"
-  cat >"$out/zot-config.json" <<'EOF'
+  mkdir -p "$out/zot"
+  cat >"$out/zot-config.json" <<EOF
 {
   "distSpecVersion": "1.1.1",
-  "storage": {"rootDirectory": "/tmp/ipso-airgap-zot"},
+  "storage": {"rootDirectory": "${out}/zot"},
   "http": {"address": "127.0.0.1", "port": "5000"},
   "log": {"level": "info"}
 }
@@ -965,20 +1113,14 @@ pull_pinned() {
   bounded 8m crane pull --platform linux/amd64 --format tarball "nginxinc/nginx-unprivileged@${ngx}" "${out}/nginx.tar"
 }
 
-build_and_push_server() {
-  phase "build server image"
-  bounded 8m docker build --provenance=false --sbom=false -t "${server_repo}:airgap" "$root"
-  # Schema 2 conversion and BuildKit's registry export both held the job open
-  # until it was cancelled. docker save is local. The manifest PUT is OCI, so
-  # zot stores those bytes unchanged.
-  phase "save server image"
-  bounded 8m docker save -o "${out}/server.tar" "${server_repo}:airgap"
+push_saved_server() {
   phase "push server image"
   python3 - "${out}/server.tar" <<'PY'
-import gzip, hashlib, json, pathlib, sys, tarfile, urllib.error, urllib.request
+import gzip, hashlib, json, pathlib, shutil, sys, tarfile, urllib.error, urllib.request
 
 archive = pathlib.Path(sys.argv[1])
 extract = archive.with_suffix("")
+shutil.rmtree(extract, ignore_errors=True)
 extract.mkdir(parents=True)
 with tarfile.open(archive) as tar:
     root = extract.resolve()
@@ -1069,20 +1211,38 @@ call(
 )
 print(f"pushed {len(layers)} layers", file=sys.stderr)
 PY
+}
+
+build_and_push_server() {
+  phase "build server image"
+  bounded 8m docker build --provenance=false --sbom=false -t "${server_repo}:airgap" "$root"
+  # Schema 2 conversion and BuildKit's registry export both held the job open
+  # until it was cancelled. docker save is local. The manifest PUT is OCI, so
+  # zot stores those bytes unchanged.
+  phase "save server image"
+  bounded 8m docker save -o "${out}/server.tar" "${server_repo}:airgap"
+  push_saved_server
   server_digest=$(digest_of 127.0.0.1:5000/ipso-server:airgap)
   printf '%s\n' "$server_digest" >"$out/server.digest"
 }
 
 sign_and_tar() {
   server_digest=$(cat "$out/server.digest")
+  if ! curl -fsS --max-time 5 \
+    -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+    "http://127.0.0.1:5000/v2/ipso-server/manifests/${server_digest}" >/dev/null 2>&1; then
+    push_saved_server
+    require_same_digest "$(digest_of 127.0.0.1:5000/ipso-server:airgap)" "$server_digest" "ipso-server"
+  fi
   publish_pinned "postgres@${pg}" 127.0.0.1:5000/postgres "$pg" postgres
   publish_pinned "nginxinc/nginx-unprivileged@${ngx}" 127.0.0.1:5000/nginx "$ngx" nginx
 
   phase "sbom and trusted root"
-  write_sbom "docker:${server_repo}:airgap" "${stage}/sbom/ipso-server.cdx.json"
+  write_sbom "docker-archive:${out}/server.tar" "${stage}/sbom/ipso-server.cdx.json"
   write_sbom "docker-archive:${out}/postgres.tar" "${stage}/sbom/postgres.cdx.json"
   write_sbom "docker-archive:${out}/nginx.tar" "${stage}/sbom/nginx.cdx.json"
   bounded 5m cosign trusted-root create --with-default-services --out "${stage}/trusted-root.json"
+  cp "${stage}/trusted-root.json" "$out/trusted-root.json"
 
   sign_one 127.0.0.1:5000/ipso-server "$server_digest" ipso-server
   sign_ref 127.0.0.1:5000/postgres "$pg" postgres
@@ -1150,6 +1310,7 @@ IPSO_OIDC_SUBJECT=subject
 IPSO_TENANT_KEK=airgap-config
 EOF
   rendered=$(docker compose -f "${stage}/deploy/bundle/compose.yaml" --env-file "$env_file" config)
+  rm -f "$env_file"
   if grep -q 'build:' <<<"$rendered"; then
     echo "rendered Compose still builds an image" >&2
     exit 1
@@ -1158,6 +1319,30 @@ EOF
     echo "rendered Compose is missing the server digest" >&2
     exit 1
   fi
+
+  python3 - "$stage" <<'PY'
+import hashlib, pathlib, sys
+
+stage = pathlib.Path(sys.argv[1]).resolve()
+skip = {"manifest.sha256", "signatures/manifest.sigstore.json", "trusted-root.json"}
+lines = []
+for path in sorted(p for p in stage.rglob("*") if p.is_file()):
+    rel = path.relative_to(stage).as_posix()
+    if rel in skip:
+        continue
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    lines.append(f"{h.hexdigest()}  {rel}")
+(stage / "manifest.sha256").write_text("\n".join(lines) + "\n")
+PY
+  bounded 5m cosign sign-blob --yes \
+    --bundle "${stage}/signatures/manifest.sigstore.json" \
+    "${stage}/manifest.sha256"
 
   tar -C "$stage" -cf "$archive" .
   stop_registry
@@ -1175,9 +1360,12 @@ esac
 require_tools "$mode"
 require_pins
 if [[ "$mode" == "all" || "$mode" == "pull" ]]; then
-  rm -rf "$out" /tmp/ipso-airgap-zot
+  rm -rf "$out"
 fi
 mkdir -p "$out"
+if [[ ! -f "$out/started_at" ]]; then
+  date +%s >"$out/started_at"
+fi
 trap cleanup EXIT
 heartbeat &
 heartbeat_pid=$!
@@ -1185,6 +1373,7 @@ heartbeat_pid=$!
 wait_kind() {
   local waited=0 state
   while [[ -n "${kind_pid}" && -d "/proc/${kind_pid}" ]]; do
+    remaining_budget >/dev/null
     state=$(cat "/proc/${kind_pid}/stat" 2>/dev/null || true)
     state=${state#*) }
     state=${state%% *}
@@ -1206,13 +1395,18 @@ wait_kind() {
 }
 
 run_verify() {
+  local home_dir root_file
   server_digest=$(cat "$out/server.digest")
-  # Extract only the signed layouts, bundles, chart archive, and trusted root first,
-  # so unsigned files in the tar are not written to disk before cosign succeeds.
-  extract_archive "$archive" "$extract" signed
+  rm -f "$out/verified"
+  extract_bootstrap "$archive" "$extract"
+  root_file=$(trusted_root_path)
+  chmod a+r "$root_file"
+  home_dir=$(mktemp -d)
   phase "verify"
-  verify_offline
-  extract_archive "$archive" "$extract" all
+  verify_manifest_offline "$home_dir" "$root_file"
+  extract_verified_archive "$archive" "$extract" "$root_file"
+  verify_offline "$home_dir" "$root_file"
+  rm -rf "$home_dir"
   assert_archive
   check_pointers
   touch "$out/verified"

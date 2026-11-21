@@ -180,21 +180,27 @@ For browser sign-in, set `IPSO_PUBLIC_URL` and `IPSO_LOGIN_PROVIDERS` on the api
 
 ## Air-gapped bundle
 
-`ci / airgap` builds `ghcr.io/ipsofacto-io/ipso-server` from this repository and packs it with the PostgreSQL and nginx digests the chart already pins, the packaged chart, and `deploy/bundle` ([ADR-0142](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0142-air-gapped-oci-bundle.md)). The tar also has a CycloneDX SBOM for each image, a sigstore bundle for each signature and each SBOM attestation, the public Sigstore trusted root captured when the tar was built, and `airgap-values.yaml`, which sets only `image.digest`. Dex and the kind node are not in the tar. The job signs with keyless cosign 3.1.4 and does not push to GHCR. The tar from a pull request proves that run. Publishing `oci://ghcr.io/ipsofacto-io/charts/ipso` stays the release workflow.
+`ci / airgap` builds `ghcr.io/ipsofacto-io/ipso-server` from this repository and packs it with the PostgreSQL and nginx digests the chart already pins, the packaged chart, and `deploy/bundle` ([ADR-0142](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0142-air-gapped-oci-bundle.md), [ADR-0143](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0143-air-gapped-bundle-manifest-signature.md)). The tar also has a CycloneDX SBOM for each image, a sigstore bundle for each signature and each SBOM attestation, a signed `manifest.sha256` (`signatures/manifest.sigstore.json`) covering every non-signature file in the tar, the public Sigstore trusted root captured when the tar was built, and `airgap-values.yaml`, which sets only `image.digest`. Dex and the kind node are not in the tar. The job signs with keyless cosign 3.1.4, does not push to GHCR, and uploads the `ipso-airgap` artifact only on `push` to `main`. Publishing `oci://ghcr.io/ipsofacto-io/charts/ipso` stays the release workflow.
 
-The signature covers the manifest digest. This cosign release checks that digest from the saved layout and the trusted root in the tar, and it does not contact a registry to do so. The certificate is the `ci` workflow in `ipsofacto-io/ipso-server`, issued by `https://token.actions.githubusercontent.com`. For a production install, accept only a tar built from `main`, inspect member paths with `tar -tf ipso-airgap.tar` before extracting, extract only `trusted-root.json`, `images/`, `signatures/`, and `chart/` until `cosign` succeeds, and run `cosign` on an offline host or inside `--network none` or `unshare --net`. Pull request runs verify with the regexp ending at `@` instead of `@refs/heads/main$`. PostgreSQL and nginx are the pinned index digests, signed by that workflow, and `images/postgres` and `images/nginx` are sparse OCI layouts carrying each signed index, its linux/amd64 manifest, config, and layers, and the referrer bundles. `airgap-values.yaml` and the Compose file are not signed. Check after verification that both name the server digest `cosign verify` reported for `images/ipso-server`. The trusted root is the one in the tar. Replacing the tar replaces that root.
+The image signature covers the manifest digest, and `signatures/manifest.sigstore.json` covers `manifest.sha256` (`airgap-values.yaml`, `deploy/bundle/compose.yaml`, `deploy/bundle/.env.example`, `deploy/compose/postgres-init.sh`, `deploy/compose/nginx.conf`, the SBOMs, `chart/ipso-*.tgz`, and the image layout blobs). The certificate is the `ci` workflow on `refs/heads/main` in `ipsofacto-io/ipso-server`, issued by `https://token.actions.githubusercontent.com`. In production, fetch `trusted-root-oob.json` out of band on an online workstation with `cosign trusted-root create --with-default-services --out trusted-root-oob.json` (or verify `sha256sum trusted-root.json` against a known-good root), inspect `tar -tf ipso-airgap.tar` for unexpected paths, extract only `manifest.sha256` and `signatures/manifest.sigstore.json` first, verify `manifest.sha256` offline inside `--network none` or `unshare --net`, and then extract and verify the remaining files against `manifest.sha256` before checking the image layouts and chart archive. PostgreSQL and nginx are the pinned index digests, signed by that workflow, and `images/postgres` and `images/nginx` are sparse OCI layouts carrying each signed index, its linux/amd64 manifest, config, and layers, and the referrer bundles. Also check after verification that `airgap-values.yaml` and `deploy/bundle/compose.yaml` name the server digest `cosign verify` reported for `images/ipso-server`.
 
 ```sh
+cosign verify-blob --bundle signatures/manifest.sigstore.json \
+  --trusted-root trusted-root-oob.json \
+  --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@refs/heads/main$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  manifest.sha256
+sha256sum -c manifest.sha256
 cosign verify --local-image images/ipso-server \
-  --trusted-root trusted-root.json \
+  --trusted-root trusted-root-oob.json \
   --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 cosign verify-attestation --local-image images/ipso-server --type cyclonedx \
-  --trusted-root trusted-root.json \
+  --trusted-root trusted-root-oob.json \
   --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 cosign verify-blob --bundle signatures/chart.sigstore.json \
-  --trusted-root trusted-root.json \
+  --trusted-root trusted-root-oob.json \
   --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   chart/ipso-*.tgz
