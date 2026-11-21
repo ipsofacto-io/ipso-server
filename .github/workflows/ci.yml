@@ -349,58 +349,6 @@ jobs:
         working-directory: web
         run: npm run licenses
 
-  # Separate from ci / airgap so a stuck install cannot drop this log.
-  # Confirms local zot accepts an OCI push. Removed once ci / airgap is green.
-  airgap-probe:
-    name: ci / airgap-probe
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Copy one image into local zot
-        run: |
-          set -euo pipefail
-          bin="${RUNNER_TEMP}/bin"
-          mkdir -p "$bin"
-          install_archive() {
-            local url="$1" sum="$2" inside="$3" tmp
-            tmp="$(mktemp -d)"
-            curl -fsSL -o "${tmp}/archive.tar.gz" "$url"
-            echo "${sum}  ${tmp}/archive.tar.gz" | sha256sum -c -
-            tar -xzf "${tmp}/archive.tar.gz" -C "$tmp"
-            install -m 0755 "${tmp}/${inside}" "${bin}/$(basename "$inside")"
-          }
-          install_file() {
-            local url="$1" sum="$2" name="$3" tmp
-            tmp="$(mktemp -d)"
-            curl -fsSL -o "${tmp}/${name}" "$url"
-            echo "${sum}  ${tmp}/${name}" | sha256sum -c -
-            install -m 0755 "${tmp}/${name}" "${bin}/${name}"
-          }
-          install_archive https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0 crane
-          install_file https://github.com/project-zot/zot/releases/download/v2.1.23/zot-linux-amd64 1f6bab0b9eee426d0785de701ff510df5c02bdb8d7287494a582634abfc5d638 zot
-          export PATH="${bin}:${PATH}"
-          cfg="${RUNNER_TEMP}/zot.json"
-          python3 -c 'import json,sys; json.dump({"distSpecVersion":"1.1.1","storage":{"rootDirectory":"/tmp/ipso-airgap-probe"},"http":{"address":"127.0.0.1","port":"5000"},"log":{"level":"info"}}, open(sys.argv[1],"w"))' "$cfg"
-          zot serve "$cfg" >"${RUNNER_TEMP}/zot.log" 2>&1 &
-          ready=0
-          for _ in $(seq 1 30); do
-            if curl -fsS --max-time 2 http://127.0.0.1:5000/v2/ >/dev/null; then
-              ready=1
-              break
-            fi
-            sleep 1
-          done
-          if [[ "$ready" != 1 ]]; then
-            echo "zot did not answer" >&2
-            cat "${RUNNER_TEMP}/zot.log" >&2 || true
-            exit 1
-          fi
-          crane copy --platform linux/amd64 mirror.gcr.io/library/busybox:1.36 127.0.0.1:5000/busybox:probe
-          crane digest 127.0.0.1:5000/busybox:probe
-          echo probe-ok
-
   # The air-gapped tar (ADR-0142). The chart job stays read-only. This job may ask Fulcio
   # for a certificate for this workflow. It has no packages permission and does not push to GHCR.
   airgap:
@@ -442,11 +390,16 @@ jobs:
           install_archive https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0 crane
           install_file https://github.com/project-zot/zot/releases/download/v2.1.23/zot-linux-amd64 1f6bab0b9eee426d0785de701ff510df5c02bdb8d7287494a582634abfc5d638 zot
           echo "$bin" >> "$GITHUB_PATH"
-      - name: Pack, verify offline, and install with registry egress cut
-        # The script leaves a stuck child and exits. Waiting for that child
-        # holds the step open, and a cancelled job drops the log.
-        timeout-minutes: 28
-        run: bash deploy/airgap/ci.sh
+      - name: Pull the pinned runtime images
+        run: bash deploy/airgap/ci.sh pull
+      - name: Build and push the server image to local zot
+        run: bash deploy/airgap/ci.sh server
+      - name: Sign, attest, and tar the bundle
+        run: bash deploy/airgap/ci.sh sign
+      - name: Verify the air-gap tar offline
+        run: bash deploy/airgap/ci.sh verify
+      - name: Install the air-gap tar with registry egress cut
+        run: bash deploy/airgap/ci.sh install
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ipso-airgap

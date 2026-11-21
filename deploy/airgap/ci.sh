@@ -25,13 +25,15 @@ heartbeat_pid=
 zot_pid=
 
 require_tools() {
-  local cmd
+  local want=${1:-all} cmd
   for cmd in docker helm kind kubectl cosign syft crane zot openssl python3 curl; do
     command -v "$cmd" >/dev/null
   done
-  if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]]; then
-    echo "keyless signing needs the Actions OIDC token" >&2
-    exit 1
+  if [[ "$want" == "all" || "$want" == "sign" ]]; then
+    if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]]; then
+      echo "keyless signing needs the Actions OIDC token" >&2
+      exit 1
+    fi
   fi
 }
 
@@ -100,7 +102,7 @@ cleanup() {
       tail -n 80 "$out/bounded.log" >&2 || true
     fi
   fi
-  if [[ "${AIRGAP_BAIL:-}" != 1 ]]; then
+  if [[ "${AIRGAP_BAIL:-}" != 1 && -f "$out/kind.log" ]]; then
     kind delete cluster --name "$cluster" >/dev/null 2>&1 &
     del=$!
     for _ in $(seq 1 8); do
@@ -785,7 +787,28 @@ prepare_stage() {
     "$stage/runtime" "$stage/deploy/bundle" "$stage/deploy/compose"
 }
 
-# crane does not use the docker daemon, so these pulls run while kind starts.
+start_registry() {
+  phase "registry"
+  cat >"$out/zot-config.json" <<'EOF'
+{
+  "distSpecVersion": "1.1.1",
+  "storage": {"rootDirectory": "/tmp/ipso-airgap-zot"},
+  "http": {"address": "127.0.0.1", "port": "5000"},
+  "log": {"level": "info"}
+}
+EOF
+  zot serve "$out/zot-config.json" >>"$out/zot.log" 2>&1 &
+  zot_pid=$!
+  wait_registry
+}
+
+stop_registry() {
+  if [[ -n "${zot_pid}" ]] && kill -0 "$zot_pid" 2>/dev/null; then
+    kill "$zot_pid" 2>/dev/null || true
+    wait "$zot_pid" 2>/dev/null || true
+  fi
+  zot_pid=
+}
 pull_pinned() {
   prepare_stage
   # docker pull of an index digest fetches every architecture and does not finish in this job.
@@ -794,7 +817,7 @@ pull_pinned() {
   bounded 8m crane pull --platform linux/amd64 --format tarball "nginxinc/nginx-unprivileged@${ngx}" "${stage}/runtime/nginx.tar"
 }
 
-pack() {
+build_and_push_server() {
   phase "build server image"
   bounded 8m docker build --provenance=false --sbom=false -t "${server_repo}:airgap" "$root"
   # Schema 2 conversion and BuildKit's registry export both held the job open
@@ -887,6 +910,11 @@ call(
 print(f"pushed {len(layers)} layers", file=sys.stderr)
 PY
   server_digest=$(digest_of 127.0.0.1:5000/ipso-server:airgap)
+  printf '%s\n' "$server_digest" >"$out/server.digest"
+}
+
+sign_and_tar() {
+  server_digest=$(cat "$out/server.digest")
   publish_pinned "postgres@${pg}" 127.0.0.1:5000/postgres "$pg" postgres
   publish_pinned "nginxinc/nginx-unprivileged@${ngx}" 127.0.0.1:5000/nginx "$ngx" nginx
 
@@ -972,16 +1000,23 @@ EOF
   fi
 
   tar -C "$stage" -cf "$archive" .
-  if [[ -n "${zot_pid}" ]] && kill -0 "$zot_pid" 2>/dev/null; then
-    kill "$zot_pid" 2>/dev/null || true
-    wait "$zot_pid" 2>/dev/null || true
-  fi
-  zot_pid=
+  stop_registry
 }
 
-require_tools
+mode=${1:-all}
+case "$mode" in
+  all|pull|server|sign|verify|install) ;;
+  *)
+    echo "usage: $0 [all|pull|server|sign|verify|install]" >&2
+    exit 1
+    ;;
+esac
+
+require_tools "$mode"
 require_pins
-rm -rf "$out"
+if [[ "$mode" == "all" || "$mode" == "pull" ]]; then
+  rm -rf "$out" /tmp/ipso-airgap-zot
+fi
 mkdir -p "$out"
 trap cleanup EXIT
 heartbeat &
@@ -1010,38 +1045,62 @@ wait_kind() {
   kind_pid=
 }
 
-phase "registry"
-cat >"$out/zot-config.json" <<'EOF'
-{
-  "distSpecVersion": "1.1.1",
-  "storage": {"rootDirectory": "/tmp/ipso-airgap-zot"},
-  "http": {"address": "127.0.0.1", "port": "5000"},
-  "log": {"level": "info"}
+run_verify() {
+  server_digest=$(cat "$out/server.digest")
+  rm -rf "$extract"
+  mkdir -p "$extract"
+  tar -C "$extract" -xf "$archive"
+  assert_archive
+  phase "verify"
+  verify_offline
+  check_pointers
 }
-EOF
-zot serve "$out/zot-config.json" >"$out/zot.log" 2>&1 &
-zot_pid=$!
-wait_registry
-# Pack before kind. The runner has room for the images or for the cluster, not both at once.
-pull_pinned
-pack
-phase "kind"
-python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-  kind create cluster --name "$cluster" --image "$kind_node" >"$out/kind.log" 2>&1 &
-kind_pid=$!
-wait_kind
 
-rm -rf "$extract"
-mkdir -p "$extract"
-tar -C "$extract" -xf "$archive"
-assert_archive
-phase "verify"
-verify_offline
-check_pointers
+run_install() {
+  server_digest=$(cat "$out/server.digest")
+  if [[ ! -d "$extract/images" ]]; then
+    mkdir -p "$extract"
+    tar -C "$extract" -xf "$archive"
+  fi
+  phase "kind"
+  python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
+    kind create cluster --name "$cluster" --image "$kind_node" >"$out/kind.log" 2>&1 &
+  kind_pid=$!
+  wait_kind
 
-set -a
-# shellcheck disable=SC1091
-. ./.env.example
-set +a
-install_from_tar
-echo "air-gap tar ${archive}"
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env.example
+  set +a
+  install_from_tar
+  echo "air-gap tar ${archive}"
+}
+
+case "$mode" in
+  all)
+    pull_pinned
+    start_registry
+    build_and_push_server
+    sign_and_tar
+    run_verify
+    run_install
+    ;;
+  pull)
+    pull_pinned
+    ;;
+  server)
+    start_registry
+    build_and_push_server
+    stop_registry
+    ;;
+  sign)
+    start_registry
+    sign_and_tar
+    ;;
+  verify)
+    run_verify
+    ;;
+  install)
+    run_install
+    ;;
+esac
