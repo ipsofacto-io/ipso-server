@@ -273,6 +273,12 @@ heartbeat() {
 # step open until the job is cancelled. A cancelled job drops the log. The child
 # runs in its own session. This shell only sleeps, and it exits without waiting.
 bounded() {
+  local out_file="$out/bounded.log"
+  if [[ "${1:-}" == "--stdout" ]]; then
+    out_file=$2
+    shift 2
+    : >"$out_file"
+  fi
   local limit=$1
   shift
   local seconds=0 elapsed=0 pid rc state
@@ -285,7 +291,11 @@ bounded() {
       ;;
   esac
   : >"$out/bounded.log"
-  python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" >"$out/bounded.log" 2>&1 &
+  if [[ "$out_file" == "$out/bounded.log" ]]; then
+    python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" >"$out/bounded.log" 2>&1 &
+  else
+    python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" >"$out_file" 2>"$out/bounded.log" &
+  fi
   pid=$!
   while [[ -d "/proc/${pid}" ]]; do
     state=$(cat "/proc/${pid}/stat" 2>/dev/null || true)
@@ -1231,10 +1241,11 @@ assert_migrate_and_bootstrap() {
     echo "unexpected IPSO_TENANT_ID format: ${IPSO_TENANT_ID:-}" >&2
     exit 1
   fi
-  got=$(bounded 1m kubectl -n ipso exec ipso-postgresql-0 -- \
+  bounded --stdout "$out/psql.out" 1m kubectl -n ipso exec ipso-postgresql-0 -- \
     env PGPASSWORD="$IPSO_MIGRATE_PASSWORD" \
     psql -q --host=127.0.0.1 --username=ipso_migrate --dbname=ipso --tuples-only --no-align \
-    -c "SELECT max(version_id) FROM goose_db_version" | tr -d '[:space:]')
+    -c "SELECT max(version_id) FROM goose_db_version"
+  got=$(tr -d '[:space:]' <"$out/psql.out")
   if [[ ! "$got" =~ ^[1-9][0-9]*$ ]]; then
     echo "migrate hook did not apply schema migrations (got=${got})" >&2
     exit 1
@@ -1244,11 +1255,12 @@ assert_migrate_and_bootstrap() {
     echo "schema after air-gapped install is ${got}, want ${want} from verified image" >&2
     exit 1
   fi
-  seeded=$(bounded 1m kubectl -n ipso exec ipso-postgresql-0 -- \
+  bounded --stdout "$out/psql.out" 1m kubectl -n ipso exec ipso-postgresql-0 -- \
     env PGPASSWORD="$IPSO_APP_PASSWORD" \
     psql -q --host=127.0.0.1 --username=ipso_app --dbname=ipso --tuples-only --no-align \
-    -c "SET ipso.tenant = '${IPSO_TENANT_ID}'" \
-    -c "SELECT count(*) FROM tenancy.tenant" | tr -d '[:space:]')
+    -c "WITH cfg AS (SELECT set_config('ipso.tenant', '${IPSO_TENANT_ID}', true)) SELECT count(*) FROM tenancy.tenant, cfg"
+  seeded=$(tr -d '[:space:]' <"$out/psql.out")
+  rm -f "$out/psql.out"
   if [[ "$seeded" != "1" ]]; then
     echo "bootstrap hook did not seed tenant ${IPSO_TENANT_ID} (count=${seeded})" >&2
     exit 1
