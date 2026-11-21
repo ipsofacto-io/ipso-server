@@ -74,7 +74,7 @@ pinned_digest() {
 
 require_pins() {
   pg=$(pinned_digest 'postgres')
-  ngx=$(pinned_digest 'nginxinc[^@]*')
+  ngx=$(pinned_digest 'nginxinc/nginx-unprivileged')
   if [[ ! "$pg" =~ ^sha256:[0-9a-f]{64}$ || ! "$ngx" =~ ^sha256:[0-9a-f]{64}$ ]]; then
     echo "could not read the pinned postgres and nginx digests" >&2
     exit 1
@@ -1109,7 +1109,36 @@ EOF
   rm -f "$ci_values"
   wait_rollout
   wait_health
+  assert_migrate_and_bootstrap
   refuse_foreign_image
+}
+
+assert_migrate_and_bootstrap() {
+  local got want seeded
+  if [[ ! "${IPSO_TENANT_ID:-}" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+    echo "unexpected IPSO_TENANT_ID format: ${IPSO_TENANT_ID:-}" >&2
+    exit 1
+  fi
+  got=$(bounded 1m kubectl -n ipso exec ipso-postgresql-0 -- \
+    env PGPASSWORD="$IPSO_MIGRATE_PASSWORD" \
+    psql -q --host=127.0.0.1 --username=ipso_migrate --dbname=ipso --tuples-only --no-align \
+    -c "SELECT max(version_id) FROM goose_db_version" | tr -d '[:space:]')
+  want=$(find internal/migrate/migrations -name '*.sql' -print \
+    | sed -n 's#.*/0*\([0-9][0-9]*\)_.*#\1#p' \
+    | sort -n | tail -1)
+  if [[ "$got" != "$want" ]]; then
+    echo "schema after air-gapped install is ${got}, want ${want}" >&2
+    exit 1
+  fi
+  seeded=$(bounded 1m kubectl -n ipso exec ipso-postgresql-0 -- \
+    env PGPASSWORD="$IPSO_APP_PASSWORD" \
+    psql -q --host=127.0.0.1 --username=ipso_app --dbname=ipso --tuples-only --no-align \
+    -c "SET ipso.tenant = '${IPSO_TENANT_ID}'" \
+    -c "SELECT count(*) FROM tenancy.tenant" | tr -d '[:space:]')
+  if [[ "$seeded" != "1" ]]; then
+    echo "bootstrap hook did not seed tenant ${IPSO_TENANT_ID} (count=${seeded})" >&2
+    exit 1
+  fi
 }
 
 prepare_stage() {
