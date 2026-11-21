@@ -8,10 +8,9 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$root"
 
 cluster=ipso-airgap
-registry_name=ipso-airgap-registry
-# zot v2.1.23 linux/amd64. cosign 3.1.4 stores the bundle as an OCI referrer.
+# zot v2.1.23. cosign 3.1.4 stores the bundle as an OCI referrer.
 # The distribution registry image through 3.1.2 does not implement that API, so cosign save would not see the bundles.
-registry_image=ghcr.io/project-zot/zot@sha256:b68f727fe35c1eb45b2ae91519dfb0e33192d69b5104882c3e7809b7146c4a02
+# The binary serves that registry. A container pull is not part of signing.
 server_repo=ghcr.io/ipsofacto-io/ipso-server
 kind_node=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
 identity='^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@'
@@ -23,10 +22,11 @@ extract=$out/extract
 archive=$out/ipso-airgap.tar
 kind_pid=
 heartbeat_pid=
+zot_pid=
 
 require_tools() {
   local cmd
-  for cmd in docker helm kind kubectl cosign syft crane openssl python3 curl timeout; do
+  for cmd in docker helm kind kubectl cosign syft crane zot openssl python3 curl timeout; do
     command -v "$cmd" >/dev/null
   done
   if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]]; then
@@ -79,7 +79,10 @@ cleanup() {
     fi
   fi
   kind delete cluster --name "$cluster" >/dev/null 2>&1 || true
-  docker rm -f "$registry_name" >/dev/null 2>&1 || true
+  if [[ -n "${zot_pid}" ]] && kill -0 "$zot_pid" 2>/dev/null; then
+    kill "$zot_pid" 2>/dev/null || true
+    wait "$zot_pid" 2>/dev/null || true
+  fi
   exit "$code"
 }
 
@@ -92,7 +95,7 @@ wait_registry() {
     sleep 1
   done
   echo "the local registry did not answer after ${attempt} tries" >&2
-  docker logs "$registry_name" >&2 || true
+  cat "$out/zot.log" >&2 || true
   exit 1
 }
 
@@ -129,7 +132,8 @@ PY
 }
 
 phase() {
-  local msg="airgap: $* ($(date -u +%H:%M:%S))"
+  local msg
+  msg="airgap: $* ($(date -u +%H:%M:%S))"
   echo "$msg" >&2
   echo "$msg" >"$out/phase"
   # The runner records notices while the step is still going. The job log is not
@@ -795,7 +799,11 @@ EOF
   fi
 
   tar -C "$stage" -cf "$archive" .
-  docker rm -f "$registry_name" >/dev/null
+  if [[ -n "${zot_pid}" ]] && kill -0 "$zot_pid" 2>/dev/null; then
+    kill "$zot_pid" 2>/dev/null || true
+    wait "$zot_pid" 2>/dev/null || true
+  fi
+  zot_pid=
 }
 
 require_tools
@@ -824,7 +832,16 @@ wait_kind() {
 }
 
 phase "registry"
-docker run -d --name "$registry_name" -p 127.0.0.1:5000:5000 "$registry_image" >/dev/null
+cat >"$out/zot-config.json" <<'EOF'
+{
+  "distSpecVersion": "1.1.1",
+  "storage": {"rootDirectory": "/tmp/ipso-airgap-zot"},
+  "http": {"address": "127.0.0.1", "port": "5000"},
+  "log": {"level": "info"}
+}
+EOF
+zot serve "$out/zot-config.json" >"$out/zot.log" 2>&1 &
+zot_pid=$!
 wait_registry
 # Kind and the image build both use the docker daemon. Pull with crane while kind starts.
 phase "kind"
