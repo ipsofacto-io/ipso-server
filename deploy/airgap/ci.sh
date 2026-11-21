@@ -91,7 +91,7 @@ expected_identity() {
     fi
     ref=$GITHUB_REF
   elif [[ "${GITHUB_ACTIONS:-}" == "true" && -n "${GITHUB_RUN_ID:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && "${GITHUB_EVENT_NAME:-}" == "merge_group" ]]; then
-    if [[ ! "${GITHUB_REF:-}" =~ ^refs/gh-readonly-queue/main/pr-[0-9]+-[0-9a-f]{40}$ ]]; then
+    if [[ ! "${GITHUB_REF:-}" =~ ^refs/(heads/)?gh-readonly-queue/main/pr-[0-9]+-[0-9a-f]{40}$ ]]; then
       echo "unexpected merge_group GITHUB_REF: ${GITHUB_REF:-}" >&2
       exit 1
     fi
@@ -590,13 +590,14 @@ prepare_trusted_root() {
     echo "set AIRGAP_TRUSTED_ROOT_SHA256 to the 64-lowercase-hex SHA-256 of AIRGAP_TRUSTED_ROOT before running verify" >&2
     exit 1
   fi
-  python3 - "$AIRGAP_TRUSTED_ROOT" "$AIRGAP_TRUSTED_ROOT_SHA256" "$extract" "$dst" <<'PY'
+  python3 - "$AIRGAP_TRUSTED_ROOT" "$AIRGAP_TRUSTED_ROOT_SHA256" "$extract" "$stage" "$dst" <<'PY'
 import hashlib, os, pathlib, sys
 
 raw_src = pathlib.Path(sys.argv[1])
 want_sha = sys.argv[2]
 extract_dir = pathlib.Path(sys.argv[3]).resolve()
-dst_path = pathlib.Path(sys.argv[4])
+stage_dir = pathlib.Path(sys.argv[4]).resolve()
+dst_path = pathlib.Path(sys.argv[5])
 
 try:
     root_path = raw_src.resolve(strict=True)
@@ -604,8 +605,8 @@ except OSError as exc:
     raise SystemExit(f"AIRGAP_TRUSTED_ROOT is not a readable file: {raw_src} ({exc})") from exc
 if not root_path.is_file():
     raise SystemExit(f"AIRGAP_TRUSTED_ROOT is not a regular file: {raw_src}")
-if root_path == extract_dir or extract_dir in root_path.parents:
-    raise SystemExit("out-of-band trusted root must not resolve inside the archive extraction directory")
+if root_path in (extract_dir, stage_dir) or extract_dir in root_path.parents or stage_dir in root_path.parents:
+    raise SystemExit("out-of-band trusted root must not resolve inside the archive stage or extraction directory")
 
 data = root_path.read_bytes()
 got_sha = hashlib.sha256(data).hexdigest()

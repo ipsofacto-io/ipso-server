@@ -204,7 +204,7 @@ tar --no-same-owner --no-same-permissions --no-recursion -xf ../ipso-airgap.tar 
 rm -f ../manifest.files
 sha256sum -c manifest.sha256
 
-# 3. Verify image layouts, CycloneDX attestations, and the chart archive offline.
+# 3. Verify image layouts, CycloneDX attestations, and the chart archive offline against ../trusted-root-oob.json (never pass the extracted in-tar trusted-root.json to --trusted-root).
 unshare --user --map-root-user --net -- cosign verify --local-image images/ipso-server \
   --trusted-root ../trusted-root-oob.json \
   --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@refs/heads/main$' \
@@ -220,7 +220,7 @@ unshare --user --map-root-user --net -- cosign verify-blob --bundle signatures/c
   chart/ipso-*.tgz
 ```
 
-Repeat `verify` and `verify-attestation` with `images/postgres` and `images/nginx`. Load `images/ipso-server`, `images/postgres`, and `images/nginx` into the cluster, and tag `repository@digest` for the server digest in `airgap-values.yaml` and for the PostgreSQL and nginx index digests in the chart. When importing `images/ipso-server` with `ctr`, pass `--base-name ghcr.io/ipsofacto-io/ipso-server --digests`; when importing `images/postgres` and `images/nginx`, replace `index.json` in the import stream with `blobs/sha256/<index-digest>` and pass `--index-name <repository>@<index-digest> --platform linux/amd64` (as `deploy/airgap/ci.sh` does) so containerd stores the exact signed index digest. With registry egress closed:
+Repeat `verify` and `verify-attestation` with `images/postgres` and `images/nginx` (the v1 air-gapped tar ships `linux/amd64` container layers). Load `images/ipso-server`, `images/postgres`, and `images/nginx` into the cluster, and tag `repository@digest` for the server digest in `airgap-values.yaml` and for the PostgreSQL and nginx index digests in the chart. When importing `images/ipso-server` with `ctr`, pass `--base-name ghcr.io/ipsofacto-io/ipso-server --digests`; when importing `images/postgres` and `images/nginx`, replace `index.json` in the import stream with `blobs/sha256/<index-digest>` and pass `--index-name <repository>@<index-digest> --platform linux/amd64` (as `deploy/airgap/ci.sh` does) so containerd stores the exact signed index digest. With registry egress closed:
 
 ```sh
 helm upgrade --install ipso chart/ipso-*.tgz --namespace ipso \
