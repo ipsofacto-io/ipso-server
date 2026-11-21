@@ -198,7 +198,7 @@ unshare --user --map-root-user --net -- cosign verify-blob \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   manifest.sha256
 
-# 2. Prefer `AIRGAP_ARCHIVE=$PWD/../ipso-airgap.tar AIRGAP_TRUSTED_ROOT=$PWD/../trusted-root-oob.json AIRGAP_TRUSTED_ROOT_SHA256=$(awk '{print $1}' ../trusted-root-oob.json.sha256) bash deploy/airgap/ci.sh verify` for streaming extraction; if extracting manually after inspecting `tar -tvf`, extract only the canonical relative paths listed in the verified manifest and check every digest.
+# 2. If you transferred deploy/airgap/ci.sh from this repository alongside the archive (ci.sh is not packaged inside ipso-airgap.tar), prefer `AIRGAP_ARCHIVE=$PWD/../ipso-airgap.tar AIRGAP_TRUSTED_ROOT=$PWD/../trusted-root-oob.json AIRGAP_TRUSTED_ROOT_SHA256=$(awk '{print $1}' ../trusted-root-oob.json.sha256) bash deploy/airgap/ci.sh verify` for streaming extraction; if extracting manually after inspecting `tar -tvf`, extract only the canonical relative paths listed in the verified manifest and check every digest.
 sed 's/^[0-9a-f]\{64\}  //' manifest.sha256 > ../manifest.files
 tar --no-same-owner --no-same-permissions --no-recursion -xf ../ipso-airgap.tar -T ../manifest.files
 rm -f ../manifest.files
@@ -227,4 +227,4 @@ helm upgrade --install ipso chart/ipso-*.tgz --namespace ipso \
   -f airgap-values.yaml -f your-values.yaml
 ```
 
-`your-values.yaml` names the Secret, the tenant, and the issuer, as in the chart section above (`bash deploy/airgap/ci.sh verify` is the standalone operator verifier and requires only `cosign`, `python3`, and `unshare`; `bash deploy/airgap/ci.sh install` is the CI `kind` and Dex self-test harness and is not a production installer). The Compose file in the tar has no build. Load those same three runnable images into Docker and start it with `--env-file deploy/bundle/.env`.
+`your-values.yaml` names the Secret, the tenant, and the issuer, as in the chart section above (`deploy/airgap/ci.sh` is a repository script outside `ipso-airgap.tar`: `verify` is the standalone operator verifier requiring only `cosign`, `python3`, and `unshare`, whereas `install` is a CI-only `kind` and Dex self-test harness that blocks TCP 80 and 443 on the test node; production air-gapped environments must enforce full perimeter network isolation independently). The Compose file in the tar has no build. Load those same three runnable images into Docker and start it with `--env-file deploy/bundle/.env`.

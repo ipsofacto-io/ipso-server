@@ -51,6 +51,7 @@ require_tools() {
 
 require_tools "$mode"
 
+explicit_archive=${AIRGAP_ARCHIVE:-}
 if [[ -n "${AIRGAP_ARCHIVE:-}" ]]; then
   AIRGAP_ARCHIVE=$(python3 -c 'import os, sys; print(os.path.abspath(sys.argv[1]))' "$AIRGAP_ARCHIVE")
   export AIRGAP_ARCHIVE
@@ -119,8 +120,14 @@ ngx=
 schema_version=
 
 pinned_digest() {
-  local image=$1 compose_file=${2:-"$root/compose.yaml"}
-  sed -n "s#.*image: ${image}:.*@##p" "$compose_file" | head -1
+  local image=$1 compose_file=${2:-"$root/compose.yaml"} matches count
+  matches=$(sed -n "s#.*image: ${image}:.*@##p" "$compose_file" | sort -u)
+  count=$(grep -c . <<<"$matches" || true)
+  if (( count != 1 )); then
+    echo "expected one unique pinned digest for ${image} in ${compose_file}, got ${count}" >&2
+    exit 1
+  fi
+  printf '%s\n' "$matches"
 }
 
 repo_schema_version() {
@@ -795,7 +802,7 @@ verify_offline() {
 
 check_pointers() {
   local expected_pg="" expected_ngx="" expected_schema=""
-  if [[ -f "$out/server.digest" ]]; then
+  if [[ -z "$explicit_archive" && -f "$out/server.digest" ]]; then
     expected_pg=${pg:-}
     expected_ngx=${ngx:-}
     expected_schema=${schema_version:-}
@@ -1691,7 +1698,7 @@ run_verify() {
   verify_home=
   assert_archive
   layout_digest=$(verified_server_digest)
-  if [[ -f "$out/server.digest" ]]; then
+  if [[ -z "$explicit_archive" && -f "$out/server.digest" ]]; then
     require_same_digest "$layout_digest" "$(cat "$out/server.digest")" "ipso-server"
   fi
   server_digest=$layout_digest
@@ -1706,6 +1713,10 @@ ci_dex_config=${CI_DEX_CONFIG:-$root/deploy/compose/dex.yaml}
 ci_dex_image=
 
 load_ci_test_fixtures() {
+  if [[ "${GITHUB_ACTIONS:-}" != "true" && "${AIRGAP_ALLOW_LOCAL_HARNESS:-}" != "1" ]]; then
+    echo "install and all modes deploy mock local-dev credentials and Dex for CI self-testing; operators use verify (set AIRGAP_ALLOW_LOCAL_HARNESS=1 only on a disposable test host)" >&2
+    exit 1
+  fi
   if [[ ! -r "$ci_test_env_file" || ! -r "$ci_dex_config" || ! -r "$root/compose.yaml" ]]; then
     echo "install mode is the CI kind and Dex self-test harness and requires repo test fixtures; operators use verify" >&2
     exit 1
