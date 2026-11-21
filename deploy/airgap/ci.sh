@@ -86,8 +86,8 @@ cleanup() {
     fi
   done
   if (( code != 0 )) && [[ "${AIRGAP_BAIL:-}" != 1 ]]; then
-    dump_quick
     if [[ -f "$out/kind.log" ]]; then
+      dump_quick
       echo "---- kind ----" >&2
       tail -n 80 "$out/kind.log" >&2 || true
     fi
@@ -797,8 +797,7 @@ pull_pinned() {
 pack() {
   phase "build server image"
   bounded 8m docker build --provenance=false --sbom=false -t "${server_repo}:airgap" "$root"
-  # docker push of a schema 2 manifest wedged the daemon when zot converted it.
-  # crane uploads OCI, which zot stores without that conversion.
+  # docker save emits a schema 2 manifest. zot converts it. docker push is not used.
   phase "push server image"
   bounded 8m docker save -o "${out}/server.tar" "${server_repo}:airgap"
   bounded 8m crane push "${out}/server.tar" 127.0.0.1:5000/ipso-server:airgap
@@ -927,12 +926,13 @@ wait_kind() {
 }
 
 phase "registry"
-# No docker schema conversion. crane pushes OCI, which zot stores directly.
+# docker save emits a schema 2 manifest. zot converts that to OCI on ingest.
+# The upload is crane, not docker push: that client wedged the daemon here.
 cat >"$out/zot-config.json" <<'EOF'
 {
   "distSpecVersion": "1.1.1",
   "storage": {"rootDirectory": "/tmp/ipso-airgap-zot"},
-  "http": {"address": "127.0.0.1", "port": "5000"},
+  "http": {"address": "127.0.0.1", "port": "5000", "compat": ["docker2s2"]},
   "log": {"level": "info"}
 }
 EOF
