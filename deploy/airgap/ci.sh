@@ -449,9 +449,9 @@ run_isolated() {
   local home_dir=$1
   shift
   if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-    bounded 1m sudo env HOME="$home_dir" unshare --net -- "$@"
+    bounded 2m sudo env HOME="$home_dir" unshare --net -- "$@"
   else
-    bounded 1m env HOME="$home_dir" unshare --user --map-root-user --net -- "$@"
+    bounded 2m env HOME="$home_dir" unshare --user --map-root-user --net -- "$@"
   fi
 }
 
@@ -786,6 +786,17 @@ import_layout() {
   rm -f "$tar_in"
 }
 
+list_ctr_images() {
+  local out_ls
+  out_ls=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls)
+  if ! awk 'NR == 1 { ok = ($1 == "REF" && $2 == "TYPE" && $3 == "DIGEST") } END { exit !ok }' <<<"$out_ls"; then
+    echo "unexpected ctr images ls header" >&2
+    printf '%s\n' "$out_ls" >&2
+    exit 1
+  fi
+  printf '%s\n' "$out_ls"
+}
+
 import_sparse_index() {
   local dir=$1 pin=$2 base_name=$3 index_ref=$4 tar_in listed
   tar_in=$(mktemp)
@@ -809,7 +820,7 @@ PY
   docker exec -i "${cluster}-control-plane" ctr -n k8s.io images import \
     --base-name "$base_name" --index-name "$index_ref" --platform linux/amd64 - <"$tar_in" >&2
   rm -f "$tar_in"
-  listed=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls)
+  listed=$(list_ctr_images)
   if ! awk -v want="$index_ref" -v d="$pin" '$1 == want && $3 == d { found = 1 } END { exit !found }' <<<"$listed"; then
     echo "kind did not store ${index_ref} with index digest ${pin}" >&2
     printf '%s\n' "$listed" >&2
@@ -820,7 +831,7 @@ PY
 tag_exact() {
   local src=$1 dest=$2 listed
   docker exec "${cluster}-control-plane" ctr -n k8s.io images tag "$src" "$dest" >/dev/null
-  listed=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls)
+  listed=$(list_ctr_images)
   if ! awk -v want="$dest" '$1 == want { found = 1 } END { exit !found }' <<<"$listed"; then
     echo "kind did not keep ${dest}" >&2
     printf '%s\n' "$listed" >&2
@@ -830,7 +841,7 @@ tag_exact() {
 
 tag_digest() {
   local digest=$1 name=$2 listed src
-  listed=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls)
+  listed=$(list_ctr_images)
   if awk -v want="$name" '$1 == want { found = 1 } END { exit !found }' <<<"$listed"; then
     return
   fi
@@ -1439,15 +1450,7 @@ run_verify() {
 }
 
 run_install() {
-  if [[ ! -f "$out/verified" || ! -d "$extract/images" || "$archive" -nt "$out/verified" ]]; then
-    run_verify
-  else
-    server_digest=$(verified_server_digest)
-    if [[ -f "$out/server.digest" ]]; then
-      require_same_digest "$server_digest" "$(cat "$out/server.digest")" "ipso-server"
-    fi
-    check_pointers
-  fi
+  run_verify
   phase "kind"
   python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
     kind create cluster --name "$cluster" --image "$kind_node" >"$out/kind.log" 2>&1 &
@@ -1468,7 +1471,6 @@ case "$mode" in
     start_registry
     build_and_push_server
     sign_and_tar
-    run_verify
     run_install
     ;;
   pull)

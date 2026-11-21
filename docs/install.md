@@ -185,22 +185,32 @@ For browser sign-in, set `IPSO_PUBLIC_URL` and `IPSO_LOGIN_PROVIDERS` on the api
 The image signature covers the manifest digest, and `signatures/manifest.sigstore.json` covers `manifest.sha256` (`airgap-values.yaml`, `deploy/bundle/compose.yaml`, `deploy/bundle/.env.example`, `deploy/compose/postgres-init.sh`, `deploy/compose/nginx.conf`, the SBOMs, `chart/ipso-*.tgz`, `signatures/chart.sigstore.json`, and the image layout blobs). The certificate is the `ci` workflow on `refs/heads/main` in `ipsofacto-io/ipso-server`, issued by `https://token.actions.githubusercontent.com` (same-repository pull-request CI self-tests sign against `refs/pull/<n>/(merge|head)` and upload no artifact). In production, fetch and SHA-256-pin `trusted-root-oob.json` out of band on an online workstation with `cosign trusted-root create --with-default-services --out trusted-root-oob.json` and keep it outside the extraction directory, inspect `tar -tf ipso-airgap.tar` for unexpected paths or non-regular entries, extract only `trusted-root.json`, `manifest.sha256`, and `signatures/manifest.sigstore.json` first (at most 4 MiB each), verify `manifest.sha256` offline inside `unshare --net` against `trusted-root-oob.json`, confirm `cmp -s trusted-root.json trusted-root-oob.json`, and then extract and verify the remaining regular files against `manifest.sha256` (or run `AIRGAP_ARCHIVE=$PWD/ipso-airgap.tar AIRGAP_TRUSTED_ROOT=$PWD/trusted-root-oob.json bash deploy/airgap/ci.sh verify`) before checking the image layouts and chart archive. PostgreSQL and nginx are the pinned index digests, signed by that workflow, and `images/postgres` and `images/nginx` are sparse OCI layouts carrying each signed index, its linux/amd64 manifest, config, and layers, and the referrer bundles. Also check after verification that `airgap-values.yaml` and `deploy/bundle/compose.yaml` name the server digest `cosign verify` reported for `images/ipso-server`.
 
 ```sh
-cosign verify-blob --bundle signatures/manifest.sigstore.json \
-  --trusted-root trusted-root-oob.json \
+# 1. Extract only the three bootstrap files into a fresh directory; keep trusted-root-oob.json outside it.
+mkdir airgap-extract && cd airgap-extract
+tar --no-same-owner --no-same-permissions -xf ../ipso-airgap.tar ./trusted-root.json ./manifest.sha256 ./signatures/manifest.sigstore.json
+unshare --user --map-root-user --net -- cosign verify-blob \
+  --bundle signatures/manifest.sigstore.json \
+  --trusted-root ../trusted-root-oob.json \
   --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   manifest.sha256
+cmp -s trusted-root.json ../trusted-root-oob.json
+
+# 2. Extract the remaining regular files after checking tar -tvf (prefer deploy/airgap/ci.sh verify for streaming verification), then check every listed file digest.
+tar --no-same-owner --no-same-permissions -xf ../ipso-airgap.tar
 sha256sum -c manifest.sha256
-cosign verify --local-image images/ipso-server \
-  --trusted-root trusted-root-oob.json \
+
+# 3. Verify image layouts, CycloneDX attestations, and the chart archive offline.
+unshare --user --map-root-user --net -- cosign verify --local-image images/ipso-server \
+  --trusted-root ../trusted-root-oob.json \
   --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
-cosign verify-attestation --local-image images/ipso-server --type cyclonedx \
-  --trusted-root trusted-root-oob.json \
+unshare --user --map-root-user --net -- cosign verify-attestation --local-image images/ipso-server --type cyclonedx \
+  --trusted-root ../trusted-root-oob.json \
   --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
-cosign verify-blob --bundle signatures/chart.sigstore.json \
-  --trusted-root trusted-root-oob.json \
+unshare --user --map-root-user --net -- cosign verify-blob --bundle signatures/chart.sigstore.json \
+  --trusted-root ../trusted-root-oob.json \
   --certificate-identity-regexp '^https://github\.com/ipsofacto-io/ipso-server/\.github/workflows/ci\.yml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   chart/ipso-*.tgz
