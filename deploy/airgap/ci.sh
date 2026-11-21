@@ -69,7 +69,7 @@ require_tools() {
 
 pinned_digest() {
   local image=$1
-  sed -n "s/.*image: ${image}:.*@//p" compose.yaml | head -1
+  sed -n "s#.*image: ${image}:.*@##p" compose.yaml | head -1
 }
 
 require_pins() {
