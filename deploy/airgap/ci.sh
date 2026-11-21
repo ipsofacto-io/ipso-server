@@ -26,7 +26,7 @@ zot_pid=
 
 require_tools() {
   local cmd
-  for cmd in docker helm kind kubectl cosign syft crane zot openssl python3 curl timeout; do
+  for cmd in docker helm kind kubectl cosign syft crane zot openssl python3 curl; do
     command -v "$cmd" >/dev/null
   done
   if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]]; then
@@ -54,38 +54,62 @@ require_pins() {
   cmp charts/ipso/files/postgres-init.sh deploy/compose/postgres-init.sh
 }
 
-dump() {
-  kubectl -n ipso get pods -o wide || true
-  kubectl -n ipso get events --sort-by=.lastTimestamp || true
-  kubectl -n ipso describe pods || true
-  kubectl -n ipso logs -l app.kubernetes.io/name=ipso --all-containers --tail=80 || true
+# kubectl and kind talk to a daemon that may be stuck in uninterruptible sleep.
+# Waiting for that daemon holds the step open, and a cancelled job drops the log.
+dump_quick() {
+  local pid
+  {
+    kubectl -n ipso get pods -o wide || true
+    kubectl -n ipso get events --sort-by=.lastTimestamp || true
+    kubectl -n ipso describe pods || true
+    kubectl -n ipso logs -l app.kubernetes.io/name=ipso --all-containers --tail=80 || true
+  } >"$out/dump.txt" 2>&1 &
+  pid=$!
+  for _ in $(seq 1 10); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" || true
+      cat "$out/dump.txt" >&2 || true
+      return
+    fi
+    sleep 2
+  done
+  echo "kubectl did not return" >&2
+  kill -KILL "$pid" 2>/dev/null || true
+  cat "$out/dump.txt" >&2 || true
 }
 
 cleanup() {
-  local code=$?
-  if [[ -n "${heartbeat_pid}" ]] && kill -0 "$heartbeat_pid" 2>/dev/null; then
-    kill "$heartbeat_pid" 2>/dev/null || true
-    wait "$heartbeat_pid" 2>/dev/null || true
-  fi
-  if [[ -n "${kind_pid}" ]] && kill -0 "$kind_pid" 2>/dev/null; then
-    kill "$kind_pid" 2>/dev/null || true
-    wait "$kind_pid" 2>/dev/null || true
-  fi
-  if (( code != 0 )); then
-    dump
+  local code=$? pid del
+  for pid in "$heartbeat_pid" "$kind_pid" "$zot_pid"; do
+    if [[ -n "$pid" ]]; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  done
+  if (( code != 0 )) && [[ "${AIRGAP_BAIL:-}" != 1 ]]; then
+    dump_quick
     if [[ -f "$out/kind.log" ]]; then
       echo "---- kind ----" >&2
-      cat "$out/kind.log" >&2 || true
+      tail -n 80 "$out/kind.log" >&2 || true
     fi
     if [[ -f "$out/zot.log" ]]; then
       echo "---- zot ----" >&2
-      cat "$out/zot.log" >&2 || true
+      tail -n 80 "$out/zot.log" >&2 || true
+    fi
+    if [[ -f "$out/bounded.log" ]]; then
+      echo "---- command ----" >&2
+      tail -n 80 "$out/bounded.log" >&2 || true
     fi
   fi
-  kind delete cluster --name "$cluster" >/dev/null 2>&1 || true
-  if [[ -n "${zot_pid}" ]] && kill -0 "$zot_pid" 2>/dev/null; then
-    kill "$zot_pid" 2>/dev/null || true
-    wait "$zot_pid" 2>/dev/null || true
+  if [[ "${AIRGAP_BAIL:-}" != 1 ]]; then
+    kind delete cluster --name "$cluster" >/dev/null 2>&1 &
+    del=$!
+    for _ in $(seq 1 8); do
+      if ! kill -0 "$del" 2>/dev/null; then
+        break
+      fi
+      sleep 1
+    done
+    kill -KILL "$del" 2>/dev/null || true
   fi
   exit "$code"
 }
@@ -161,12 +185,75 @@ heartbeat() {
   done
 }
 
-# GNU timeout only sends TERM unless asked. Docker and crane can ignore that and
-# keep the job at the limit, which drops the log. KILL the process group.
+# A child in uninterruptible sleep ignores KILL, and waiting for it holds the
+# step open until the job is cancelled. A cancelled job drops the log. Start the
+# command in its own session, and if it outlives the limit, leave it and exit.
 bounded() {
   local limit=$1
   shift
-  timeout --kill-after=20s "$limit" "$@"
+  local seconds rc
+  seconds=$(python3 -c 'import sys
+s = sys.argv[1]
+if s.endswith("m"):
+    print(int(s[:-1]) * 60)
+elif s.endswith("s"):
+    print(int(s[:-1]))
+else:
+    raise SystemExit("limit must end in m or s")' "$limit")
+  set +e
+  python3 - "$seconds" "$out/bounded.log" "$@" <<'PY'
+import os, signal, subprocess, sys, time
+seconds = int(sys.argv[1])
+log_path = sys.argv[2]
+cmd = sys.argv[3:]
+log = open(log_path, "wb")
+proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+started = time.monotonic()
+deadline = started + seconds
+next_note = started + 15
+while True:
+    rc = proc.poll()
+    if rc is not None:
+        log.close()
+        sys.exit(rc)
+    now = time.monotonic()
+    if now >= next_note:
+        print(
+            f"airgap: still running ({int(now - started)}s): {' '.join(cmd[:4])}",
+            file=sys.stderr,
+            flush=True,
+        )
+        next_note = now + 15
+    if now >= deadline:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        log.close()
+        print(
+            f"airgap: giving up after {seconds}s: {' '.join(cmd[:6])}",
+            file=sys.stderr,
+            flush=True,
+        )
+        os._exit(124)
+    time.sleep(2)
+PY
+  rc=$?
+  set -e
+  if [[ "$rc" -eq 124 ]]; then
+    AIRGAP_BAIL=1
+    echo "airgap: leaving the stuck command so this step can upload its log" >&2
+    if [[ -f "$out/bounded.log" ]]; then
+      echo "---- command ----" >&2
+      tail -n 100 "$out/bounded.log" >&2 || true
+    fi
+    if [[ -f "$out/zot.log" ]]; then
+      echo "---- zot ----" >&2
+      tail -n 80 "$out/zot.log" >&2 || true
+    fi
+    exit 124
+  fi
+  return "$rc"
 }
 
 sign_ref() {
@@ -194,8 +281,31 @@ publish_pinned() {
   local src=$1 dest=$2 pin=$3 what=$4
   phase "publish ${what}"
   python3 - "$src" "$dest" "$pin" "$what" <<'PY'
-import json, subprocess, sys, urllib.error, urllib.request
+import json, os, signal, subprocess, sys, time, urllib.error, urllib.request
 src, dest, pin, what = sys.argv[1:]
+
+def run(cmd, seconds):
+    proc = subprocess.Popen(cmd, start_new_session=True)
+    deadline = time.monotonic() + seconds
+    while True:
+        rc = proc.poll()
+        if rc is not None:
+            if rc != 0:
+                raise SystemExit(f"publish {what}: {' '.join(cmd[:4])} failed ({rc})")
+            return
+        if time.monotonic() >= deadline:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            print(
+                f"publish {what}: {' '.join(cmd[:4])} exceeded {seconds}s",
+                file=sys.stderr,
+                flush=True,
+            )
+            os._exit(124)
+        time.sleep(2)
+
 try:
     raw = subprocess.check_output(["crane", "manifest", src], timeout=120)
 except subprocess.TimeoutExpired:
@@ -220,19 +330,13 @@ def put(ref_name, body, content_type):
         detail = exc.read().decode()[:500]
         raise SystemExit(f"publish {what} {ref_name}: HTTP {exc.code} {detail}")
 
-try:
-    if "index" in media or "list" in media:
-        # zot accepts a sparse index, so the other architectures are not uploaded.
-        subprocess.check_call(
-            ["crane", "copy", "--platform", "linux/amd64", src, f"{dest}:platform"],
-            timeout=600,
-        )
-        put(pin, raw, media)
-        put("pinned", raw, media)
-    else:
-        subprocess.check_call(["crane", "copy", src, f"{dest}:pinned"], timeout=600)
-except subprocess.TimeoutExpired:
-    raise SystemExit(f"publish {what}: copying the image exceeded 10 minutes")
+if "index" in media or "list" in media:
+    # zot accepts a sparse index, so the other architectures are not uploaded.
+    run(["crane", "copy", "--platform", "linux/amd64", src, f"{dest}:platform"], 600)
+    put(pin, raw, media)
+    put("pinned", raw, media)
+else:
+    run(["crane", "copy", src, f"{dest}:pinned"], 600)
 PY
   require_same_digest "$(digest_of "${dest}:pinned")" "$pin" "$what"
 }
@@ -688,7 +792,7 @@ bootstrap:
   kekSecret: ipso-ci-kek
 EOF
   phase "helm install"
-  helm upgrade --install ipso "$chart" --namespace ipso \
+  bounded 8m helm upgrade --install ipso "$chart" --namespace ipso \
     -f "${extract}/airgap-values.yaml" \
     -f "$ci_values" \
     --timeout 8m

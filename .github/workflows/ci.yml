@@ -391,9 +391,10 @@ jobs:
           install_file https://github.com/project-zot/zot/releases/download/v2.1.23/zot-linux-amd64 1f6bab0b9eee426d0785de701ff510df5c02bdb8d7287494a582634abfc5d638 zot
           echo "$bin" >> "$GITHUB_PATH"
       - name: Pack, verify offline, and install with registry egress cut
-        # KILL the script before the job limit. A job cancel drops the log.
-        timeout-minutes: 25
-        run: timeout --signal=KILL 22m bash deploy/airgap/ci.sh
+        # The script leaves a stuck child and exits. Waiting for that child
+        # holds the step open, and a cancelled job drops the log.
+        timeout-minutes: 28
+        run: bash deploy/airgap/ci.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ipso-airgap
