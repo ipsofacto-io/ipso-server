@@ -1123,12 +1123,18 @@ assert_migrate_and_bootstrap() {
     env PGPASSWORD="$IPSO_MIGRATE_PASSWORD" \
     psql -q --host=127.0.0.1 --username=ipso_migrate --dbname=ipso --tuples-only --no-align \
     -c "SELECT max(version_id) FROM goose_db_version" | tr -d '[:space:]')
-  want=$(find internal/migrate/migrations -name '*.sql' -print \
-    | sed -n 's#.*/0*\([0-9][0-9]*\)_.*#\1#p' \
-    | sort -n | tail -1)
-  if [[ "$got" != "$want" ]]; then
-    echo "schema after air-gapped install is ${got}, want ${want}" >&2
+  if [[ ! "$got" =~ ^[1-9][0-9]*$ ]]; then
+    echo "migrate hook did not apply schema migrations (got=${got})" >&2
     exit 1
+  fi
+  if [[ -f "$out/server.digest" ]]; then
+    want=$(find internal/migrate/migrations -name '*.sql' -print \
+      | sed -n 's#.*/0*\([0-9][0-9]*\)_.*#\1#p' \
+      | sort -n | tail -1)
+    if [[ "$got" != "$want" ]]; then
+      echo "schema after air-gapped install is ${got}, want ${want}" >&2
+      exit 1
+    fi
   fi
   seeded=$(bounded 1m kubectl -n ipso exec ipso-postgresql-0 -- \
     env PGPASSWORD="$IPSO_APP_PASSWORD" \
@@ -1392,10 +1398,19 @@ import hashlib, pathlib, sys
 stage = pathlib.Path(sys.argv[1]).resolve()
 skip = {"manifest.sha256", "signatures/manifest.sigstore.json"}
 lines = []
-for path in sorted(p for p in stage.rglob("*") if p.is_file()):
+files = []
+for path in stage.rglob("*"):
+    if path.is_symlink():
+        raise SystemExit(f"unexpected symlink in stage: {path}")
+    if path.is_dir():
+        continue
+    if not path.is_file():
+        raise SystemExit(f"unexpected non-regular entry in stage: {path}")
     rel = path.relative_to(stage).as_posix()
     if rel in skip:
         continue
+    files.append((rel, path))
+for rel, path in sorted(files):
     h = hashlib.sha256()
     with path.open("rb") as f:
         while True:
@@ -1409,17 +1424,43 @@ PY
   bounded 2m cosign sign-blob --yes \
     --bundle "${stage}/signatures/manifest.sigstore.json" \
     "${stage}/manifest.sha256"
-  python3 - "$stage" <<'PY'
-import pathlib, sys
+  python3 - "$stage" "$archive" <<'PY'
+import pathlib, stat, sys, tarfile
 
-stage = pathlib.Path(sys.argv[1])
-for rel in ("manifest.sha256", "signatures/manifest.sigstore.json"):
+stage = pathlib.Path(sys.argv[1]).resolve()
+out_tar = pathlib.Path(sys.argv[2])
+bootstrap = ("manifest.sha256", "signatures/manifest.sigstore.json")
+for rel in bootstrap:
     size = (stage / rel).stat().st_size
     if size > 4 * 1024 * 1024:
         raise SystemExit(f"bootstrap file exceeds 4 MiB cap: {rel} ({size} bytes)")
-PY
 
-  tar -C "$stage" -cf "$archive" .
+rest = []
+for path in stage.rglob("*"):
+    if path.is_symlink():
+        raise SystemExit(f"unexpected symlink in stage: {path}")
+    if path.is_dir():
+        continue
+    if not path.is_file():
+        raise SystemExit(f"unexpected non-regular entry in stage: {path}")
+    rel = path.relative_to(stage).as_posix()
+    if rel not in bootstrap:
+        rest.append((rel, path))
+
+def clean_tarinfo(info: tarfile.TarInfo) -> tarfile.TarInfo:
+    info.uid = 0
+    info.gid = 0
+    info.uname = ""
+    info.gname = ""
+    info.mode = 0o755 if (info.mode & stat.S_IXUSR) else 0o644
+    return info
+
+with tarfile.open(out_tar, "w", format=tarfile.PAX_FORMAT) as tar:
+    for rel in bootstrap:
+        tar.add(stage / rel, arcname=rel, recursive=False, filter=clean_tarinfo)
+    for rel, path in sorted(rest):
+        tar.add(path, arcname=rel, recursive=False, filter=clean_tarinfo)
+PY
   stop_registry
 }
 

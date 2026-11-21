@@ -190,7 +190,7 @@ sha256sum -c trusted-root-oob.json.sha256
 
 # 1. Extract only the two bootstrap files into a fresh directory.
 mkdir airgap-extract && cd airgap-extract
-tar --no-same-owner --no-same-permissions -xf ../ipso-airgap.tar ./manifest.sha256 ./signatures/manifest.sigstore.json
+tar --no-same-owner --no-same-permissions -xf ../ipso-airgap.tar manifest.sha256 signatures/manifest.sigstore.json
 unshare --user --map-root-user --net -- cosign verify-blob \
   --bundle signatures/manifest.sigstore.json \
   --trusted-root ../trusted-root-oob.json \
@@ -198,8 +198,10 @@ unshare --user --map-root-user --net -- cosign verify-blob \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   manifest.sha256
 
-# 2. Prefer `AIRGAP_ARCHIVE=$PWD/../ipso-airgap.tar AIRGAP_TRUSTED_ROOT=$PWD/../trusted-root-oob.json AIRGAP_TRUSTED_ROOT_SHA256=$(awk '{print $1}' ../trusted-root-oob.json.sha256) bash deploy/airgap/ci.sh verify` for streaming extraction; if extracting manually after inspecting `tar -tvf`, extract only the paths listed in the verified manifest and check every digest.
-sed 's/^[0-9a-f]\{64\}  /\.\//' manifest.sha256 | tar --no-same-owner --no-same-permissions --no-recursion -xf ../ipso-airgap.tar -T -
+# 2. Prefer `AIRGAP_ARCHIVE=$PWD/../ipso-airgap.tar AIRGAP_TRUSTED_ROOT=$PWD/../trusted-root-oob.json AIRGAP_TRUSTED_ROOT_SHA256=$(awk '{print $1}' ../trusted-root-oob.json.sha256) bash deploy/airgap/ci.sh verify` for streaming extraction; if extracting manually after inspecting `tar -tvf`, extract only the canonical relative paths listed in the verified manifest and check every digest.
+sed 's/^[0-9a-f]\{64\}  //' manifest.sha256 > ../manifest.files
+tar --no-same-owner --no-same-permissions --no-recursion -xf ../ipso-airgap.tar -T ../manifest.files
+rm -f ../manifest.files
 sha256sum -c manifest.sha256
 
 # 3. Verify image layouts, CycloneDX attestations, and the chart archive offline.
