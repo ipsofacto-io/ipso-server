@@ -864,12 +864,10 @@ wait_health() {
 }
 
 wait_rollout() {
-  bounded 10m bash -euo pipefail -c '
-    kubectl -n ipso rollout status statefulset/ipso-postgresql --timeout=10m
-    kubectl -n ipso rollout status deploy/ipso-api --timeout=10m
-    kubectl -n ipso rollout status deploy/ipso-worker --timeout=10m
-    kubectl -n ipso rollout status deploy/ipso-front --timeout=10m
-  '
+  bounded 10m kubectl -n ipso rollout status statefulset/ipso-postgresql --timeout=10m
+  bounded 10m kubectl -n ipso rollout status deploy/ipso-api --timeout=10m
+  bounded 10m kubectl -n ipso rollout status deploy/ipso-worker --timeout=10m
+  bounded 10m kubectl -n ipso rollout status deploy/ipso-front --timeout=10m
 }
 
 refuse_foreign_image() {
