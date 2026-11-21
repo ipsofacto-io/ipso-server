@@ -1405,7 +1405,7 @@ run_verify() {
 
 run_install() {
   server_digest=$(cat "$out/server.digest")
-  if [[ ! -f "$out/verified" || ! -d "$extract/images" ]]; then
+  if [[ ! -f "$out/verified" || ! -d "$extract/images" || "$archive" -nt "$out/verified" ]]; then
     run_verify
   else
     check_pointers
