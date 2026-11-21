@@ -847,13 +847,13 @@ EOF
 zot serve "$out/zot-config.json" >"$out/zot.log" 2>&1 &
 zot_pid=$!
 wait_registry
-# Kind and the image build both use the docker daemon. Pull with crane while kind starts.
+# Pack before kind. The runner has room for the images or for the cluster, not both at once.
+pull_pinned
+pack
 phase "kind"
 kind create cluster --name "$cluster" --image "$kind_node" >"$out/kind.log" 2>&1 &
 kind_pid=$!
-pull_pinned
 wait_kind
-pack
 
 rm -rf "$extract"
 mkdir -p "$extract"
