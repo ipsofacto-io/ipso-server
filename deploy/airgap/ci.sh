@@ -896,10 +896,22 @@ def blob(data, media):
     return {"mediaType": media, "digest": digest, "size": len(data)}
 
 config = (extract / image["Config"]).read_bytes()
+diff_ids = json.loads(config).get("rootfs", {}).get("diff_ids", [])
+if len(diff_ids) != len(image["Layers"]):
+    raise SystemExit("layer count does not match image rootfs diff_ids")
 layers = []
-for name in image["Layers"]:
+for name, want_diff in zip(image["Layers"], diff_ids):
     raw = (extract / name).read_bytes()
-    layers.append(blob(gzip.compress(raw, mtime=0), "application/vnd.oci.image.layer.v1.tar+gzip"))
+    if raw[:2] == b"\x1f\x8b":
+        uncompressed = gzip.decompress(raw)
+        compressed = raw
+    else:
+        uncompressed = raw
+        compressed = gzip.compress(raw, mtime=0)
+    got_diff = "sha256:" + hashlib.sha256(uncompressed).hexdigest()
+    if got_diff != want_diff:
+        raise SystemExit(f"layer {name} diff_id {got_diff} != {want_diff}")
+    layers.append(blob(compressed, "application/vnd.oci.image.layer.v1.tar+gzip"))
 manifest = {
     "schemaVersion": 2,
     "mediaType": "application/vnd.oci.image.manifest.v1+json",
