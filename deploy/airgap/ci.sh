@@ -512,7 +512,17 @@ import_layout() {
 
 tar_repo_tag() {
   local file=$1 tag
-  tag=$(tar -xOf "$file" manifest.json | python3 -c 'import json,sys; tags=json.load(sys.stdin)[0].get("RepoTags") or []; t=tags[0] if tags else ""; print(t.removeprefix("index.") if t.startswith("index.docker.io/") else t, end="")')
+  tag=$(python3 - "$file" <<'PY'
+import json, sys, tarfile
+with tarfile.open(sys.argv[1]) as tar:
+    entry = tar.extractfile("manifest.json")
+    if entry is None:
+        raise SystemExit("manifest.json is empty")
+    tags = json.load(entry)[0].get("RepoTags") or []
+t = tags[0] if tags else ""
+print(t.removeprefix("index.") if t.startswith("index.docker.io/") else t, end="")
+PY
+)
   if [[ -z "$tag" ]]; then
     echo "runtime tar ${file} has no image name" >&2
     exit 1
@@ -521,44 +531,42 @@ tar_repo_tag() {
 }
 
 import_named() {
-  local file=$1 marker=$2 src
+  local file=$1 marker=$2 listed src
   import_tar "$file"
-  src=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v marker="$marker" '$1 == marker || $1 == "index." marker { print $1; exit }')
+  listed=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls)
+  src=$(awk -v marker="$marker" '!found && ($1 == marker || $1 == "index." marker) { found = $1 } END { if (found) print found }' <<<"$listed")
   if [[ -z "$src" ]]; then
     echo "kind did not import ${marker}" >&2
-    docker exec "${cluster}-control-plane" ctr -n k8s.io images ls >&2
+    printf '%s\n' "$listed" >&2
     exit 1
   fi
   printf '%s\n' "$src"
 }
 
 tag_exact() {
-  local src=$1 dest=$2
+  local src=$1 dest=$2 listed
   docker exec "${cluster}-control-plane" ctr -n k8s.io images tag "$src" "$dest" >/dev/null
-  if ! docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v want="$dest" '$1 == want { found = 1 } END { exit !found }'; then
+  listed=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls)
+  if ! awk -v want="$dest" '$1 == want { found = 1 } END { exit !found }' <<<"$listed"; then
     echo "kind did not keep ${dest}" >&2
-    docker exec "${cluster}-control-plane" ctr -n k8s.io images ls >&2
+    printf '%s\n' "$listed" >&2
     exit 1
   fi
 }
 
 tag_digest() {
-  local digest=$1 name=$2 src
-  if docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v want="$name" '$1 == want { found = 1 } END { exit !found }'; then
+  local digest=$1 name=$2 listed src
+  listed=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls)
+  if awk -v want="$name" '$1 == want { found = 1 } END { exit !found }' <<<"$listed"; then
     return
   fi
-  src=$(docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v d="$digest" 'index($0, d) && $0 ~ /manifest/ && index($0, "index") == 0 { print $1; exit }')
+  src=$(awk -v d="$digest" '!found && $3 == d && $2 ~ /manifest/ && $2 !~ /index/ { found = $1 } END { if (found) print found }' <<<"$listed")
   if [[ -z "$src" ]]; then
     echo "kind has no runnable image for ${digest}" >&2
-    docker exec "${cluster}-control-plane" ctr -n k8s.io images ls >&2
+    printf '%s\n' "$listed" >&2
     exit 1
   fi
-  docker exec "${cluster}-control-plane" ctr -n k8s.io images tag "$src" "$name" >/dev/null
-  if ! docker exec "${cluster}-control-plane" ctr -n k8s.io images ls | awk -v want="$name" '$1 == want { found = 1 } END { exit !found }'; then
-    echo "kind did not keep ${name}" >&2
-    docker exec "${cluster}-control-plane" ctr -n k8s.io images ls >&2
-    exit 1
-  fi
+  tag_exact "$src" "$name"
 }
 
 cut_egress() {
@@ -632,11 +640,13 @@ install_from_tar() {
   phase "load images"
   import_layout "${extract}/images/ipso-server"
   tag_digest "$server_digest" "${server_repo}@${server_digest}"
-  local pg_src ngx_src
-  pg_src=$(import_named "${extract}/runtime/postgres.tar" "$(tar_repo_tag "${extract}/runtime/postgres.tar")")
+  local pg_tag pg_src ngx_tag ngx_src
+  pg_tag=$(tar_repo_tag "${extract}/runtime/postgres.tar")
+  pg_src=$(import_named "${extract}/runtime/postgres.tar" "$pg_tag")
   tag_exact "$pg_src" "postgres@${pg}"
   tag_exact "$pg_src" "docker.io/library/postgres@${pg}"
-  ngx_src=$(import_named "${extract}/runtime/nginx.tar" "$(tar_repo_tag "${extract}/runtime/nginx.tar")")
+  ngx_tag=$(tar_repo_tag "${extract}/runtime/nginx.tar")
+  ngx_src=$(import_named "${extract}/runtime/nginx.tar" "$ngx_tag")
   tag_exact "$ngx_src" "nginxinc/nginx-unprivileged@${ngx}"
   tag_exact "$ngx_src" "docker.io/nginxinc/nginx-unprivileged@${ngx}"
 
