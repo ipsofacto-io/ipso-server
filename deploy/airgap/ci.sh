@@ -117,7 +117,7 @@ cleanup() {
 wait_registry() {
   local attempt
   for attempt in $(seq 1 30); do
-    if curl -fsS http://127.0.0.1:5000/v2/ >/dev/null; then
+    if curl -fsS --max-time 2 http://127.0.0.1:5000/v2/ >/dev/null; then
       return
     fi
     sleep 1
@@ -186,73 +186,52 @@ heartbeat() {
 }
 
 # A child in uninterruptible sleep ignores KILL, and waiting for it holds the
-# step open until the job is cancelled. A cancelled job drops the log. Start the
-# command in its own session, and if it outlives the limit, leave it and exit.
+# step open until the job is cancelled. A cancelled job drops the log. The child
+# runs in its own session. This shell only sleeps, and it exits without waiting.
 bounded() {
   local limit=$1
   shift
-  local seconds rc
-  seconds=$(python3 -c 'import sys
-s = sys.argv[1]
-if s.endswith("m"):
-    print(int(s[:-1]) * 60)
-elif s.endswith("s"):
-    print(int(s[:-1]))
-else:
-    raise SystemExit("limit must end in m or s")' "$limit")
+  local seconds=0 elapsed=0 pid rc state
+  case "$limit" in
+    *m) seconds=$(( ${limit%m} * 60 )) ;;
+    *s) seconds=$(( ${limit%s} )) ;;
+    *)
+      echo "limit must end in m or s: ${limit}" >&2
+      exit 1
+      ;;
+  esac
+  : >"$out/bounded.log"
+  python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" >"$out/bounded.log" 2>&1 &
+  pid=$!
+  while [[ -d "/proc/${pid}" ]]; do
+    state=$(cat "/proc/${pid}/stat" 2>/dev/null || true)
+    state=${state#*) }
+    state=${state%% *}
+    # A finished child is a zombie until wait. kill -0 still succeeds for it.
+    if [[ -z "$state" || "$state" == "Z" ]]; then
+      break
+    fi
+    if (( elapsed >= seconds )); then
+      kill -KILL -- "-${pid}" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+      AIRGAP_BAIL=1
+      echo "airgap: giving up after ${seconds}s: $*" >&2
+      tail -n 100 "$out/bounded.log" >&2 || true
+      if [[ -f "$out/zot.log" ]]; then
+        echo "---- zot ----" >&2
+        tail -n 80 "$out/zot.log" >&2 || true
+      fi
+      exit 124
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+    if (( elapsed % 15 == 0 )); then
+      echo "airgap: still running (${elapsed}s, state ${state}): $*" >&2
+    fi
+  done
   set +e
-  python3 - "$seconds" "$out/bounded.log" "$@" <<'PY'
-import os, signal, subprocess, sys, time
-seconds = int(sys.argv[1])
-log_path = sys.argv[2]
-cmd = sys.argv[3:]
-log = open(log_path, "wb")
-proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-started = time.monotonic()
-deadline = started + seconds
-next_note = started + 15
-while True:
-    rc = proc.poll()
-    if rc is not None:
-        log.close()
-        sys.exit(rc)
-    now = time.monotonic()
-    if now >= next_note:
-        print(
-            f"airgap: still running ({int(now - started)}s): {' '.join(cmd[:4])}",
-            file=sys.stderr,
-            flush=True,
-        )
-        next_note = now + 15
-    if now >= deadline:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        log.close()
-        print(
-            f"airgap: giving up after {seconds}s: {' '.join(cmd[:6])}",
-            file=sys.stderr,
-            flush=True,
-        )
-        os._exit(124)
-    time.sleep(2)
-PY
+  wait "$pid"
   rc=$?
   set -e
-  if [[ "$rc" -eq 124 ]]; then
-    AIRGAP_BAIL=1
-    echo "airgap: leaving the stuck command so this step can upload its log" >&2
-    if [[ -f "$out/bounded.log" ]]; then
-      echo "---- command ----" >&2
-      tail -n 100 "$out/bounded.log" >&2 || true
-    fi
-    if [[ -f "$out/zot.log" ]]; then
-      echo "---- zot ----" >&2
-      tail -n 80 "$out/zot.log" >&2 || true
-    fi
-    exit 124
-  fi
   return "$rc"
 }
 
@@ -818,9 +797,11 @@ pull_pinned() {
 pack() {
   phase "build server image"
   bounded 8m docker build --provenance=false --sbom=false -t "${server_repo}:airgap" "$root"
+  # docker push of a schema 2 manifest wedged the daemon when zot converted it.
+  # crane uploads OCI, which zot stores without that conversion.
   phase "push server image"
-  docker tag "${server_repo}:airgap" 127.0.0.1:5000/ipso-server:airgap
-  bounded 8m docker push 127.0.0.1:5000/ipso-server:airgap
+  bounded 8m docker save -o "${out}/server.tar" "${server_repo}:airgap"
+  bounded 8m crane push "${out}/server.tar" 127.0.0.1:5000/ipso-server:airgap
   server_digest=$(digest_of 127.0.0.1:5000/ipso-server:airgap)
   publish_pinned "postgres@${pg}" 127.0.0.1:5000/postgres "$pg" postgres
   publish_pinned "nginxinc/nginx-unprivileged@${ngx}" 127.0.0.1:5000/nginx "$ngx" nginx
@@ -923,8 +904,14 @@ heartbeat &
 heartbeat_pid=$!
 
 wait_kind() {
-  local waited=0
-  while kill -0 "$kind_pid" 2>/dev/null; do
+  local waited=0 state
+  while [[ -n "${kind_pid}" && -d "/proc/${kind_pid}" ]]; do
+    state=$(cat "/proc/${kind_pid}/stat" 2>/dev/null || true)
+    state=${state#*) }
+    state=${state%% *}
+    if [[ -z "$state" || "$state" == "Z" ]]; then
+      break
+    fi
     if (( waited >= 120 )); then
       echo "kind did not finish within 10 minutes" >&2
       exit 1
@@ -940,11 +927,12 @@ wait_kind() {
 }
 
 phase "registry"
+# No docker schema conversion. crane pushes OCI, which zot stores directly.
 cat >"$out/zot-config.json" <<'EOF'
 {
   "distSpecVersion": "1.1.1",
   "storage": {"rootDirectory": "/tmp/ipso-airgap-zot"},
-  "http": {"address": "127.0.0.1", "port": "5000", "compat": ["docker2s2"]},
+  "http": {"address": "127.0.0.1", "port": "5000"},
   "log": {"level": "info"}
 }
 EOF
@@ -955,7 +943,8 @@ wait_registry
 pull_pinned
 pack
 phase "kind"
-kind create cluster --name "$cluster" --image "$kind_node" >"$out/kind.log" 2>&1 &
+python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
+  kind create cluster --name "$cluster" --image "$kind_node" >"$out/kind.log" 2>&1 &
 kind_pid=$!
 wait_kind
 
