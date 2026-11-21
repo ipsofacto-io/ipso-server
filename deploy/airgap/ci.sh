@@ -1455,7 +1455,19 @@ build_and_push_server() {
   printf '%s\n' "$server_digest" >"$out/server.digest"
 }
 
+require_sign_inputs() {
+  if [[ ! -r "$out/postgres.tar" || ! -r "$out/nginx.tar" ]]; then
+    echo "missing base image tarballs in $out; run pull mode first" >&2
+    exit 1
+  fi
+  if [[ ! -r "$out/server.digest" || ! -r "$out/server.tar" ]]; then
+    echo "missing server image artifacts in $out; run server mode first" >&2
+    exit 1
+  fi
+}
+
 sign_and_tar() {
+  require_sign_inputs
   identity=$(expected_identity)
   server_digest=$(cat "$out/server.digest")
   if ! curl -fsS --max-time 5 \
@@ -1472,8 +1484,6 @@ sign_and_tar() {
   write_sbom "docker-archive:${out}/postgres.tar" "${stage}/sbom/postgres.cdx.json"
   write_sbom "docker-archive:${out}/nginx.tar" "${stage}/sbom/nginx.cdx.json"
   bounded 2m cosign trusted-root create --with-default-services --out "${stage}/trusted-root.json"
-  cp "${stage}/trusted-root.json" "$out/trusted-root.json"
-  sha256sum "$out/trusted-root.json" | awk '{print $1}' >"$out/trusted-root.sha256"
 
   sign_one 127.0.0.1:5000/ipso-server "$server_digest" ipso-server
   sign_ref 127.0.0.1:5000/postgres "$pg" postgres
@@ -1757,8 +1767,13 @@ case "$mode" in
     start_registry
     build_and_push_server
     sign_and_tar
-    export AIRGAP_TRUSTED_ROOT=${AIRGAP_TRUSTED_ROOT:-$out/trusted-root.json}
-    export AIRGAP_TRUSTED_ROOT_SHA256=${AIRGAP_TRUSTED_ROOT_SHA256:-$(cat "$out/trusted-root.sha256")}
+    if [[ -z "${AIRGAP_TRUSTED_ROOT:-}" ]]; then
+      mkdir -p "$out/oob/home"
+      HOME="$out/oob/home" bounded 2m cosign trusted-root create --with-default-services --out "$out/oob/trusted-root-oob.json"
+      export AIRGAP_TRUSTED_ROOT="$out/oob/trusted-root-oob.json"
+      export AIRGAP_TRUSTED_ROOT_SHA256
+      AIRGAP_TRUSTED_ROOT_SHA256=$(sha256sum "$AIRGAP_TRUSTED_ROOT" | awk '{print $1}')
+    fi
     run_install
     ;;
   pull)
@@ -1770,6 +1785,7 @@ case "$mode" in
     stop_registry
     ;;
   sign)
+    require_sign_inputs
     start_registry
     sign_and_tar
     ;;

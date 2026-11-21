@@ -172,11 +172,13 @@ docker compose -f deploy/bundle/compose.yaml --env-file deploy/bundle/.env up --
 docker compose -f deploy/bundle/compose.yaml --env-file deploy/bundle/.env --profile bootstrap run --rm bootstrap
 ```
 
+The repository `deploy/bundle/compose.yaml` above builds the server image locally with `--build`; for air-gapped hosts, use the digest-pinned `deploy/bundle/compose.yaml` inside the verified `ipso-airgap.tar` in [Air-gapped bundle](#air-gapped-bundle), which has no `build:` stanza.
+
 The front listens on port 8080. There is no default user. The api restarts until the issuer answers and the bootstrap command has created the tenant. PostgreSQL is not published on the host.
 
 For browser sign-in, set `IPSO_PUBLIC_URL` and `IPSO_LOGIN_PROVIDERS` on the api the way [docs/login.md](login.md) describes. A private CA is a file you mount on the api only, with `SSL_CERT_FILE` pointing at it. That variable replaces the public roots for that process, so the worker does not get it.
 
-`docker compose -f deploy/bundle/compose.yaml down --volumes` removes the database. For air-gapped hosts, use the digest-pinned `deploy/bundle/compose.yaml` inside the verified `ipso-airgap.tar` below, which has no `build:` stanza.
+`docker compose -f deploy/bundle/compose.yaml down --volumes` removes the database.
 
 ## Air-gapped bundle
 
@@ -198,7 +200,7 @@ unshare --user --map-root-user --net -- cosign verify-blob \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   manifest.sha256
 
-# 2. If you transferred deploy/airgap/ci.sh from this repository alongside the archive (ci.sh is not packaged inside ipso-airgap.tar), prefer `AIRGAP_ARCHIVE=$PWD/../ipso-airgap.tar AIRGAP_TRUSTED_ROOT=$PWD/../trusted-root-oob.json AIRGAP_TRUSTED_ROOT_SHA256=$(awk '{print $1}' ../trusted-root-oob.json.sha256) bash deploy/airgap/ci.sh verify` for streaming extraction; if extracting manually after inspecting `tar -tvf`, extract only the canonical relative paths listed in the verified manifest and check every digest.
+# 2. If you transferred deploy/airgap/ci.sh from a verified checkout of the matching git commit alongside the archive (ci.sh is not packaged inside ipso-airgap.tar), prefer `AIRGAP_ARCHIVE=$PWD/../ipso-airgap.tar AIRGAP_TRUSTED_ROOT=$PWD/../trusted-root-oob.json AIRGAP_TRUSTED_ROOT_SHA256=$(awk '{print $1}' ../trusted-root-oob.json.sha256) bash deploy/airgap/ci.sh verify` for streaming extraction; otherwise run the manual `cosign` steps here after inspecting `tar -tvf`, extracting only the canonical relative paths listed in the verified manifest and checking every digest.
 sed 's/^[0-9a-f]\{64\}  //' manifest.sha256 > ../manifest.files
 tar --no-same-owner --no-same-permissions --no-recursion -xf ../ipso-airgap.tar -T ../manifest.files
 rm -f ../manifest.files
