@@ -17,9 +17,9 @@ issuer=https://token.actions.githubusercontent.com
 
 expected_identity() {
   local ref='refs/heads/main'
-  if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
-    if [[ -n "${GITHUB_HEAD_REPO:-}" && "${GITHUB_HEAD_REPO}" != "${GITHUB_REPOSITORY:-}" ]]; then
-      echo "refusing keyless signing for fork pull request: ${GITHUB_HEAD_REPO}" >&2
+  if [[ "${GITHUB_ACTIONS:-}" == "true" && -n "${GITHUB_RUN_ID:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
+    if [[ -z "${GITHUB_REPOSITORY:-}" || "${GITHUB_HEAD_REPO:-}" != "${GITHUB_REPOSITORY}" ]]; then
+      echo "refusing keyless signing for fork pull request: ${GITHUB_HEAD_REPO:-}" >&2
       exit 1
     fi
     if [[ ! "${GITHUB_REF:-}" =~ ^refs/pull/[0-9]+/(merge|head)$ ]]; then
@@ -27,8 +27,14 @@ expected_identity() {
       exit 1
     fi
     ref=$GITHUB_REF
+  elif [[ "${GITHUB_ACTIONS:-}" == "true" && -n "${GITHUB_RUN_ID:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && "${GITHUB_EVENT_NAME:-}" == "merge_group" ]]; then
+    if [[ ! "${GITHUB_REF:-}" =~ ^refs/gh-readonly-queue/main/pr-[0-9]+-[0-9a-f]{40}$ ]]; then
+      echo "unexpected merge_group GITHUB_REF: ${GITHUB_REF:-}" >&2
+      exit 1
+    fi
+    ref=$GITHUB_REF
   elif [[ -n "${GITHUB_REF:-}" && "${GITHUB_REF}" != "refs/heads/main" ]]; then
-    echo "refusing non-main ref outside pull_request CI: ${GITHUB_REF}" >&2
+    echo "refusing non-main ref outside CI self-tests: ${GITHUB_REF}" >&2
     exit 1
   fi
   printf '^https://github\\.com/ipsofacto-io/ipso-server/\\.github/workflows/ci\\.yml@%s$\n' "$ref"
@@ -43,6 +49,7 @@ archive=${AIRGAP_ARCHIVE:-$out/ipso-airgap.tar}
 kind_pid=
 heartbeat_pid=
 zot_pid=
+verify_home=
 
 require_tools() {
   local want=${1:-all} cmd
@@ -110,6 +117,9 @@ cleanup() {
       kill -KILL "$pid" 2>/dev/null || true
     fi
   done
+  if [[ -n "$verify_home" ]]; then
+    rm -rf "$verify_home"
+  fi
   if (( code != 0 )) && [[ "${AIRGAP_BAIL:-}" != 1 ]]; then
     if [[ -f "$out/kind.log" ]]; then
       dump_quick
@@ -477,28 +487,40 @@ offline() {
   run_isolated "$home_dir" "$cosign_bin" "$@"
 }
 
-trusted_root_path() {
-  local candidate
-  if [[ -n "${AIRGAP_TRUSTED_ROOT:-}" ]]; then
-    if [[ ! -r "$AIRGAP_TRUSTED_ROOT" || ! -f "$AIRGAP_TRUSTED_ROOT" ]]; then
-      echo "AIRGAP_TRUSTED_ROOT is not a readable file: $AIRGAP_TRUSTED_ROOT" >&2
-      exit 1
-    fi
-    candidate="$AIRGAP_TRUSTED_ROOT"
-  elif [[ "${GITHUB_ACTIONS:-}" == "true" && -r "$out/trusted-root.json" && -f "$out/trusted-root.json" ]]; then
-    candidate="$out/trusted-root.json"
-  else
+prepare_trusted_root() {
+  local dst=$1
+  if [[ -z "${AIRGAP_TRUSTED_ROOT:-}" ]]; then
     echo "set AIRGAP_TRUSTED_ROOT to an out-of-band Sigstore trusted-root.json before running verify" >&2
     exit 1
   fi
-  python3 - "$candidate" "$extract" <<'PY'
-import pathlib, sys
+  if [[ ! "${AIRGAP_TRUSTED_ROOT_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "set AIRGAP_TRUSTED_ROOT_SHA256 to the 64-lowercase-hex SHA-256 of AIRGAP_TRUSTED_ROOT before running verify" >&2
+    exit 1
+  fi
+  python3 - "$AIRGAP_TRUSTED_ROOT" "$AIRGAP_TRUSTED_ROOT_SHA256" "$extract" "$dst" <<'PY'
+import hashlib, os, pathlib, sys
 
-root_path = pathlib.Path(sys.argv[1]).resolve()
-extract_dir = pathlib.Path(sys.argv[2]).resolve()
+raw_src = pathlib.Path(sys.argv[1])
+want_sha = sys.argv[2]
+extract_dir = pathlib.Path(sys.argv[3]).resolve()
+dst_path = pathlib.Path(sys.argv[4])
+
+try:
+    root_path = raw_src.resolve(strict=True)
+except OSError as exc:
+    raise SystemExit(f"AIRGAP_TRUSTED_ROOT is not a readable file: {raw_src} ({exc})") from exc
+if not root_path.is_file():
+    raise SystemExit(f"AIRGAP_TRUSTED_ROOT is not a regular file: {raw_src}")
 if root_path == extract_dir or extract_dir in root_path.parents:
     raise SystemExit("out-of-band trusted root must not resolve inside the archive extraction directory")
-print(root_path)
+
+data = root_path.read_bytes()
+got_sha = hashlib.sha256(data).hexdigest()
+if got_sha != want_sha:
+    raise SystemExit(f"AIRGAP_TRUSTED_ROOT sha256 mismatch: got {got_sha}, want {want_sha}")
+
+dst_path.write_bytes(data)
+os.chmod(dst_path, 0o644)
 PY
 }
 
@@ -1257,6 +1279,7 @@ sign_and_tar() {
   write_sbom "docker-archive:${out}/nginx.tar" "${stage}/sbom/nginx.cdx.json"
   bounded 2m cosign trusted-root create --with-default-services --out "${stage}/trusted-root.json"
   cp "${stage}/trusted-root.json" "$out/trusted-root.json"
+  sha256sum "$out/trusted-root.json" | awk '{print $1}' >"$out/trusted-root.sha256"
 
   sign_one 127.0.0.1:5000/ipso-server "$server_digest" ipso-server
   sign_ref 127.0.0.1:5000/postgres "$pg" postgres
@@ -1432,23 +1455,22 @@ PY
 }
 
 run_verify() {
-  local home_dir root_file isolated_root layout_digest
+  local isolated_root layout_digest
   if [[ ! -r "$archive" || ! -f "$archive" ]]; then
     echo "airgap archive is not a readable file: $archive" >&2
     exit 1
   fi
   rm -f "$out/verified"
-  root_file=$(trusted_root_path)
+  verify_home=$(mktemp -d)
+  isolated_root="${verify_home}/trusted-root.json"
+  prepare_trusted_root "$isolated_root"
   extract_bootstrap "$archive" "$extract"
-  home_dir=$(mktemp -d)
-  isolated_root="${home_dir}/trusted-root.json"
-  cp "$root_file" "$isolated_root"
-  chmod 0644 "$isolated_root"
   phase "verify"
-  verify_manifest_offline "$home_dir" "$isolated_root"
-  extract_verified_archive "$archive" "$extract" "$root_file"
-  verify_offline "$home_dir" "$isolated_root"
-  rm -rf "$home_dir"
+  verify_manifest_offline "$verify_home" "$isolated_root"
+  extract_verified_archive "$archive" "$extract" "$isolated_root"
+  verify_offline "$verify_home" "$isolated_root"
+  rm -rf "$verify_home"
+  verify_home=
   assert_archive
   layout_digest=$(verified_server_digest)
   if [[ -f "$out/server.digest" ]]; then
@@ -1481,6 +1503,8 @@ case "$mode" in
     start_registry
     build_and_push_server
     sign_and_tar
+    export AIRGAP_TRUSTED_ROOT=${AIRGAP_TRUSTED_ROOT:-$out/trusted-root.json}
+    export AIRGAP_TRUSTED_ROOT_SHA256=${AIRGAP_TRUSTED_ROOT_SHA256:-$(cat "$out/trusted-root.sha256")}
     run_install
     ;;
   pull)
