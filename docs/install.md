@@ -227,4 +227,4 @@ helm upgrade --install ipso chart/ipso-*.tgz --namespace ipso \
   -f airgap-values.yaml -f your-values.yaml
 ```
 
-`your-values.yaml` names the Secret, the tenant, and the issuer, as in the chart section above. The Compose file in the tar has no build. Load those same three runnable images into Docker and start it with `--env-file deploy/bundle/.env`.
+`your-values.yaml` names the Secret, the tenant, and the issuer, as in the chart section above (`bash deploy/airgap/ci.sh verify` is the standalone operator verifier and requires only `cosign`, `python3`, and `unshare`; `bash deploy/airgap/ci.sh install` is the CI `kind` and Dex self-test harness and is not a production installer). The Compose file in the tar has no build. Load those same three runnable images into Docker and start it with `--env-file deploy/bundle/.env`.

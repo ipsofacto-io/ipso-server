@@ -2,10 +2,73 @@
 # Pack the ADR-0140 install into one tar, sign it, and install that tar on kind
 # with the node's registry egress cut (ADR-0142, ADR-0143).
 # Keyless signing needs the Actions OIDC token. There is no second key.
+# Mode `verify` is the standalone operator verifier (cosign, python3, and unshare only).
+# Modes `install` and `all` are CI-only kind and Dex self-test harnesses.
 set -euo pipefail
 
-root=$(cd "$(dirname "$0")/../.." && pwd)
-cd "$root"
+mode=${1:-all}
+case "$mode" in
+  all|pull|server|sign|verify|install) ;;
+  *)
+    echo "usage: $0 [all|pull|server|sign|verify|install]" >&2
+    exit 1
+    ;;
+esac
+
+require_tools() {
+  local want=${1:-all} cmd
+  local -a cmds=()
+  case "$want" in
+    verify)
+      cmds=(cosign python3 unshare)
+      ;;
+    pull)
+      cmds=(crane python3)
+      ;;
+    server)
+      cmds=(docker python3 zot)
+      ;;
+    sign)
+      cmds=(cosign crane docker helm python3 syft zot)
+      ;;
+    install)
+      cmds=(cosign curl docker helm kind kubectl openssl python3 unshare)
+      ;;
+    all)
+      cmds=(cosign crane curl docker helm kind kubectl openssl python3 syft unshare zot)
+      ;;
+  esac
+  for cmd in "${cmds[@]}"; do
+    command -v "$cmd" >/dev/null
+  done
+  if [[ "$want" == "all" || "$want" == "sign" ]]; then
+    if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]]; then
+      echo "keyless signing needs the Actions OIDC token" >&2
+      exit 1
+    fi
+  fi
+}
+
+require_tools "$mode"
+
+if [[ -n "${AIRGAP_ARCHIVE:-}" ]]; then
+  AIRGAP_ARCHIVE=$(python3 -c 'import os, sys; print(os.path.abspath(sys.argv[1]))' "$AIRGAP_ARCHIVE")
+  export AIRGAP_ARCHIVE
+fi
+if [[ -n "${AIRGAP_TRUSTED_ROOT:-}" ]]; then
+  AIRGAP_TRUSTED_ROOT=$(python3 -c 'import os, sys; print(os.path.abspath(sys.argv[1]))' "$AIRGAP_TRUSTED_ROOT")
+  export AIRGAP_TRUSTED_ROOT
+fi
+
+script_dir=$(cd "$(dirname "$0")" && pwd)
+if [[ -f "${script_dir}/../../compose.yaml" ]]; then
+  root=$(cd "${script_dir}/../.." && pwd)
+else
+  root=$PWD
+fi
+if [[ "$mode" != "verify" ]]; then
+  cd "$root"
+fi
 
 cluster=ipso-airgap
 # zot v2.1.23. cosign 3.1.4 stores the bundle as an OCI referrer.
@@ -50,40 +113,26 @@ kind_pid=
 heartbeat_pid=
 zot_pid=
 verify_home=
-
-require_tools() {
-  local want=${1:-all} cmd
-  for cmd in docker helm kind kubectl cosign syft crane zot openssl python3 curl; do
-    command -v "$cmd" >/dev/null
-  done
-  if [[ "$want" == "all" || "$want" == "verify" || "$want" == "install" ]]; then
-    command -v unshare >/dev/null
-  fi
-  if [[ "$want" == "all" || "$want" == "sign" ]]; then
-    if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]]; then
-      echo "keyless signing needs the Actions OIDC token" >&2
-      exit 1
-    fi
-  fi
-}
+pg=
+ngx=
 
 pinned_digest() {
-  local image=$1
-  sed -n "s#.*image: ${image}:.*@##p" compose.yaml | head -1
+  local image=$1 compose_file=${2:-"$root/compose.yaml"}
+  sed -n "s#.*image: ${image}:.*@##p" "$compose_file" | head -1
 }
 
 require_pins() {
-  pg=$(pinned_digest 'postgres')
-  ngx=$(pinned_digest 'nginxinc/nginx-unprivileged')
+  pg=$(pinned_digest 'postgres' "$root/compose.yaml")
+  ngx=$(pinned_digest 'nginxinc/nginx-unprivileged' "$root/compose.yaml")
   if [[ ! "$pg" =~ ^sha256:[0-9a-f]{64}$ || ! "$ngx" =~ ^sha256:[0-9a-f]{64}$ ]]; then
     echo "could not read the pinned postgres and nginx digests" >&2
     exit 1
   fi
-  grep -q "$pg" charts/ipso/values.yaml
-  grep -q "$pg" deploy/bundle/compose.yaml
-  grep -q "$ngx" charts/ipso/values.yaml
-  grep -q "$ngx" deploy/bundle/compose.yaml
-  cmp charts/ipso/files/postgres-init.sh deploy/compose/postgres-init.sh
+  grep -q "$pg" "$root/charts/ipso/values.yaml"
+  grep -q "$pg" "$root/deploy/bundle/compose.yaml"
+  grep -q "$ngx" "$root/charts/ipso/values.yaml"
+  grep -q "$ngx" "$root/deploy/bundle/compose.yaml"
+  cmp "$root/charts/ipso/files/postgres-init.sh" "$root/deploy/compose/postgres-init.sh"
 }
 
 # kubectl and kind talk to a daemon that may be stuck in uninterruptible sleep.
@@ -121,7 +170,7 @@ cleanup() {
     rm -rf "$verify_home"
   fi
   if (( code != 0 )) && [[ "${AIRGAP_BAIL:-}" != 1 ]]; then
-    if [[ -f "$out/kind.log" ]]; then
+    if [[ "$mode" == "all" || "$mode" == "install" ]] && [[ -f "$out/kind.log" ]]; then
       dump_quick
       echo "---- kind ----" >&2
       tail -n 80 "$out/kind.log" >&2 || true
@@ -135,7 +184,7 @@ cleanup() {
       tail -n 80 "$out/bounded.log" >&2 || true
     fi
   fi
-  if [[ "${AIRGAP_BAIL:-}" != 1 && -f "$out/kind.log" ]]; then
+  if [[ "${AIRGAP_BAIL:-}" != 1 ]] && [[ "$mode" == "all" || "$mode" == "install" ]] && [[ -f "$out/kind.log" ]]; then
     kind delete cluster --name "$cluster" >/dev/null 2>&1 &
     del=$!
     for _ in $(seq 1 8); do
@@ -700,11 +749,11 @@ verify_offline() {
 }
 
 check_pointers() {
-  python3 - "$extract" "$server_digest" "$pg" "$ngx" <<'PY'
-import hashlib, json, pathlib, sys
+  python3 - "$extract" "$server_digest" "${pg:-}" "${ngx:-}" <<'PY'
+import hashlib, json, pathlib, re, sys, tarfile
 
 root = pathlib.Path(sys.argv[1])
-digest, pg_pin, ngx_pin = sys.argv[2:]
+digest, want_pg, want_ngx = sys.argv[2:]
 values = (root / "airgap-values.yaml").read_text()
 if f'digest: "{digest}"' not in values:
     raise SystemExit("airgap-values.yaml does not name the signed server digest")
@@ -713,6 +762,35 @@ if f"ghcr.io/ipsofacto-io/ipso-server@{digest}" not in body:
     raise SystemExit("the Compose file does not name the signed server digest")
 if "build:" in body:
     raise SystemExit("the Compose file still has a build")
+
+pg_match = re.search(r"image:\s+postgres:[^\s@]+@(sha256:[0-9a-f]{64})", body)
+ngx_match = re.search(r"image:\s+nginxinc/nginx-unprivileged:[^\s@]+@(sha256:[0-9a-f]{64})", body)
+if not pg_match or not ngx_match:
+    raise SystemExit("verified Compose file is missing pinned postgres or nginx digests")
+pg_pin = pg_match.group(1)
+ngx_pin = ngx_match.group(1)
+if want_pg and pg_pin != want_pg:
+    raise SystemExit(f"postgres digest mismatch: bundle has {pg_pin}, repo pins {want_pg}")
+if want_ngx and ngx_pin != want_ngx:
+    raise SystemExit(f"nginx digest mismatch: bundle has {ngx_pin}, repo pins {want_ngx}")
+
+charts = sorted((root / "chart").glob("*.tgz"))
+if len(charts) != 1:
+    raise SystemExit(f"expected one chart archive in tar, got {len(charts)}")
+with tarfile.open(charts[0], "r:gz") as chart_tar:
+    chart_values = None
+    for member in chart_tar.getmembers():
+        if member.isfile() and member.name.lstrip("./") == "ipso/values.yaml":
+            if member.size > 4 * 1024 * 1024:
+                raise SystemExit("chart values.yaml exceeds 4 MiB cap")
+            src = chart_tar.extractfile(member)
+            if src is not None:
+                chart_values = src.read(4 * 1024 * 1024 + 1).decode("utf-8")
+            break
+if chart_values is None:
+    raise SystemExit("chart archive is missing ipso/values.yaml")
+if pg_pin not in chart_values or ngx_pin not in chart_values:
+    raise SystemExit("chart values.yaml does not match pinned postgres and nginx digests")
 
 def check_blob(blobs, dgst, label):
     path = blobs / dgst.split(":", 1)[1]
@@ -738,7 +816,7 @@ def verify_sparse_layout(layout_dir, pin, label):
     entries = idx.get("manifests") or []
     if len(entries) != 1 or entries[0].get("digest") != pin:
         raise SystemExit(f"{label} layout index does not point to {pin}")
-    blobs = layout_dir / "blobs" / "sha256"
+    blobs = layout_dir / "blobs/sha256"
     check_blob(blobs, pin, label)
     idx_doc = json.loads((blobs / pin.split(":", 1)[1]).read_text())
     amd64 = [
@@ -755,6 +833,7 @@ server_blobs = root / "images/ipso-server/blobs/sha256"
 verify_manifest_blobs(server_blobs, digest, "ipso-server")
 verify_sparse_layout(root / "images/postgres", pg_pin, "postgres")
 verify_sparse_layout(root / "images/nginx", ngx_pin, "nginx")
+print(f"{pg_pin} {ngx_pin}")
 PY
 }
 
@@ -1001,9 +1080,9 @@ install_from_tar() {
     -e 's#https://dex:5556/dex#https://dex.ipso.svc.cluster.local:5556/dex#' \
     -e 's#/certs/dex.crt#/certs/tls.crt#' \
     -e 's#/certs/dex.key#/certs/tls.key#' \
-    deploy/compose/dex.yaml >"$dex_config"
+    "$ci_dex_config" >"$dex_config"
   kubectl -n ipso create configmap dex --from-file=dex.yaml="$dex_config"
-  dex_image=$(awk '/image: ghcr.io\/dexidp\/dex/ { print $2; exit }' compose.yaml)
+  dex_image=$ci_dex_image
   kubectl -n ipso apply -f - <<EOF
 apiVersion: v1
 kind: Service
@@ -1113,6 +1192,39 @@ EOF
   refuse_foreign_image
 }
 
+verified_image_schema_version() {
+  python3 - "${extract}/images/ipso-server" "$server_digest" <<'PY'
+import json, pathlib, re, sys, tarfile
+
+blobs = pathlib.Path(sys.argv[1]) / "blobs" / "sha256"
+manifest_digest = sys.argv[2]
+doc = json.loads((blobs / manifest_digest.split(":", 1)[1]).read_text())
+for layer in reversed(doc.get("layers") or []):
+    layer_path = blobs / layer["digest"].split(":", 1)[1]
+    with tarfile.open(layer_path, mode="r:*") as tar:
+        for member in tar.getmembers():
+            rel = member.name.lstrip("./")
+            if rel == "usr/local/bin/.wh.ipso-server":
+                raise SystemExit("usr/local/bin/ipso-server was whiteout-removed in image layer")
+            if rel != "usr/local/bin/ipso-server":
+                continue
+            if member.issym() or member.islnk() or not member.isfile():
+                raise SystemExit("usr/local/bin/ipso-server in image layer is not a regular file")
+            if member.size > 512 * 1024 * 1024:
+                raise SystemExit("usr/local/bin/ipso-server exceeds 512 MiB cap")
+            src = tar.extractfile(member)
+            if src is None:
+                raise SystemExit("could not read usr/local/bin/ipso-server from image layer")
+            data = src.read(512 * 1024 * 1024 + 1)
+            nums = [int(m.group(1)) for m in re.finditer(rb"([0-9]{5})_[a-z0-9_]+\.sql", data)]
+            if not nums:
+                raise SystemExit("no embedded goose migrations found in usr/local/bin/ipso-server")
+            print(max(nums))
+            raise SystemExit(0)
+raise SystemExit("usr/local/bin/ipso-server not found in verified ipso-server image layers")
+PY
+}
+
 assert_migrate_and_bootstrap() {
   local got want seeded
   if [[ ! "${IPSO_TENANT_ID:-}" =~ ^[0-9a-fA-F-]{36}$ ]]; then
@@ -1127,14 +1239,10 @@ assert_migrate_and_bootstrap() {
     echo "migrate hook did not apply schema migrations (got=${got})" >&2
     exit 1
   fi
-  if [[ -f "$out/server.digest" ]]; then
-    want=$(find internal/migrate/migrations -name '*.sql' -print \
-      | sed -n 's#.*/0*\([0-9][0-9]*\)_.*#\1#p' \
-      | sort -n | tail -1)
-    if [[ "$got" != "$want" ]]; then
-      echo "schema after air-gapped install is ${got}, want ${want}" >&2
-      exit 1
-    fi
+  want=$(verified_image_schema_version)
+  if [[ "$got" != "$want" ]]; then
+    echo "schema after air-gapped install is ${got}, want ${want} from verified image" >&2
+    exit 1
   fi
   seeded=$(bounded 1m kubectl -n ipso exec ipso-postgresql-0 -- \
     env PGPASSWORD="$IPSO_APP_PASSWORD" \
@@ -1464,17 +1572,9 @@ PY
   stop_registry
 }
 
-mode=${1:-all}
-case "$mode" in
-  all|pull|server|sign|verify|install) ;;
-  *)
-    echo "usage: $0 [all|pull|server|sign|verify|install]" >&2
-    exit 1
-    ;;
-esac
-
-require_tools "$mode"
-require_pins
+if [[ "$mode" != "verify" || -f "$root/compose.yaml" ]]; then
+  require_pins
+fi
 if [[ "$mode" == "all" || "$mode" == "pull" ]]; then
   rm -rf "$out"
 fi
@@ -1534,7 +1634,7 @@ PY
 }
 
 run_verify() {
-  local isolated_root layout_digest
+  local isolated_root layout_digest resolved_pins
   if [[ ! -r "$archive" || ! -f "$archive" ]]; then
     echo "airgap archive is not a readable file: $archive" >&2
     exit 1
@@ -1555,10 +1655,34 @@ run_verify() {
     require_same_digest "$layout_digest" "$(cat "$out/server.digest")" "ipso-server"
   fi
   server_digest=$layout_digest
-  check_pointers
+  resolved_pins=$(check_pointers)
+  read -r pg ngx <<<"$resolved_pins"
+}
+
+# CI-only harness inputs: ADR-0142 and ADR-0143 forbid shipping Dex or kind in ipso-airgap.tar,
+# so the CI install self-test loads mock OIDC fixtures from the repo before cutting node egress.
+ci_test_env_file=${CI_TEST_ENV_FILE:-$root/.env.example}
+ci_dex_config=${CI_DEX_CONFIG:-$root/deploy/compose/dex.yaml}
+ci_dex_image=
+
+load_ci_test_fixtures() {
+  if [[ ! -r "$ci_test_env_file" || ! -r "$ci_dex_config" || ! -r "$root/compose.yaml" ]]; then
+    echo "install mode is the CI kind and Dex self-test harness and requires repo test fixtures; operators use verify" >&2
+    exit 1
+  fi
+  ci_dex_image=${CI_DEX_IMAGE:-$(awk '/image: ghcr.io\/dexidp\/dex/ { print $2; exit }' "$root/compose.yaml")}
+  if [[ -z "$ci_dex_image" ]]; then
+    echo "could not resolve CI Dex image from compose.yaml" >&2
+    exit 1
+  fi
+  set -a
+  # shellcheck disable=SC1090
+  . "$ci_test_env_file"
+  set +a
 }
 
 run_install() {
+  load_ci_test_fixtures
   run_verify
   phase "kind"
   python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
@@ -1566,10 +1690,6 @@ run_install() {
   kind_pid=$!
   wait_kind
 
-  set -a
-  # shellcheck disable=SC1091
-  . ./.env.example
-  set +a
   install_from_tar
   echo "air-gap tar ${archive}"
 }
