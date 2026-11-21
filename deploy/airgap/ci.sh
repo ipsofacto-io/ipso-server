@@ -77,6 +77,10 @@ cleanup() {
       echo "---- kind ----" >&2
       cat "$out/kind.log" >&2 || true
     fi
+    if [[ -f "$out/zot.log" ]]; then
+      echo "---- zot ----" >&2
+      cat "$out/zot.log" >&2 || true
+    fi
   fi
   kind delete cluster --name "$cluster" >/dev/null 2>&1 || true
   if [[ -n "${zot_pid}" ]] && kill -0 "$zot_pid" 2>/dev/null; then
@@ -836,7 +840,7 @@ cat >"$out/zot-config.json" <<'EOF'
 {
   "distSpecVersion": "1.1.1",
   "storage": {"rootDirectory": "/tmp/ipso-airgap-zot"},
-  "http": {"address": "127.0.0.1", "port": "5000"},
+  "http": {"address": "127.0.0.1", "port": "5000", "compat": ["docker2s2"]},
   "log": {"level": "info"}
 }
 EOF
