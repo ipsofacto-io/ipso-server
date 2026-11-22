@@ -16,6 +16,21 @@ import { CheckActions, ReviewActions } from './ReviewActions';
 
 const RAW_LIMIT = 8_000;
 
+const advisory = 'A person approves it, and it does not block a merge.';
+
+function ModelLabel({ modelID, promptVersion }: { modelID: string; promptVersion: string }) {
+  return (
+    <div>
+      <dt>AI-generated</dt>
+      <dd className="mono">{`${modelID}, prompt ${promptVersion}`}</dd>
+    </div>
+  );
+}
+
+function Advisory() {
+  return <p className="muted">{advisory}</p>;
+}
+
 function Raw({ value, title }: { value: unknown; title: string }) {
   return (
     <details>
@@ -43,16 +58,13 @@ function PullRequest({ proposal, report }: { proposal: Proposal; report: (report
           <dt>Confidence</dt>
           <dd className="mono">{Math.round(proposal.confidence * 100)}%</dd>
         </div>
-        <div>
-          <dt>Model</dt>
-          <dd className="mono">{`${proposal.model_id}, prompt ${proposal.prompt_version}`}</dd>
-        </div>
+        <ModelLabel modelID={proposal.model_id} promptVersion={proposal.prompt_version} />
         <div>
           <dt>Captured</dt>
           <dd className="mono">{formatTime(proposal.captured_at)}</dd>
         </div>
       </dl>
-      <p className="muted">A model drafted this from the merged pull request. It is untrusted until a person approves it.</p>
+      <Advisory />
       <Raw value={proposal.payload} title="Draft" />
       <ReviewActions queue="proposals" id={proposal.id} payload={proposal.payload} sourceUrl={proposal.source_url} report={report} />
     </>
@@ -111,15 +123,13 @@ function DraftedCheck({ proposal, report }: { proposal: CheckProposal; report: (
           <dt>Repaired</dt>
           <dd>{proposal.repaired ? 'Once, after a first failure' : 'No'}</dd>
         </div>
-        <div>
-          <dt>Model</dt>
-          <dd className="mono">{`${proposal.model_id}, prompt ${proposal.prompt_version}`}</dd>
-        </div>
+        <ModelLabel modelID={proposal.model_id} promptVersion={proposal.prompt_version} />
         <div>
           <dt>Captured</dt>
           <dd className="mono">{formatTime(proposal.captured_at)}</dd>
         </div>
       </dl>
+      <Advisory />
       <details>
         <summary>Policy</summary>
         <Code lang="rego">{rego}</Code>
