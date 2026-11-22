@@ -63,11 +63,9 @@ export function Queue<T extends { id: string }>({
       </h2>
       <p className="muted">{intro}</p>
       {notice ? (
-        <div ref={noticeRef} tabIndex={-1} className="queue-notice">
-          <Notice tone={notice.tone} title={notice.title}>
-            {notice.body}
-          </Notice>
-        </div>
+        <Notice ref={noticeRef} tabIndex={-1} className="queue-notice" tone={notice.tone} title={notice.title}>
+          {notice.body}
+        </Notice>
       ) : null}
       {pages.status === 'ready' && head ? head(report) : null}
       {pages.status === 'loading' ? <Loading what={title.toLowerCase()} /> : null}

@@ -3,7 +3,7 @@
 *, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body { min-height: 100vh; font-size: 16px; line-height: 24px; }
-a { color: var(--link); text-underline-offset: 3px; }
+a { color: var(--link); text-decoration: underline; text-underline-offset: 3px; }
 a:hover { text-decoration-thickness: 2px; }
 h1, h2, h3 { margin: 0; }
 p { margin: 0; }
@@ -25,6 +25,8 @@ p { margin: 0; }
 .signout { display: flex; align-items: center; gap: var(--space-3); }
 
 .main { max-width: 1120px; margin: 0 auto; padding: var(--space-6) var(--space-4) var(--space-8); outline: none; }
+.foot { border-top: 1px solid var(--line); }
+.foot-inner { max-width: 1120px; margin: 0 auto; padding: var(--space-4); }
 .page { display: flex; flex-direction: column; gap: var(--space-5); }
 .page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: var(--space-4); flex-wrap: wrap; }
 .page-title { font-family: var(--font-mono); font-size: 32px; line-height: 40px; font-weight: 700; letter-spacing: -0.02em; }

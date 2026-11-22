@@ -10,6 +10,7 @@ import { LinkButton } from '../components/LinkButton';
 import { Loading } from '../components/Loading';
 import { Page } from '../components/Page';
 import { ExternalLink } from '../components/Safe';
+import { TableWrap } from '../components/TableWrap';
 import { TimeControls, useTimes } from '../components/TimeControls';
 import { VerdictReading } from '../components/VerdictReading';
 import { formatDate, formatTime, nowAsTime } from '../lib/format';
@@ -116,7 +117,7 @@ function DecisionCard({ decision }: { decision: Decision }) {
       {checks.length > 0 ? (
         <section aria-label="Checks">
           <h3 className="ip-label">Checks</h3>
-          <div className="table-wrap">
+          <TableWrap>
             <table className="table">
               <caption className="sr-only">Checks of this decision</caption>
               <thead>
@@ -136,7 +137,7 @@ function DecisionCard({ decision }: { decision: Decision }) {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableWrap>
         </section>
       ) : null}
 
@@ -218,7 +219,7 @@ function Verdicts({ decision }: { decision: string }) {
         <p className="muted">No CI run has reported on this decision yet.</p>
       ) : null}
       {verdicts.status === 'ready' && verdicts.data.verdicts.length > 0 ? (
-        <div className="table-wrap">
+        <TableWrap>
           <table className="table">
             <caption className="sr-only">Verdicts uploaded by CI runs</caption>
             <thead>
@@ -248,7 +249,7 @@ function Verdicts({ decision }: { decision: string }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableWrap>
       ) : null}
       {verdicts.status === 'ready' && verdicts.data.verdicts.length === SHOWN ? <p className="muted">Showing the newest {SHOWN} verdicts.</p> : null}
     </section>

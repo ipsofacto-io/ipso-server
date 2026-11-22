@@ -9,6 +9,7 @@ import { LinkButton } from '../components/LinkButton';
 import { LoadMore } from '../components/LoadMore';
 import { Loading } from '../components/Loading';
 import { Page } from '../components/Page';
+import { TableWrap } from '../components/TableWrap';
 import { TimeControls, useTimes } from '../components/TimeControls';
 import { formatTime, shortId } from '../lib/format';
 import { decisionPath } from '../state/decision';
@@ -55,7 +56,7 @@ export function WaiversView() {
       {pages.status === 'error' && pages.error ? <ErrorNotice error={pages.error} /> : null}
       {pages.status === 'ready' && pages.items.length === 0 ? <EmptyState title="No waiver is in force.">A waiver you record will appear here until it expires.</EmptyState> : null}
       {pages.items.length > 0 ? (
-        <div className="table-wrap">
+        <TableWrap>
           <table className="table">
             <caption className="sr-only">Waivers in force</caption>
             <thead>
@@ -89,7 +90,7 @@ export function WaiversView() {
               })}
             </tbody>
           </table>
-        </div>
+        </TableWrap>
       ) : null}
       {pages.status === 'ready' && pages.error ? <ErrorNotice error={pages.error} /> : null}
       <LoadMore hasMore={pages.hasMore} loading={pages.loadingMore} onClick={pages.loadMore} />
