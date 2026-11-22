@@ -130,6 +130,15 @@ describe('WCAG 2.2 A and AA on each route', () => {
     await expectClean();
   });
 
+  it('has no A or AA violation in the dark theme', async () => {
+    document.documentElement.dataset.theme = 'dark';
+    stubFetch();
+    renderApp('/decisions');
+    await screen.findByRole('table', { name: 'Decisions in force' });
+    await expectClean();
+    delete document.documentElement.dataset.theme;
+  });
+
   it('has no violation when the invitation link is incomplete', async () => {
     stubFetch({ signedIn: false });
     renderApp('/invitation');

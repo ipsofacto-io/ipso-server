@@ -1,7 +1,10 @@
-import { screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { AppRoutes } from '../App';
+import { AppProvider } from '../app/AppContext';
 import { NOW, renderApp, stubFetch } from '../test/render';
 import { refusalOf } from '../views/SignIn';
 import { followSystemTheme } from '../theme';
@@ -47,6 +50,26 @@ describe('signing in', () => {
     expect(await screen.findByRole('heading', { name: 'Sign in to ipso' })).toBeInTheDocument();
     expect(stub.requests).toContain('POST /auth/logout');
     expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument();
+  });
+
+  it('leaves an invitation open when the session is already gone', async () => {
+    stubFetch({ signedIn: false });
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    function OpenInvitation() {
+      const navigate = useNavigate();
+      return <button onClick={() => navigate('/invitation')}>Open the invitation</button>;
+    }
+    render(
+      <AppProvider>
+        <MemoryRouter initialEntries={['/decisions']}>
+          <OpenInvitation />
+          <AppRoutes />
+        </MemoryRouter>
+      </AppProvider>,
+    );
+    expect(await screen.findByRole('heading', { name: 'Sign in to ipso' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Open the invitation' }));
+    expect(await screen.findByRole('heading', { name: 'You are invited to ipso' })).toBeInTheDocument();
   });
 
   it('keeps the sign-out when it fails, and says so', async () => {

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { TableWrap } from './TableWrap';
@@ -40,7 +40,11 @@ describe('a table wider than the page', () => {
         </table>
       </TableWrap>,
     );
-    expect(screen.getByRole('table', { name: 'Wide' }).parentElement).toHaveAttribute('tabindex', '0');
+    const region = screen.getByRole('region', { name: 'Wide' });
+    expect(region).toHaveAttribute('tabindex', '0');
+    region.scrollLeft = 0;
+    fireEvent.keyDown(region, { key: 'ArrowRight' });
+    expect(region.scrollLeft).toBe(48);
     wide.unmount();
 
     widths(320, 800);
