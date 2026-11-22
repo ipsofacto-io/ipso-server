@@ -232,6 +232,10 @@ describe('the inbox', () => {
     expect(await screen.findByText('Public endpoints need rate limits')).toBeInTheDocument();
     expect(await screen.findByText('Check for decision 0194f2a0, version 2')).toBeInTheDocument();
     expect(screen.getAllByText('Pending approval')).toHaveLength(4);
+    expect(screen.getAllByText('AI-generated')).toHaveLength(3);
+    expect(screen.getAllByText('A person approves it, and it does not block a merge.')).toHaveLength(3);
+    expect(screen.getAllByText('mistral-large-latest, prompt pr-decision-v3')).toHaveLength(2);
+    expect(screen.getByText('mistral-large-latest, prompt check-draft-v2')).toBeInTheDocument();
     expect(screen.getByText(/Approving a drafted check records the answer only/)).toBeInTheDocument();
     expect(stub.requests.every((request) => request.startsWith('GET '))).toBe(true);
   });
