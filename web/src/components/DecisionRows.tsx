@@ -4,11 +4,12 @@ import type { Decision } from '../api/types';
 import { formatDate } from '../lib/format';
 import { decisionPath, summarize } from '../state/decision';
 import { DecisionStatus } from './DecisionStatus';
+import { TableWrap } from './TableWrap';
 
 /** The decisions of a list as a table: the same columns in the registry and in the audit answers. */
 export function DecisionRows({ decisions, caption }: { decisions: Decision[]; caption: string }) {
   return (
-    <div className="table-wrap">
+    <TableWrap>
       <table className="table">
         <caption className="sr-only">{caption}</caption>
         <thead>
@@ -42,6 +43,6 @@ export function DecisionRows({ decisions, caption }: { decisions: Decision[]; ca
           })}
         </tbody>
       </table>
-    </div>
+    </TableWrap>
   );
 }

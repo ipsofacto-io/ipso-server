@@ -13,6 +13,7 @@ import { Loading } from '../components/Loading';
 import { Notice } from '../components/Notice';
 import { Page } from '../components/Page';
 import { ExternalLink } from '../components/Safe';
+import { TableWrap } from '../components/TableWrap';
 import { VerdictReading } from '../components/VerdictReading';
 import { fieldToTime, formatTime, nowForField, shortId, timeToField } from '../lib/format';
 import { decisionPath, summarize } from '../state/decision';
@@ -245,7 +246,7 @@ function Beliefs({ data }: { data: AuditBeliefs }) {
       {data.changed.length === 0 ? (
         <p className="muted">No decision changed.</p>
       ) : (
-        <div className="table-wrap">
+        <TableWrap>
           <table className="table">
             <caption className="sr-only">Decisions that changed</caption>
             <thead>
@@ -275,7 +276,7 @@ function Beliefs({ data }: { data: AuditBeliefs }) {
               })}
             </tbody>
           </table>
-        </div>
+        </TableWrap>
       )}
     </>
   );
@@ -329,7 +330,7 @@ function MergeVerdicts({ verdicts }: { verdicts: StoredVerdict[] | null }) {
       ) : verdicts.length === 0 ? (
         <p className="muted">The runs on this commit reported no decision check.</p>
       ) : (
-        <div className="table-wrap">
+        <TableWrap>
           <table className="table">
             <caption className="sr-only">Verdicts of the runs on the commit</caption>
             <thead>
@@ -365,7 +366,7 @@ function MergeVerdicts({ verdicts }: { verdicts: StoredVerdict[] | null }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableWrap>
       )}
     </section>
   );
@@ -395,7 +396,7 @@ function Chain({ chain }: { chain: AuditChain }) {
       {chain.links.length === 0 ? (
         <p className="muted">Nothing supersedes this decision, and it supersedes nothing.</p>
       ) : (
-        <div className="table-wrap">
+        <TableWrap>
           <table className="table">
             <caption className="sr-only">Supersession links</caption>
             <thead>
@@ -423,10 +424,10 @@ function Chain({ chain }: { chain: AuditChain }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableWrap>
       )}
       <h2 className="queue-title">Versions</h2>
-      <div className="table-wrap">
+      <TableWrap>
         <table className="table">
           <caption className="sr-only">Versions of the decisions in the chain</caption>
           <thead>
@@ -452,7 +453,7 @@ function Chain({ chain }: { chain: AuditChain }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </TableWrap>
     </>
   );
 }
@@ -476,7 +477,7 @@ export function AuditWaiversView() {
 function EndingWaivers({ data }: { data: AuditWaivers }) {
   if (data.waivers.length === 0) return <EmptyState title="No waiver ends within 14 days." />;
   return (
-    <div className="table-wrap">
+    <TableWrap>
       <table className="table">
         <caption className="sr-only">Waivers ending soon</caption>
         <thead>
@@ -502,6 +503,6 @@ function EndingWaivers({ data }: { data: AuditWaivers }) {
           ))}
         </tbody>
       </table>
-    </div>
+    </TableWrap>
   );
 }

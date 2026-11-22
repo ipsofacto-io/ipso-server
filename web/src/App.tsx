@@ -18,6 +18,7 @@ import { ExportView } from './views/Export';
 import { InboxView } from './views/Inbox';
 import { InvitationView } from './views/Invitation';
 import { InvitationsView } from './views/Invitations';
+import { PagesView } from './views/Pages';
 import { PremisesView } from './views/Premises';
 import { RecordBaselineView } from './views/RecordBaseline';
 import { RecordSupersessionView } from './views/RecordSupersession';
@@ -47,6 +48,7 @@ export function AppRoutes() {
         <Route path="waivers" element={<WaiversView />} />
         <Route path="waivers/new" element={<RecordWaiverView />} />
         <Route path="premises" element={<PremisesView />} />
+        <Route path="pages" element={<PagesView />} />
         <Route path="supersessions/new" element={<RecordSupersessionView />} />
         <Route path="baselines/new" element={<RecordBaselineView />} />
         <Route path="export" element={<ExportView />} />
