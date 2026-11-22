@@ -94,7 +94,7 @@ func aiActSQLFile(rel string) bool {
 }
 
 var (
-	analyticsClient = regexp.MustCompile(`(?i)(posthog|plausible|mixpanel|amplitude|segmentio/analytics|@segment/|umami)`)
+	analyticsClient = regexp.MustCompile(`(?i)(\bposthog\b|\bplausible\b|\bmixpanel\b|\bamplitude\b|segmentio/analytics|@segment/|\bumami\b)`)
 	orderBy         = regexp.MustCompile("(?is)\\b(?:group|order)\\s+by\\s+([^;`]{0,300})")
 	personKey       = regexp.MustCompile(`(?i)\b(?:principal(?:_id)?|author(?:_[a-z]+)?|person(?:_[a-z]+)?)\b`)
 )
