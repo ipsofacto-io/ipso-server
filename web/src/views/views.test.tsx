@@ -234,6 +234,10 @@ describe('the inbox', () => {
     expect(screen.getAllByText('Pending approval')).toHaveLength(4);
     expect(screen.getAllByText('AI-generated')).toHaveLength(3);
     expect(screen.getAllByText('A person approves it, and it does not block a merge.')).toHaveLength(3);
+    const queue = (name: string) => screen.getByRole('heading', { name }).closest('section') as HTMLElement;
+    expect(within(queue('Pull requests')).getAllByText('AI-generated')).toHaveLength(2);
+    expect(within(queue('Drafted checks')).getByText('AI-generated')).toBeInTheDocument();
+    expect(within(queue('Coding agents')).queryByText('AI-generated')).not.toBeInTheDocument();
     expect(screen.getAllByText('mistral-large-latest, prompt pr-decision-v3')).toHaveLength(2);
     expect(screen.getByText('mistral-large-latest, prompt check-draft-v2')).toBeInTheDocument();
     expect(screen.getByText(/Approving a drafted check records the answer only/)).toBeInTheDocument();

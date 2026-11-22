@@ -73,15 +73,24 @@ func skipAIActDir(name string) bool {
 
 func aiActAnalyticsFile(rel string) bool {
 	switch {
-	case strings.HasSuffix(rel, ".go"):
+	case strings.HasSuffix(rel, ".go"), rel == "go.mod", rel == "web/package.json":
 		return true
-	case strings.HasPrefix(rel, "web/src/") && (strings.HasSuffix(rel, ".ts") || strings.HasSuffix(rel, ".tsx")):
+	case strings.HasPrefix(rel, "web/") && !strings.Contains(rel, "package-lock") && webAnalyticsExt(rel):
 		return true
-	case rel == "go.mod" || rel == "web/package.json":
+	case strings.HasPrefix(rel, ".github/workflows/") && (strings.HasSuffix(rel, ".yml") || strings.HasSuffix(rel, ".yaml")):
 		return true
 	default:
 		return false
 	}
+}
+
+func webAnalyticsExt(rel string) bool {
+	for _, ext := range []string{".html", ".ts", ".tsx", ".js", ".mjs"} {
+		if strings.HasSuffix(rel, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 // aiActSQLFile is a verdict or proposal read. Identity, role bindings, and SCIM stay out: the
