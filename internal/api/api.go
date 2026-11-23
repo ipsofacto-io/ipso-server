@@ -285,7 +285,7 @@ func routes(db *sql.DB, now func() time.Time, log *slog.Logger, origin string) [
 		{"GET /v1/audit/waivers", "audit_waivers", authz.AuditRead, []string{"known", "now"}, nil, audits},
 		{"GET /v1/verdicts", "list_verdicts", authz.VerdictsRead, []string{"repo", "decision", "known", "limit", "before"}, nil, http.HandlerFunc(verdicts.list)},
 	}
-	return slices.Concat(reads, writeRoutes(db, log), exportRoutes(db, log), invitationRoutes(db, log, origin), roleBindingRoutes(db, log), auditLogRoutes(db, log), enterpriseRoutes(), trackerRoutes(db, log), chatRoutes())
+	return slices.Concat(reads, writeRoutes(db, log), exportRoutes(db, log), invitationRoutes(db, log, origin), roleBindingRoutes(db, log), erasureRoutes(db, log), auditLogRoutes(db, log), enterpriseRoutes(), trackerRoutes(db, log), chatRoutes())
 }
 
 // enterpriseRoutes are the admin routes the enterprise binary registered. They are absent unless

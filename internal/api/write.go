@@ -108,7 +108,7 @@ func writeStoreError(w http.ResponseWriter, log *slog.Logger, op string, err err
 		errors.Is(err, identity.ErrUnknownPrincipal), errors.Is(err, identity.ErrUnknownScope), errors.Is(err, identity.ErrUnknownBinding):
 		writeError(w, http.StatusNotFound, errNotFound)
 		return
-	case errors.Is(err, identity.ErrLastAdmin), errors.Is(err, trackers.ErrConflict):
+	case errors.Is(err, identity.ErrLastAdmin), errors.Is(err, identity.ErrNotPerson), errors.Is(err, trackers.ErrConflict):
 		writeError(w, http.StatusConflict, errConflict)
 		return
 	case errors.Is(err, identity.ErrInvalidInvitation):

@@ -74,6 +74,9 @@ var mayCall = func() map[string][]string {
 		"grant_role_binding":  {identity.RoleAdmin},
 		"list_role_bindings":  {identity.RoleAdmin},
 		"revoke_role_binding": {identity.RoleAdmin},
+
+		// The name erasure of ADR-0156: the same action, so only an admin who is a person.
+		"erase_principal_name": {identity.RoleAdmin},
 	}
 }()
 
@@ -82,7 +85,7 @@ var writeOps = []string{
 	"create_scope", "reparent_scope", "retire_scope", "record_supersession", "record_grandfather_period",
 	"record_baseline", "record_waiver", "clear_premise_reason", "allow_premise_host", "approve_proposal",
 	"approve_agent_proposal", "approve_check_proposal", "start_export", "create_invitation", "revoke_invitation",
-	"grant_role_binding", "revoke_role_binding",
+	"grant_role_binding", "revoke_role_binding", "erase_principal_name",
 }
 
 // exportOps are the reads of the export (ADR-0111, and current_export of ADR-0115), which only an admin takes.

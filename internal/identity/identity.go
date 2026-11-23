@@ -62,6 +62,21 @@ var ErrOperatorPrincipal = errors.New("the operator principal is reserved")
 // ErrUnknownLogin is returned when the tenant has no login for the issuer and subject.
 var ErrUnknownLogin = errors.New("unknown login")
 
+// ErrNotPerson is returned when a name erasure is asked for a principal that is not a person.
+var ErrNotPerson = errors.New("not a person")
+
+// ErasedName is the display name left in place of a person's name (ADR-0156).
+const ErasedName = "erased"
+
+// ActionErasePrincipalName is the action log entry of a name erasure. The subject is the person's id.
+const ActionErasePrincipalName = "api.erase_principal_name"
+
+// ErasedUserName is the SCIM filter key left for an erased person. user_name is unique in the tenant,
+// so the placeholder carries the principal id and not one shared word.
+func ErasedUserName(id uuid.UUID) string {
+	return ErasedName + "-" + id.String()
+}
+
 // maxActions bounds one read of the log.
 const maxActions = 1000
 

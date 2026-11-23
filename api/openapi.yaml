@@ -1361,6 +1361,45 @@ paths:
           $ref: '#/components/responses/Internal'
         '503':
           $ref: '#/components/responses/Timeout'
+  /v1/principals/{id}/erasure:
+    post:
+      operationId: erase_principal_name
+      tags: [identity]
+      summary: Erase the display name of one person.
+      description: >-
+        Only an admin who is a person takes it (ADR-0108, ADR-0156). The name is replaced with a placeholder in
+        the principal, in open invitations that carry that name, in the SCIM filter key, and in waiver approver
+        copies of that person. The principal id and the role bindings stay. Open logins of that person are closed.
+        The request has no body, and the action log names the admin and the person's id, never the old name.
+        A person who is not in this tenant is 404. An agent, the operator principal, and the only remaining
+        tenant-wide admin are 409, and nothing is written. A second call, after the name is already erased, is 204
+        and writes no second entry.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: The name was erased, or it had already been erased.
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
   /v1/role-bindings:
     post:
       operationId: grant_role_binding

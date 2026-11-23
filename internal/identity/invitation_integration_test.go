@@ -474,3 +474,25 @@ func TestACreateInvitationForARoleNoPersonHoldsIsInvalidAndWritesNothing(t *test
 		t.Errorf("%d invitations", n)
 	}
 }
+
+func TestAnInvitationWhoseNameWasErasedCannotBeAccepted(t *testing.T) {
+	db, admin := withAdmin(t)
+	addTenant(t, db, tenantA)
+	ada := principal(t, db, tenantA, identity.KindHuman, "Ada", nil)
+	token, inv := invite(t, db, tenantA, ada, "Nia", identity.RoleViewer)
+	if _, err := pgtest.Exec(t.Context(), db, tenantA.String(), `
+		UPDATE identity.invitation SET name = $2 WHERE tenant_id = $1 AND id = $3`,
+		tenantA, identity.ErasedName, inv.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err := identity.AcceptInvitation(t.Context(), db, tenantA, idp, "subject-nia", hashOfToken(t, token), hashOf("nia"), nil)
+	if !errors.Is(err, identity.ErrUnknownInvitation) {
+		t.Fatalf("accept: %v", err)
+	}
+	if n := count(t, admin, `SELECT count(*) FROM identity.invitation WHERE id = $1`, inv.ID); n != 1 {
+		t.Fatalf("the invitation is gone: %d", n)
+	}
+	if n := count(t, admin, `SELECT count(*) FROM identity.principal WHERE name = $1`, identity.ErasedName); n != 0 {
+		t.Fatalf("%d principals were created", n)
+	}
+}

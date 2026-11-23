@@ -98,22 +98,41 @@ func ProvisionSCIMUser(ctx context.Context, db *sql.DB, tenant uuid.UUID, issuer
 			}
 			created = closed
 		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE identity.principal SET name = $1
-			WHERE tenant_id = ipso.current_tenant() AND id = $2`, name, principal); err != nil {
+		var erased bool
+		if err := tx.QueryRowContext(ctx, `
+			SELECT name_erased FROM identity.principal
+			WHERE tenant_id = ipso.current_tenant() AND id = $1`, principal).Scan(&erased); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO identity.scim_user (tenant_id, principal_id, external_id, user_name, active)
-			VALUES (ipso.current_tenant(), $1, $2, $3, true)
-			ON CONFLICT (tenant_id, principal_id) DO UPDATE
-			SET user_name = EXCLUDED.user_name, active = true`,
-			principal, externalID, userName); err != nil {
-			return err
+		if erased {
+			// The filter key of a new row is the placeholder. An existing row keeps the one erasure wrote.
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO identity.scim_user (tenant_id, principal_id, external_id, user_name, active)
+				VALUES (ipso.current_tenant(), $1, $2, $3, true)
+				ON CONFLICT (tenant_id, principal_id) DO UPDATE SET active = true`,
+				principal, externalID, ErasedUserName(principal)); err != nil {
+				return err
+			}
+		} else {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE identity.principal SET name = $1
+				WHERE tenant_id = ipso.current_tenant() AND id = $2`, name, principal); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO identity.scim_user (tenant_id, principal_id, external_id, user_name, active)
+				VALUES (ipso.current_tenant(), $1, $2, $3, true)
+				ON CONFLICT (tenant_id, principal_id) DO UPDATE
+				SET user_name = EXCLUDED.user_name, active = true`,
+				principal, externalID, userName); err != nil {
+				return err
+			}
 		}
 		if err := tx.QueryRowContext(ctx, `
-			SELECT name FROM identity.principal
-			WHERE tenant_id = ipso.current_tenant() AND id = $1`, principal).Scan(&name); err != nil {
+			SELECT p.name, u.user_name
+			FROM identity.scim_user u
+			JOIN identity.principal p ON p.tenant_id = u.tenant_id AND p.id = u.principal_id
+			WHERE u.tenant_id = ipso.current_tenant() AND u.principal_id = $1`, principal).Scan(&name, &userName); err != nil {
 			return err
 		}
 		user = SCIMUser{ID: principal, ExternalID: externalID, UserName: userName, Name: name, Active: true}
@@ -175,6 +194,10 @@ func UpdateSCIMUserName(ctx context.Context, db *sql.DB, tenant uuid.UUID, exter
 		return fmt.Errorf("%w: a user name is required", ErrInvalidQuery)
 	}
 	err := inTenantAt(ctx, db, tenant, sql.LevelReadCommitted, false, func(tx *sql.Tx) error {
+		erased, err := scimNameErased(ctx, tx, externalID)
+		if err != nil || erased {
+			return err
+		}
 		res, err := tx.ExecContext(ctx, `
 			UPDATE identity.scim_user SET user_name = $2
 			WHERE tenant_id = ipso.current_tenant() AND external_id = $1`, externalID, userName)
@@ -195,6 +218,10 @@ func SetSCIMName(ctx context.Context, db *sql.DB, tenant uuid.UUID, externalID, 
 		return fmt.Errorf("%w: a name is required", ErrInvalidQuery)
 	}
 	err := inTenantAt(ctx, db, tenant, sql.LevelReadCommitted, false, func(tx *sql.Tx) error {
+		erased, err := scimNameErased(ctx, tx, externalID)
+		if err != nil || erased {
+			return err
+		}
 		res, err := tx.ExecContext(ctx, `
 			UPDATE identity.principal AS p SET name = $2
 			FROM identity.scim_user AS u
@@ -231,14 +258,18 @@ func ReplaceSCIMUser(ctx context.Context, db *sql.DB, tenant uuid.UUID, external
 				return err
 			}
 		}
-		if userName != "" && userName != user.UserName {
+		erased, err := scimNameErased(ctx, tx, externalID)
+		if err != nil {
+			return err
+		}
+		if userName != "" && userName != user.UserName && !erased {
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE identity.scim_user SET user_name = $2
 				WHERE tenant_id = ipso.current_tenant() AND external_id = $1`, externalID, userName); err != nil {
 				return err
 			}
 		}
-		if name != "" && name != user.Name {
+		if name != "" && name != user.Name && !erased {
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE identity.principal SET name = $1
 				WHERE tenant_id = ipso.current_tenant() AND id = $2`, name, user.ID); err != nil {
@@ -298,6 +329,21 @@ func oneSCIMUser(ctx context.Context, db *sql.DB, tenant uuid.UUID, where string
 		return SCIMUser{}, scimErr(err)
 	}
 	return user, nil
+}
+
+// scimNameErased reports whether the person of this SCIM external id has had their name erased.
+// A missing row is ErrUnknownPrincipal.
+func scimNameErased(ctx context.Context, tx *sql.Tx, externalID string) (bool, error) {
+	var erased bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT p.name_erased
+		FROM identity.scim_user u
+		JOIN identity.principal p ON p.tenant_id = u.tenant_id AND p.id = u.principal_id
+		WHERE u.tenant_id = ipso.current_tenant() AND u.external_id = $1`, externalID).Scan(&erased)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrUnknownPrincipal
+	}
+	return erased, err
 }
 
 func scimUser(ctx context.Context, tx *sql.Tx, where string, arg any) (SCIMUser, error) {
