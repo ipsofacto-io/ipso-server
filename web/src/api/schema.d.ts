@@ -557,6 +557,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/principals/{id}/erasure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Erase the display name of one person.
+         * @description Only an admin who is a person takes it (ADR-0108, ADR-0156). The name is replaced with a placeholder in the principal, in open invitations that carry that name, in the SCIM filter key, and in waiver approver copies of that person. The principal id and the role bindings stay. Open logins of that person are closed. The request has no body, and the action log names the admin and the person's id, never the old name. A person who is not in this tenant is 404. An agent, the operator principal, and the only remaining tenant-wide admin are 409, and nothing is written. A second call, after the name is already erased, is 204 and writes no second entry.
+         */
+        post: operations["erase_principal_name"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/role-bindings": {
         parameters: {
             query?: never;
@@ -2627,6 +2647,34 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    erase_principal_name: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The name was erased, or it had already been erased. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Timeout"];

@@ -46,4 +46,13 @@ func TestInvalidArgumentsTouchNoDatabase(t *testing.T) {
 	if _, err := ListRoleBindings(ctx, nil, id, uuid.Nil, 0); !errors.Is(err, ErrInvalidQuery) {
 		t.Errorf("ListRoleBindings with no limit: %v", err)
 	}
+	if err := ErasePrincipalName(ctx, nil, uuid.Nil, id, id); !errors.Is(err, ErrInvalidQuery) {
+		t.Errorf("ErasePrincipalName with no tenant: %v", err)
+	}
+	if err := ErasePrincipalName(ctx, nil, id, uuid.Nil, id); !errors.Is(err, ErrInvalidQuery) {
+		t.Errorf("ErasePrincipalName with no actor: %v", err)
+	}
+	if err := ErasePrincipalName(ctx, nil, id, id, uuid.Nil); !errors.Is(err, ErrInvalidQuery) {
+		t.Errorf("ErasePrincipalName with no principal: %v", err)
+	}
 }

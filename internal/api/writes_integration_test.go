@@ -219,6 +219,7 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 		t.Fatalf("the grant answered %v", granted)
 	}
 	s.expect(http.StatusNoContent, personA, http.MethodDelete, "/v1/role-bindings/"+idOf(t, granted, "id").String(), nil)
+	s.expect(http.StatusNoContent, personA, http.MethodPost, "/v1/principals/"+f.callers[viewerA].Principal.String()+"/erasure", nil)
 
 	// The waiver names the person who recorded it, taken from the session and not from the body.
 	var approverID uuid.UUID
@@ -262,8 +263,8 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 		byAction["api.allow_premise_host"].Principal != f.callers[personA].Principal {
 		t.Errorf("the log names the wrong people: %+v", byAction)
 	}
-	if len(s.logged()) != before+9 {
-		t.Errorf("%d entries after the clearance, host, agent approval, check approval, export request, invitation and its revocation, role grant and its revocation, from %d", len(s.logged()), before)
+	if len(s.logged()) != before+10 {
+		t.Errorf("%d entries after the clearance, host, agent approval, check approval, export request, invitation and its revocation, role grant and its revocation, and the name erasure, from %d", len(s.logged()), before)
 	}
 }
 
@@ -303,6 +304,8 @@ func TestAWriteTheRoleDoesNotAllowStoresAndLogsNothing(t *testing.T) {
 			return http.MethodPost, "/v1/role-bindings", map[string]any{"principal_id": f.callers[viewerA].Principal, "role": "contributor"}
 		case "revoke_role_binding":
 			return http.MethodDelete, "/v1/role-bindings/" + f.prod.String(), nil
+		case "erase_principal_name":
+			return http.MethodPost, "/v1/principals/" + f.callers[viewerA].Principal.String() + "/erasure", nil
 		case "approve_proposal":
 			return http.MethodPost, "/v1/proposals/" + f.proposal.String() + "/approval", approval("denied", []uuid.UUID{f.org})
 		case "approve_check_proposal":
