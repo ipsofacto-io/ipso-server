@@ -97,6 +97,12 @@ func acceptInvitation(ctx context.Context, db *sql.DB, tenant uuid.UUID, issuer,
 		if err != nil {
 			return fmt.Errorf("use the invitation: %w", err)
 		}
+		// A name erasure replaces the invitation name and leaves the row. Accepting it would create a
+		// person whose name is the placeholder and whose name is not marked erased, so it is refused
+		// and the delete rolls back (ADR-0156).
+		if name == ErasedName {
+			return ErrUnknownInvitation
+		}
 		var person uuid.UUID
 		if err := tx.QueryRowContext(ctx, `
 			INSERT INTO identity.principal (tenant_id, kind, name)
