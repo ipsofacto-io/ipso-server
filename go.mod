@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	filippo.io/age v1.3.2
+	github.com/go-logr/logr v1.4.4
 	github.com/google/uuid v1.6.0
 	github.com/ipsofacto-io/ipso v0.4.1-0.20261112150915-16812ad6c0a1
 	github.com/jackc/pgx/v5 v5.11.0
@@ -25,7 +26,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.47.0
 	go.opentelemetry.io/otel/sdk/metric v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
-	go.opentelemetry.io/proto/otlp v1.11.0 // telemetry tests only
+	go.opentelemetry.io/proto/otlp v1.11.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/time v0.16.0
 	google.golang.org/protobuf v1.36.12
@@ -55,7 +56,6 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
-	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v1.0.2 // indirect

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -626,5 +627,91 @@ func TestAFailingCollectorIsLoggedOnceAndWithoutItsAddress(t *testing.T) {
 	}
 	if strings.Contains(logged.String(), collector.URL) || strings.Contains(logged.String(), "127.0.0.1") {
 		t.Errorf("the log names the collector:\n%s", logged.String())
+	}
+}
+
+// A value that does not parse is refused by the name of its variable. The SDK would print it, and the value can be
+// a header with a token or an endpoint with credentials.
+func TestStartRefusesAValueItCannotParseWithoutPrintingIt(t *testing.T) {
+	for _, c := range []struct{ name, value, secret string }{
+		{"OTEL_EXPORTER_OTLP_HEADERS", "Authorization: Bearer s3cr3t-token", "s3cr3t-token"},
+		{"OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer%zzs3cr3t-token", "s3cr3t-token"},
+		{"OTEL_EXPORTER_OTLP_HEADERS", "bad key=s3cr3t-token", "s3cr3t-token"},
+		{"OTEL_EXPORTER_OTLP_TRACES_HEADERS", "=s3cr3t-token", "s3cr3t-token"},
+		{"OTEL_EXPORTER_OTLP_METRICS_HEADERS", "s3cr3t-token", "s3cr3t-token"},
+		{"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "https://user:p%zzs3cr3t-token@collector.example:443", "s3cr3t-token"},
+		{"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "collector.example:4318/s3cr3t-token", "s3cr3t-token"},
+		{"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "ftp://collector.example/s3cr3t-token", "s3cr3t-token"},
+		{EnvEndpoint, "https:///s3cr3t-token", "s3cr3t-token"},
+	} {
+		env := map[string]string{EnvEndpoint: "http://collector:4318"}
+		env[c.name] = c.value
+		_, _, err := Start(context.Background(), Options{Getenv: func(k string) string { return env[k] }})
+		if err == nil {
+			t.Errorf("%s=%q started, want a refusal", c.name, c.value)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.name) || strings.Contains(err.Error(), c.secret) {
+			t.Errorf("%s: the refusal is %q, want the name of the variable and none of its value", c.name, err)
+		}
+	}
+}
+
+func TestHeaderListsTheExportersAccept(t *testing.T) {
+	for list, want := range map[string]bool{
+		"":                           true,
+		"Authorization=Bearer%20abc": true,
+		"a=b,c=d":                    true,
+		" a = b , ":                  true,
+		"X-Api-Key=0123456789":       true,
+		"Authorization: Bearer abc":  false,
+		"a=b,c":                      false,
+		"a b=c":                      false,
+		"=c":                         false,
+		"a=%zz":                      false,
+		"a=b;c=d,e":                  false,
+	} {
+		if got := validHeaders(list); got != want {
+			t.Errorf("validHeaders(%q) = %v, want %v", list, got, want)
+		}
+	}
+}
+
+// The SDK logs the input that failed to parse as a value of its line. The logger it is given keeps no value.
+func TestTheLoggerOfTheSDKKeepsNoValue(t *testing.T) {
+	var lines []string
+	sdk := logr.New(sdkLog{report: func(line string) { lines = append(lines, line) }})
+	sdk.Error(errors.New("missing '='"), "parse headers", "input", "Authorization: Bearer s3cr3t-token")
+	sdk.WithName("exporter").WithValues("value", "s3cr3t-token").Error(errors.New("bad"), "escape header value", "value", "s3cr3t-token")
+	sdk.V(1).Info("detail", "value", "s3cr3t-token")
+	sdk.Info("detail", "value", "s3cr3t-token")
+	if len(lines) != 2 {
+		t.Fatalf("said %d lines, want one for each error and none for information: %q", len(lines), lines)
+	}
+	for _, line := range lines {
+		if strings.Contains(line, "s3cr3t-token") || strings.Contains(line, "Authorization") {
+			t.Errorf("the line holds a value: %q", line)
+		}
+	}
+}
+
+// Start installs that logger before it builds an exporter. A timeout that is not a duration passes the checks of
+// Start, and the SDK reports it with the value as the input of its line.
+func TestStartGivesTheSDKALoggerThatSaysOneFixedLine(t *testing.T) {
+	collector := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer collector.Close()
+	t.Setenv(EnvEndpoint, collector.URL)
+	t.Setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "s3cr3t-token")
+	var logged strings.Builder
+	_, shutdown, err := Start(context.Background(), Options{Service: "ipso-api", Logger: slog.New(slog.NewJSONHandler(&logged, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = shutdown(context.Background()) }()
+	if strings.Contains(logged.String(), "s3cr3t-token") {
+		t.Errorf("the log holds the value:\n%s", logged.String())
+	}
+	if n := strings.Count(logged.String(), "telemetry reported a problem with its settings"); n != 1 {
+		t.Errorf("logged %d times, want once (the SDK reported the timeout, and its line went to our logger):\n%s", n, logged.String())
 	}
 }

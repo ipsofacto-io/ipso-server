@@ -15,11 +15,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
@@ -85,26 +87,33 @@ func Start(ctx context.Context, o Options) (*Telemetry, func(context.Context) er
 	if err := checkSettings(getenv); err != nil {
 		return nil, off, err
 	}
-	spans, err := otlptracehttp.New(ctx)
-	if err != nil {
-		return nil, off, fmt.Errorf("telemetry: the trace exporter: %w", err)
-	}
-	metrics, err := otlpmetrichttp.New(ctx)
-	if err != nil {
-		return nil, off, fmt.Errorf("telemetry: the metric exporter: %w", err)
-	}
 	logger := o.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	// The SDK reports through two global channels, an error handler and a logger. Both are replaced before an
+	// exporter is built, and both say one fixed line at most once a minute: an error can hold the endpoint, and
+	// the logger of the SDK prints the input that failed to parse, which can be a header with a token.
 	var last atomic.Int64
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) {
+	report := func(line string) {
 		now := time.Now().UnixNano()
 		if prev := last.Load(); now-prev < int64(errorEvery) || !last.CompareAndSwap(prev, now) {
 			return
 		}
-		logger.Warn("telemetry export failed, check the collector endpoint and the OTEL_EXPORTER_OTLP_* variables")
+		logger.Warn(line)
+	}
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) {
+		report("telemetry export failed, check the collector endpoint and the OTEL_EXPORTER_OTLP_* variables")
 	}))
+	otel.SetLogger(logr.New(sdkLog{report}))
+	spans, err := otlptracehttp.New(ctx)
+	if err != nil {
+		return nil, off, errors.New("telemetry: the trace exporter could not be built from the OTEL_EXPORTER_OTLP_* variables")
+	}
+	metrics, err := otlpmetrichttp.New(ctx)
+	if err != nil {
+		return nil, off, errors.New("telemetry: the metric exporter could not be built from the OTEL_EXPORTER_OTLP_* variables")
+	}
 	res, err := resource.Merge(resource.Default(), resource.NewWithAttributes("",
 		attribute.String("service.namespace", namespace),
 		attribute.String("service.name", o.Service),
@@ -125,6 +134,20 @@ func checkSettings(getenv func(string) string) error {
 	for _, name := range []string{"OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL"} {
 		if v := strings.TrimSpace(getenv(name)); v != "" && v != protocol {
 			return fmt.Errorf("telemetry: %s must be %s or unset", name, protocol)
+		}
+	}
+	// A value that does not parse is refused here, by the name of its variable and never by its value. The SDK
+	// would print the value, or fall back to localhost without a word.
+	for _, name := range []string{EnvEndpoint, "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"} {
+		if v := strings.TrimSpace(getenv(name)); v != "" {
+			if u, err := url.Parse(v); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return fmt.Errorf("telemetry: %s must be an http or https URL", name)
+			}
+		}
+	}
+	for _, name := range []string{"OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_METRICS_HEADERS"} {
+		if !validHeaders(getenv(name)) {
+			return fmt.Errorf("telemetry: %s must be name=value pairs separated by commas, with percent-encoded values", name)
 		}
 	}
 	for _, name := range []string{"OTEL_TRACES_EXPORTER", "OTEL_METRICS_EXPORTER"} {
@@ -173,6 +196,47 @@ func New(res *resource.Resource, processor sdktrace.SpanProcessor, reader sdkmet
 		return nil, nil, err
 	}
 	return t, shutdown, nil
+}
+
+// validHeaders reads a header list the way the exporters do: pairs of name=value separated by commas, a name made
+// of token characters, and a value that is percent-decoded. It says whether every pair would be accepted.
+func validHeaders(list string) bool {
+	for _, pair := range strings.Split(list, ",") {
+		if strings.TrimSpace(pair) == "" {
+			continue
+		}
+		name, value, found := strings.Cut(pair, "=")
+		name = strings.TrimSpace(name)
+		if !found || name == "" || strings.ContainsFunc(name, notTokenRune) {
+			return false
+		}
+		if _, err := url.PathUnescape(value); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// notTokenRune is true for a character that cannot be in the name of a header.
+func notTokenRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return false
+	}
+	return !strings.ContainsRune("!#$%&'*+-.^_`|~", r)
+}
+
+// sdkLog is the logger of the SDK. It keeps nothing of what it is given: the SDK passes the input that failed to
+// parse as a value of the line, and that input can be a header with a token or an endpoint with credentials.
+type sdkLog struct{ report func(string) }
+
+func (sdkLog) Init(logr.RuntimeInfo)            {}
+func (sdkLog) Enabled(int) bool                 { return false }
+func (sdkLog) Info(int, string, ...any)         {}
+func (l sdkLog) WithValues(...any) logr.LogSink { return l }
+func (l sdkLog) WithName(string) logr.LogSink   { return l }
+func (l sdkLog) Error(error, string, ...any) {
+	l.report("telemetry reported a problem with its settings, check the OTEL_* variables")
 }
 
 func (t *Telemetry) on() bool { return t != nil && t.tracer != nil }

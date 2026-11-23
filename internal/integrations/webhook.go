@@ -209,6 +209,9 @@ func (s *Service) Handler() http.Handler {
 }
 
 func (s *Service) receive(w http.ResponseWriter, r *http.Request) {
+	// A job is measured from the moment its delivery arrived, before the body, the signature and the mapping
+	// lookup, which can take seconds. The objective of section 15 for a check result counts from here.
+	received := time.Now()
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
 	if err != nil {
 		var tooLarge *http.MaxBytesError
@@ -258,7 +261,7 @@ func (s *Service) receive(w http.ResponseWriter, r *http.Request) {
 	}
 	next.tenant = tenant
 	next.delivery = delivery
-	next.received = time.Now()
+	next.received = received
 	next.span = telemetry.SpanContext(r.Context())
 	telemetry.SetTenant(r.Context(), tenant)
 	if !s.seen.add(delivery) {

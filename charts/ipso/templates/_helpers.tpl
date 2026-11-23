@@ -22,15 +22,12 @@
 
 {{/* The one variable that turns telemetry on in the api and the worker (ADR-0155). */}}
 {{- define "ipso.telemetryEnv" -}}
-{{- if .Values.telemetry.endpoint }}
 - name: OTEL_EXPORTER_OTLP_ENDPOINT
   value: {{ .Values.telemetry.endpoint | quote }}
-{{- end }}
 {{- end -}}
 
 {{/* Egress to the Collector of the cluster, for the policy of the api and of the worker. */}}
 {{- define "ipso.telemetryEgress" -}}
-{{- if .Values.telemetry.namespace }}
 - to:
     - namespaceSelector:
         matchLabels:
@@ -39,7 +36,6 @@
   ports:
     - protocol: TCP
       port: {{ .Values.telemetry.port }}
-{{- end }}
 {{- end -}}
 
 {{- define "ipso.fullname" -}}
