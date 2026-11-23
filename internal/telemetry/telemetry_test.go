@@ -662,10 +662,13 @@ func TestHeaderListsTheExportersAccept(t *testing.T) {
 		"":                           true,
 		"Authorization=Bearer%20abc": true,
 		"a=b,c=d":                    true,
-		" a = b , ":                  true,
+		" a = b ":                    true,
 		"X-Api-Key=0123456789":       true,
 		"Authorization: Bearer abc":  false,
 		"a=b,c":                      false,
+		"a=b,":                       false,
+		"a=b,,c=d":                   false,
+		",":                          false,
 		"a b=c":                      false,
 		"=c":                         false,
 		"a=%zz":                      false,
@@ -713,5 +716,22 @@ func TestStartGivesTheSDKALoggerThatSaysOneFixedLine(t *testing.T) {
 	}
 	if n := strings.Count(logged.String(), "telemetry reported a problem with its settings"); n != 1 {
 		t.Errorf("logged %d times, want once (the SDK reported the timeout, and its line went to our logger):\n%s", n, logged.String())
+	}
+}
+
+// The warning about the settings and the warning about a failed export each have a limit of their own, so the
+// first of one does not hide the first of the other.
+func TestTheTwoWarningsDoNotHideEachOther(t *testing.T) {
+	var logged strings.Builder
+	logger := slog.New(slog.NewJSONHandler(&logged, nil))
+	settings, export := oncePerMinute(logger), oncePerMinute(logger)
+	settings("the settings line")
+	settings("the settings line again")
+	export("the export line")
+	export("the export line again")
+	for line, want := range map[string]int{"the settings line": 1, "the export line": 1, "again": 0} {
+		if got := strings.Count(logged.String(), line); got != want {
+			t.Errorf("%q logged %d times, want %d:\n%s", line, got, want, logged.String())
+		}
 	}
 }

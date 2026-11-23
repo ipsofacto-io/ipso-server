@@ -92,20 +92,14 @@ func Start(ctx context.Context, o Options) (*Telemetry, func(context.Context) er
 		logger = slog.New(slog.DiscardHandler)
 	}
 	// The SDK reports through two global channels, an error handler and a logger. Both are replaced before an
-	// exporter is built, and both say one fixed line at most once a minute: an error can hold the endpoint, and
-	// the logger of the SDK prints the input that failed to parse, which can be a header with a token.
-	var last atomic.Int64
-	report := func(line string) {
-		now := time.Now().UnixNano()
-		if prev := last.Load(); now-prev < int64(errorEvery) || !last.CompareAndSwap(prev, now) {
-			return
-		}
-		logger.Warn(line)
-	}
+	// exporter is built, and each says one fixed line at most once a minute, on a limit of its own so that one
+	// does not hide the other: an error can hold the endpoint, and the logger of the SDK prints the input that
+	// failed to parse, which can be a header with a token.
+	exportFailed, settingsFailed := oncePerMinute(logger), oncePerMinute(logger)
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) {
-		report("telemetry export failed, check the collector endpoint and the OTEL_EXPORTER_OTLP_* variables")
+		exportFailed("telemetry export failed, check the collector endpoint and the OTEL_EXPORTER_OTLP_* variables")
 	}))
-	otel.SetLogger(logr.New(sdkLog{report}))
+	otel.SetLogger(logr.New(sdkLog{settingsFailed}))
 	spans, err := otlptracehttp.New(ctx)
 	if err != nil {
 		return nil, off, errors.New("telemetry: the trace exporter could not be built from the OTEL_EXPORTER_OTLP_* variables")
@@ -127,6 +121,18 @@ func Start(ctx context.Context, o Options) (*Telemetry, func(context.Context) er
 		return nil, off, err
 	}
 	return t, shutdown, nil
+}
+
+// oncePerMinute returns a function that logs a line, and drops the lines that follow it within errorEvery.
+func oncePerMinute(logger *slog.Logger) func(string) {
+	var last atomic.Int64
+	return func(line string) {
+		now := time.Now().UnixNano()
+		if prev := last.Load(); now-prev < int64(errorEvery) || !last.CompareAndSwap(prev, now) {
+			return
+		}
+		logger.Warn(line)
+	}
 }
 
 // checkSettings refuses what the build cannot do, so a process does not start and then export nothing.
@@ -199,12 +205,13 @@ func New(res *resource.Resource, processor sdktrace.SpanProcessor, reader sdkmet
 }
 
 // validHeaders reads a header list the way the exporters do: pairs of name=value separated by commas, a name made
-// of token characters, and a value that is percent-decoded. It says whether every pair would be accepted.
+// of token characters, and a value that is percent-decoded. It says whether every pair would be accepted, and an
+// empty pair, such as the one after a trailing comma, is not: the exporters report it. An unset list is valid.
 func validHeaders(list string) bool {
+	if list == "" {
+		return true
+	}
 	for _, pair := range strings.Split(list, ",") {
-		if strings.TrimSpace(pair) == "" {
-			continue
-		}
 		name, value, found := strings.Cut(pair, "=")
 		name = strings.TrimSpace(name)
 		if !found || name == "" || strings.ContainsFunc(name, notTokenRune) {
