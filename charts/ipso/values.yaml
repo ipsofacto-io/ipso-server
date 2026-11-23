@@ -27,6 +27,19 @@ oidc:
   # Port in the issuer URL. Used only when namespace is set.
   port: 443
 
+# Traces and metrics of the api and the worker (ADR-0155). Nothing is sent while endpoint is empty. The other OTEL_*
+# variables (headers, sampler, export interval) are not chart values: the Collector the endpoint names does the
+# authentication to its backend, and an operator sets the rest with a patch of the Deployment.
+telemetry:
+  # http or https URL of an OTLP/HTTP receiver, for example http://otel-collector.observability:4318. A public
+  # endpoint is reachable on port 443 only.
+  endpoint: ""
+  # Namespace of a Collector inside the cluster. Empty opens no egress to it, and then only a public endpoint on
+  # port 443 is reachable. It does not open the private ranges.
+  namespace: ""
+  # Port of that Collector. Used only when namespace is set.
+  port: 4318
+
 # First person. Off unless the operator turns it on, and then only the bootstrap Job
 # reads the key encryption key. Turn it off and delete that Secret after it succeeds.
 bootstrap:

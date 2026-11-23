@@ -39,6 +39,23 @@ lint() {
     --set-string oidc.namespace=idp --set oidc.port=8443 >"$ns"
   grep -q 'kubernetes.io/metadata.name: "idp"' "$ns"
   grep -q 'port: 8443' "$ns"
+  # Telemetry is off in the default render, and one endpoint turns it on for the api and the worker (ADR-0155).
+  local tel
+  tel=$(mktemp)
+  helm template ipso charts/ipso -f charts/ipso/ci/values.yaml \
+    --set-string telemetry.endpoint=http://otel-collector.observability:4318 \
+    --set-string telemetry.namespace=observability >"$tel"
+  python3 charts/ipso/ci/check_render.py "$tel" --telemetry
+  if helm template ipso charts/ipso -f charts/ipso/ci/values.yaml --set-string telemetry.endpoint=collector:4318 >"$err" 2>&1; then
+    echo "an endpoint that is not a URL rendered" >&2
+    exit 1
+  fi
+  grep -q "telemetry.endpoint must be an http or https URL" "$err"
+  if helm template ipso charts/ipso -f charts/ipso/ci/values.yaml --set-string telemetry.namespace=observability >"$err" 2>&1; then
+    echo "a collector namespace with no endpoint rendered" >&2
+    exit 1
+  fi
+  grep -q "telemetry.namespace is set and telemetry.endpoint is not" "$err"
   helm template ipso charts/ipso \
     -f charts/ipso/ci/values.yaml \
     -f charts/ipso/ci/bootstrap-values.yaml >"$out"

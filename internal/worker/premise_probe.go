@@ -87,7 +87,7 @@ func (*premiseProbe) Timeout(*river.Job[PremiseProbeArgs]) time.Duration {
 // the notice sweep: an operation and a class of cause, and ids only.
 func (w *premiseProbe) Work(ctx context.Context, job *river.Job[PremiseProbeArgs]) error {
 	if job.Args.Tenant != w.tenant {
-		w.log.Warn("a job names another tenant, so it was cancelled", "job", job.ID, "tenant", w.tenant)
+		w.log.WarnContext(ctx, "a job names another tenant, so it was cancelled", "job", job.ID, "tenant", w.tenant)
 		return river.JobCancel(errOtherTenant)
 	}
 	ref := registry.PremiseRef{Decision: job.Args.Decision, ID: job.Args.Premise}
@@ -96,7 +96,7 @@ func (w *premiseProbe) Work(ctx context.Context, job *river.Job[PremiseProbeArgs
 		return reduce("read a premise", err)
 	}
 	if !due {
-		w.log.Info("premise probe skipped", "job", job.ID, "tenant", w.tenant, "decision", ref.Decision, "outcome", "not due")
+		w.log.InfoContext(ctx, "premise probe skipped", "job", job.ID, "tenant", w.tenant, "decision", ref.Decision, "outcome", "not due")
 		return nil
 	}
 
@@ -114,7 +114,7 @@ func (w *premiseProbe) Work(ctx context.Context, job *river.Job[PremiseProbeArgs
 	if err != nil {
 		return reduce("record a premise evaluation", err)
 	}
-	w.log.Info("premise probed", "job", job.ID, "tenant", w.tenant, "decision", ref.Decision,
+	w.log.InfoContext(ctx, "premise probed", "job", job.ID, "tenant", w.tenant, "decision", ref.Decision,
 		"result", ev.Result, "reason_opened", opened)
 	return nil
 }

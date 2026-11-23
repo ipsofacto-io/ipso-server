@@ -31,6 +31,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/migrate"
 	"github.com/ipsofacto-io/ipso-server/internal/proposals"
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
+	"github.com/ipsofacto-io/ipso-server/internal/telemetry"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
 	"github.com/ipsofacto-io/ipso-server/internal/webapp"
 	"github.com/ipsofacto-io/ipso-server/internal/worker"
@@ -328,7 +329,13 @@ func apiCmd(ctx context.Context, stderr io.Writer, d deps) int {
 	cfg.DB = db
 	cfg.Version = Version
 	cfg.Web = webapp.Files()
-	cfg.Log = slog.New(slog.NewJSONHandler(stderr, nil))
+	log, tel, stop, err := observe(ctx, stderr, d, "ipso-api")
+	if err != nil {
+		fprintf(stderr, "api: %v\n", err)
+		return 1
+	}
+	defer stop()
+	cfg.Log, cfg.Telemetry = log, tel
 	if err := installConnectorKey(d.getenv); err != nil {
 		fprintf(stderr, "api: %v\n", err)
 		return 1
@@ -436,10 +443,17 @@ func workerCmd(ctx context.Context, stderr io.Writer, d deps) int {
 		fprintf(stderr, "worker: %v\n", err)
 		return 1
 	}
+	log, tel, stop, err := observe(ctx, stderr, d, "ipso-worker")
+	if err != nil {
+		fprintf(stderr, "worker: %v\n", err)
+		return 1
+	}
+	defer stop()
 	err = d.runWorker(ctx, worker.Config{
 		Pool:          pool,
 		Tenant:        tenant,
-		Log:           slog.New(slog.NewJSONHandler(stderr, nil)),
+		Log:           log,
+		Telemetry:     tel,
 		HeartbeatPath: heartbeatPath(d.getenv),
 	})
 	if err != nil {
@@ -447,6 +461,26 @@ func workerCmd(ctx context.Context, stderr io.Writer, d deps) int {
 		return 1
 	}
 	return 0
+}
+
+// telemetryStopTimeout bounds the flush of telemetry when a role stops. A collector that is down must not
+// hold the process past the grace period of its container.
+const telemetryStopTimeout = 5 * time.Second
+
+// observe builds the logger of a long-running role and starts its telemetry (ADR-0155). The logger adds the
+// trace of the request or the job to a line that is written with its context. Telemetry is off, and the
+// returned value nil, unless OTEL_EXPORTER_OTLP_ENDPOINT is set. stop flushes what is waiting to be sent.
+func observe(ctx context.Context, stderr io.Writer, d deps, service string) (*slog.Logger, *telemetry.Telemetry, func(), error) {
+	log := slog.New(telemetry.LogHandler(slog.NewJSONHandler(stderr, nil)))
+	tel, shutdown, err := telemetry.Start(ctx, telemetry.Options{Service: service, Version: Version, Getenv: d.getenv, Logger: log})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return log, tel, func() {
+		flush, cancel := context.WithTimeout(context.WithoutCancel(ctx), telemetryStopTimeout)
+		defer cancel()
+		_ = shutdown(flush)
+	}, nil
 }
 
 // heartbeatPath is the file the worker writes. The probe reads the same variable.
@@ -512,11 +546,17 @@ func webhooksCmd(ctx context.Context, stderr io.Writer, d deps) int {
 		fprintf(stderr, "webhooks: %v\n", err)
 		return 1
 	}
-	logger := slog.New(slog.NewJSONHandler(stderr, nil))
+	logger, tel, stop, err := observe(ctx, stderr, d, "ipso-webhooks")
+	if err != nil {
+		fprintf(stderr, "webhooks: %v\n", err)
+		return 1
+	}
+	defer stop()
 	cfg := integrations.Config{
 		App:           app,
 		WebhookSecret: []byte(d.getenv(webhookSecretEnv)),
 		Logger:        logger,
+		Telemetry:     tel,
 		Tenants: func(ctx context.Context, installation int64) (uuid.UUID, bool, error) {
 			return d.installationTenant(ctx, db, installation)
 		},
@@ -634,13 +674,20 @@ func runTasksCmd(ctx context.Context, stderr io.Writer, d deps) int {
 	if hosts := d.getenv(runTaskPlanHostsEnv); hosts != "" {
 		planHosts = strings.Split(hosts, ",")
 	}
+	logger, tel, stop, err := observe(ctx, stderr, d, "ipso-runtasks")
+	if err != nil {
+		fprintf(stderr, "runtasks: %v\n", err)
+		return 1
+	}
+	defer stop()
 	err = d.runTasks(ctx, listener, integrations.RunTaskConfig{
 		HMACKey:   []byte(d.getenv(runTaskHMACEnv)),
 		Bundle:    bundle,
 		Env:       d.getenv(runTaskPolicyEnv),
 		APIHost:   d.getenv(runTaskHostEnv),
 		PlanHosts: planHosts,
-		Logger:    slog.New(slog.NewJSONHandler(stderr, nil)),
+		Logger:    logger,
+		Telemetry: tel,
 	})
 	if err != nil {
 		fprintf(stderr, "runtasks: %v\n", err)

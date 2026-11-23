@@ -27,6 +27,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/authz"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
+	"github.com/ipsofacto-io/ipso-server/internal/telemetry"
 )
 
 // Scopes a token can hold. Reading and proposing are separate, so a client can ask for the least.
@@ -79,6 +80,8 @@ type Config struct {
 	Rate rate.Limit
 	// Burst is how many calls one tenant may make at once. Default 20.
 	Burst int
+	// Telemetry records each operation that reaches the MCP server (ADR-0155). Nil records nothing.
+	Telemetry *telemetry.Telemetry
 }
 
 const (
@@ -251,7 +254,9 @@ func (h *handler) post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	server := mcptools.NewServer(h.cfg.Version, h.backends(caller))
-	reply := server.Handle(r.Context(), body)
+	ctx, end := h.cfg.Telemetry.StartMCP(r.Context(), caller.Tenant, req.Method, req.Params.Name)
+	reply := server.Handle(ctx, body)
+	end(replyFailed(reply))
 	if reply == nil {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -261,6 +266,14 @@ func (h *handler) post(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(status)
 	}
 	_ = json.NewEncoder(w).Encode(json.RawMessage(reply))
+}
+
+// replyFailed says whether a JSON-RPC answer carries an error. A notification has no answer.
+func replyFailed(reply []byte) bool {
+	var parsed struct {
+		Error json.RawMessage `json:"error"`
+	}
+	return json.Unmarshal(reply, &parsed) == nil && len(parsed.Error) > 0
 }
 
 // statusOf gives a JSON-RPC failure its HTTP status on 2026-07-28. A client on an older revision

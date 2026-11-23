@@ -21,6 +21,7 @@ def component(doc):
 def main():
     path = sys.argv[1]
     want_bootstrap = "--bootstrap" in sys.argv[2:]
+    want_telemetry = "--telemetry" in sys.argv[2:]
     docs = documents(open(path, encoding="utf-8").read())
     if not docs:
         sys.exit("the render is empty")
@@ -31,6 +32,8 @@ def main():
     api_migrate_env = False
     bootstrap = False
     bootstrap_kek = False
+    telemetry_env = set()
+    telemetry_policy = set()
     for doc in docs:
         if "\nkind: Secret\n" in f"\n{doc}\n" or doc.startswith("kind: Secret\n"):
             sys.exit("the render contains a Secret")
@@ -51,6 +54,15 @@ def main():
         elif kind == "NetworkPolicy":
             saw_policy = True
         name = component(doc)
+        # Telemetry is for the api and the worker (ADR-0155). No Job and no front holds the variable.
+        if "OTEL_" in doc:
+            if kind != "Deployment" or name not in {"api", "worker"}:
+                sys.exit(f"telemetry settings reached a {kind} of {name}")
+            telemetry_env.add(name)
+        if kind == "NetworkPolicy" and name in {"api", "worker"} and "port: 4318" in doc:
+            if 'kubernetes.io/metadata.name: "observability"' not in doc:
+                sys.exit(f"the {name} policy opens the collector port to more than its namespace")
+            telemetry_policy.add(name)
         if name == "migrate" and "IPSO_MIGRATE_DATABASE_URL" in doc:
             migrate_env = True
         if name == "api" and "IPSO_MIGRATE_DATABASE_URL" in doc:
@@ -78,6 +90,11 @@ def main():
             sys.exit("bootstrap is enabled but the Job does not mount the key encryption key")
     elif bootstrap:
         sys.exit("bootstrap is in the default render")
+    if want_telemetry:
+        if telemetry_env != {"api", "worker"} or telemetry_policy != {"api", "worker"}:
+            sys.exit(f"telemetry is on and the api and the worker do not both have the endpoint and the egress: {sorted(telemetry_env)} {sorted(telemetry_policy)}")
+    elif telemetry_env or telemetry_policy:
+        sys.exit("telemetry is in the default render")
     print(f"checked {len(docs)} documents, {len(images)} images")
 
 

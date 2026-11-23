@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: ipso
+    orgId: 1
+    folder: ipso
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /otel-lgtm/grafana/conf/provisioning/dashboards/ipso

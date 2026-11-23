@@ -22,6 +22,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/migrate"
 	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
+	"github.com/ipsofacto-io/ipso-server/internal/telemetry"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
 	"github.com/ipsofacto-io/ipso/pkg/premisecheck"
 )
@@ -49,6 +50,8 @@ func runTests(m *testing.M) int {
 type stack struct {
 	database *pgtest.Database
 	app      *sql.DB
+	// telemetry is what the worker sends its spans and metrics to. Nil, as in most tests, observes nothing.
+	telemetry *telemetry.Telemetry
 }
 
 func newStack(t *testing.T) *stack {
@@ -154,7 +157,7 @@ func (s *stack) startProbing(t *testing.T, tenant uuid.UUID, probe prober) (stop
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- run(ctx, Config{Pool: pool, Tenant: tenant, Log: slog.New(slog.NewTextHandler(logs, nil))}, probe)
+		done <- run(ctx, Config{Pool: pool, Tenant: tenant, Log: slog.New(slog.NewTextHandler(logs, nil)), Telemetry: s.telemetry}, probe)
 	}()
 	var once sync.Once
 	stop = func() {

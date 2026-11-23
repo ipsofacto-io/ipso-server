@@ -70,7 +70,7 @@ func OnMerged(db *sql.DB, gateway *llmgw.Gateway, log *slog.Logger) func(context
 		if err != nil {
 			return err
 		}
-		log.Info("pull request discussion processed", "tenant", pr.Tenant.String(), "repo", pr.Repo, "pull_request", pr.Number,
+		log.InfoContext(ctx, "pull request discussion processed", "tenant", pr.Tenant.String(), "repository_id", pr.RepositoryID, "pull_request", pr.Number,
 			"created", created, "comments", stats.Comments, "untrusted", stats.Untrusted, "flagged", stats.Flagged,
 			"sent", stats.Sent, "refused", stats.Refused, "duplicates", stats.Duplicates)
 		return nil

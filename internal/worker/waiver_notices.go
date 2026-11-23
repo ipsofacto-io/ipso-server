@@ -96,7 +96,7 @@ func (*waiverNotices) Timeout(*river.Job[WaiverNoticesArgs]) time.Duration {
 // can quote row content, and River keeps the text of every attempt error.
 func (w *waiverNotices) Work(ctx context.Context, job *river.Job[WaiverNoticesArgs]) error {
 	if job.Args.Tenant != w.tenant {
-		w.log.Warn("a job names another tenant, so it was cancelled", "job", job.ID, "tenant", w.tenant)
+		w.log.WarnContext(ctx, "a job names another tenant, so it was cancelled", "job", job.ID, "tenant", w.tenant)
 		return river.JobCancel(errOtherTenant)
 	}
 	recorded, err := w.notify(ctx, w.db, w.tenant)
@@ -106,7 +106,7 @@ func (w *waiverNotices) Work(ctx context.Context, job *river.Job[WaiverNoticesAr
 	if err := eehooks.CloseDue(ctx, w.db, w.tenant); err != nil {
 		return reduce("close waiver tickets", err)
 	}
-	w.log.Info("waiver notices recorded", "job", job.ID, "tenant", w.tenant, "recorded", recorded)
+	w.log.InfoContext(ctx, "waiver notices recorded", "job", job.ID, "tenant", w.tenant, "recorded", recorded)
 	return nil
 }
 

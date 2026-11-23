@@ -1,0 +1,52 @@
+# Telemetry for the local stack (ADR-0155). Add it to compose.yaml:
+#
+#   docker compose -f compose.yaml -f deploy/telemetry/compose.yaml up --build
+#
+# It starts one container with an OpenTelemetry Collector, Prometheus, Tempo, Loki and Grafana, and points the api
+# and the worker at it. The four dashboards of this directory are provisioned. It is a tool for a laptop and for
+# ci / telemetry: it is not in the chart and not in the air-gapped bundle, and nothing in it protects real data.
+# Every port is on the loopback address, and the data is in memory, so `down` removes it.
+#
+# The image is pinned by digest. Grafana answers as admin with the password admin, because it listens on
+# the loopback address only.
+name: ipso-local
+
+services:
+  lgtm:
+    image: grafana/otel-lgtm:0.41.1@sha256:1b852b77d7bcadb7699bfe7c78a51d059dff85168de674728cf7abf4474645e5
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./deploy/telemetry/provisioning/ipso-dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/ipso.yaml:ro
+      - ./deploy/telemetry/dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards/ipso:ro
+    tmpfs:
+      # Every component writes under /data, Tempo also under /var/tempo, and the entrypoint changes what Grafana
+      # ships under its data directory.
+      - /data
+      - /tmp
+      - /var/tempo
+      - /root
+      - /otel-lgtm/grafana/data
+    ports:
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:3200:3200"
+    restart: on-failure
+
+  # A metric is sent every 5 seconds here, and every 60 seconds when the variable is not set, so a person looking at a
+  # dashboard on a laptop does not wait a minute.
+  api:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://lgtm:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "5000"
+
+  worker:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://lgtm:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "5000"

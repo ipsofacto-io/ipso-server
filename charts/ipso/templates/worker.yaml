@@ -36,6 +36,7 @@ spec:
           command: ["/usr/local/bin/ipso-server", "--role=worker"]
           env:
             {{- include "ipso.appEnv" . | nindent 12 }}
+            {{- include "ipso.telemetryEnv" . | nindent 12 }}
             - name: IPSO_PROBE_FILE
               value: /var/run/ipso/heartbeat
           volumeMounts:

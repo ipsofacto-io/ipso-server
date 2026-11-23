@@ -4,6 +4,13 @@
 {{- $_ := required "tenantID is required" .Values.tenantID -}}
 {{- $_ := required "oidc.issuer is required" .Values.oidc.issuer -}}
 {{- $_ := required "oidc.audience is required" .Values.oidc.audience -}}
+{{- if .Values.telemetry.endpoint -}}
+{{- if not (regexMatch "^https?://[^/\\s]+" .Values.telemetry.endpoint) -}}
+{{- fail "telemetry.endpoint must be an http or https URL" -}}
+{{- end -}}
+{{- else if .Values.telemetry.namespace -}}
+{{- fail "telemetry.namespace is set and telemetry.endpoint is not" -}}
+{{- end -}}
 {{- if .Values.bootstrap.enabled -}}
 {{- $_ := required "bootstrap.tenantName is required" .Values.bootstrap.tenantName -}}
 {{- $_ := required "bootstrap.person is required" .Values.bootstrap.person -}}
@@ -11,6 +18,28 @@
 {{- $_ := required "bootstrap.subject is required" .Values.bootstrap.subject -}}
 {{- $_ := required "bootstrap.kekSecret is required" .Values.bootstrap.kekSecret -}}
 {{- end -}}
+{{- end -}}
+
+{{/* The one variable that turns telemetry on in the api and the worker (ADR-0155). */}}
+{{- define "ipso.telemetryEnv" -}}
+{{- if .Values.telemetry.endpoint }}
+- name: OTEL_EXPORTER_OTLP_ENDPOINT
+  value: {{ .Values.telemetry.endpoint | quote }}
+{{- end }}
+{{- end -}}
+
+{{/* Egress to the Collector of the cluster, for the policy of the api and of the worker. */}}
+{{- define "ipso.telemetryEgress" -}}
+{{- if .Values.telemetry.namespace }}
+- to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ .Values.telemetry.namespace | quote }}
+      podSelector: {}
+  ports:
+    - protocol: TCP
+      port: {{ .Values.telemetry.port }}
+{{- end }}
 {{- end -}}
 
 {{- define "ipso.fullname" -}}

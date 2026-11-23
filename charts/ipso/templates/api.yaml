@@ -39,6 +39,7 @@ spec:
               containerPort: 8080
           env:
             {{- include "ipso.appEnv" . | nindent 12 }}
+            {{- include "ipso.telemetryEnv" . | nindent 12 }}
             - name: IPSO_OIDC_ISSUER
               value: {{ .Values.oidc.issuer | quote }}
             - name: IPSO_API_AUDIENCE

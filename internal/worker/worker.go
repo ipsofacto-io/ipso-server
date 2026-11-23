@@ -18,9 +18,11 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
+	"github.com/ipsofacto-io/ipso-server/internal/telemetry"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
 	"github.com/ipsofacto-io/ipso/pkg/premisecheck"
 )
@@ -43,6 +45,8 @@ type Config struct {
 	// job that names another tenant is cancelled before it runs.
 	Tenant uuid.UUID
 	Log    *slog.Logger
+	// Telemetry gives each job a span and a duration (ADR-0155). Nil observes nothing.
+	Telemetry *telemetry.Telemetry
 	// HeartbeatPath is the file the chart's probe reads (ADR-0140). Empty skips the file, which is how
 	// the tests run. The command sets it, and the first write happens after the start gates pass.
 	HeartbeatPath string
@@ -146,9 +150,10 @@ func newClient(cfg Config, db *sql.DB, notify notifyFunc, probe prober) (*river.
 	})
 	river.AddWorker(workers, &chatDigests{db: db, tenant: cfg.Tenant, log: cfg.Log})
 	return river.NewClient(riverpgxv5.New(cfg.Pool), &river.Config{
-		Logger:  cfg.Log,
-		Schema:  riverSchema,
-		Workers: workers,
+		Logger:     cfg.Log,
+		Middleware: middleware(cfg),
+		Schema:     riverSchema,
+		Workers:    workers,
 		Queues: map[string]river.QueueConfig{
 			waiverNoticesQueue: {MaxWorkers: 1},
 			premiseSweepQueue:  {MaxWorkers: 1},
@@ -167,6 +172,14 @@ func newClient(cfg Config, db *sql.DB, notify notifyFunc, probe prober) (*river.
 		ReindexerSchedule: river.NeverSchedule(),
 		SoftStopTimeout:   softStop,
 	})
+}
+
+// middleware is what runs around every job. Without telemetry there is none.
+func middleware(cfg Config) []rivertype.Middleware {
+	if cfg.Telemetry == nil {
+		return nil
+	}
+	return []rivertype.Middleware{&observer{tel: cfg.Telemetry, tenant: cfg.Tenant}}
 }
 
 // requireRiverTables refuses to start when the schema was not migrated, which happens when the binary is
