@@ -11,8 +11,9 @@ import (
 
 // ErasePrincipalName replaces one person's stored name with the placeholder and closes that person's
 // open logins (ADR-0156). The principal id and the role bindings stay. The action log records the
-// actor and the person's id, and never the name. A person whose name is already erased is left as
-// they are and writes no second entry. The tenant must be the authenticated one, because
+// actor and the person's id, and never the name. The principal row is locked until the transaction
+// ends, so two erasures of the same person append one entry. A person whose name is already erased
+// is left as they are and writes no second entry. The tenant must be the authenticated one, because
 // ErasePrincipalName trusts it.
 func ErasePrincipalName(ctx context.Context, db *sql.DB, tenant, actor, principal uuid.UUID) error {
 	if tenant == uuid.Nil || actor == uuid.Nil || principal == uuid.Nil {
@@ -24,7 +25,8 @@ func ErasePrincipalName(ctx context.Context, db *sql.DB, tenant, actor, principa
 		err := tx.QueryRowContext(ctx, `
 			SELECT kind, name, name_erased
 			FROM identity.principal
-			WHERE tenant_id = ipso.current_tenant() AND id = $1`, principal).Scan(&kind, &name, &erased)
+			WHERE tenant_id = ipso.current_tenant() AND id = $1
+			FOR UPDATE`, principal).Scan(&kind, &name, &erased)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrUnknownPrincipal
 		}

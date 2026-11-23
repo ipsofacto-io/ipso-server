@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -202,6 +203,33 @@ func TestErasePrincipalNameReplacesTheStoredNameAndLeavesTheChain(t *testing.T) 
 	}
 	if textCount(t, admin, "Nerissa Quill") != 0 || textCount(t, admin, "nerissa@example.test") != 0 || textCount(t, admin, "Someone Else") != 0 || textCount(t, admin, "other@example.test") != 0 {
 		t.Fatal("a SCIM write stored a name")
+	}
+
+	cora := principal(t, db, tenantA, identity.KindHuman, "Cora", nil)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errCh <- identity.ErasePrincipalName(t.Context(), db, tenantA, ada, cora)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var entries int
+	if err := pgtest.Scan(t.Context(), db, tenantA.String(), `
+		SELECT count(*) FROM identity.action_log WHERE tenant_id = $1 AND action = $2 AND subject = $3`,
+		[]any{tenantA, identity.ActionErasePrincipalName, cora.String()}, &entries); err != nil || entries != 1 {
+		t.Fatalf("concurrent erasures wrote %d entries (%v)", entries, err)
 	}
 
 	for _, statement := range []string{
