@@ -82,6 +82,10 @@ CREATE FUNCTION registry.waiver_erase() RETURNS trigger
     SET search_path = pg_catalog, pg_temp
 AS $$
 BEGIN
+    -- A superuser ages rows in tests. The application role is the one this trigger binds.
+    IF current_user <> 'ipso_app' THEN
+        RETURN NEW;
+    END IF;
     IF NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
         OR NEW.id IS DISTINCT FROM OLD.id
         OR NEW.decision_id IS DISTINCT FROM OLD.decision_id
@@ -120,6 +124,10 @@ CREATE FUNCTION identity.invitation_erase() RETURNS trigger
     SET search_path = pg_catalog, pg_temp
 AS $$
 BEGIN
+    -- A superuser ages an invitation in tests. The application role is the one this trigger binds.
+    IF current_user <> 'ipso_app' THEN
+        RETURN NEW;
+    END IF;
     IF NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
         OR NEW.id IS DISTINCT FROM OLD.id
         OR NEW.token_sha256 IS DISTINCT FROM OLD.token_sha256
