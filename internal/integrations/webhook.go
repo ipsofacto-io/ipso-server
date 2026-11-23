@@ -17,6 +17,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/ipsofacto-io/ipso-server/internal/telemetry"
 )
 
 const (
@@ -58,8 +61,11 @@ type MergedPullRequest struct {
 	Tenant         uuid.UUID
 	InstallationID int64
 	Repo           string
-	Number         int
-	Client         *RepoClient
+	// RepositoryID is the numeric id of the repository, which a log line names instead of Repo: the owner of a
+	// repository can be a person (ADR-0012, ADR-0155).
+	RepositoryID int64
+	Number       int
+	Client       *RepoClient
 }
 
 // Config is what the service needs. OnMerged is optional. When it is nil, a merged pull request
@@ -80,6 +86,8 @@ type Config struct {
 	Tenants       func(ctx context.Context, installationID int64) (uuid.UUID, bool, error)
 	Unbind        func(ctx context.Context, installationID int64) (uuid.UUID, bool, error)
 	OnMerged      func(context.Context, MergedPullRequest) error
+	// Telemetry observes the requests and the jobs of the service (ADR-0155). Nil observes nothing.
+	Telemetry *telemetry.Telemetry
 }
 
 // Service verifies webhooks and runs their jobs on a bounded queue.
@@ -96,13 +104,19 @@ type Service struct {
 type job struct {
 	delivery string
 	name     string
+	// kind is the ipso.job.kind of the job: check, merged_pr or runtask.
+	kind string
 	// merged marks a merged pull request job, which runs on its own workers and under its own bound.
 	merged bool
 	// installation is the one the signed payload names. tenant is what the mapping says it belongs to,
 	// set by receive before the job is queued. A job never takes its tenant from a payload.
 	installation int64
 	tenant       uuid.UUID
-	run          func(ctx context.Context, tenant uuid.UUID) error
+	// received is when the job was queued, and span is the request that queued it. The telemetry of the job
+	// counts from the first and hangs under the second.
+	received time.Time
+	span     trace.SpanContext
+	run      func(ctx context.Context, tenant uuid.UUID) error
 }
 
 // NewService returns a service. Run its workers with Run before serving Handler.
@@ -168,20 +182,22 @@ func (s *Service) work(ctx context.Context, next job) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
+	ctx, end := s.cfg.Telemetry.StartJob(telemetry.Remote(ctx, next.span), next.kind, next.tenant, next.received)
 	err := func() (err error) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				err = errors.New("the job panicked")
+				err = telemetry.ErrPanic
 			}
 		}()
 		return next.run(ctx, next.tenant)
 	}()
+	end(err)
 	if err != nil {
 		s.seen.forget(next.delivery)
-		s.cfg.Logger.Error("webhook job failed", "delivery", next.delivery, "job", next.name, "error", err)
+		s.cfg.Logger.ErrorContext(ctx, "webhook job failed", "delivery", next.delivery, "job", next.name, "error", err)
 		return
 	}
-	s.cfg.Logger.Info("webhook job finished", "delivery", next.delivery, "job", next.name)
+	s.cfg.Logger.InfoContext(ctx, "webhook job finished", "delivery", next.delivery, "job", next.name)
 }
 
 // Handler serves POST /webhooks/github. The signature is checked over the raw bytes before any
@@ -193,6 +209,9 @@ func (s *Service) Handler() http.Handler {
 }
 
 func (s *Service) receive(w http.ResponseWriter, r *http.Request) {
+	// A job is measured from the moment its delivery arrived, before the body, the signature and the mapping
+	// lookup, which can take seconds. The objective of section 15 for a check result counts from here.
+	received := time.Now()
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
 	if err != nil {
 		var tooLarge *http.MaxBytesError
@@ -231,17 +250,20 @@ func (s *Service) receive(w http.ResponseWriter, r *http.Request) {
 	// it is worked (ADR-0101).
 	tenant, bound, err := s.tenantOf(r.Context(), next.installation)
 	if err != nil {
-		s.cfg.Logger.Error("webhook tenant lookup failed", "delivery", delivery, "installation", next.installation, "error", err)
+		s.cfg.Logger.ErrorContext(r.Context(), "webhook tenant lookup failed", "delivery", delivery, "installation", next.installation, "error", err)
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if !bound {
-		s.cfg.Logger.Warn("webhook from an installation no tenant owns", "delivery", delivery, "installation", next.installation)
+		s.cfg.Logger.WarnContext(r.Context(), "webhook from an installation no tenant owns", "delivery", delivery, "installation", next.installation)
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	next.tenant = tenant
 	next.delivery = delivery
+	next.received = received
+	next.span = telemetry.SpanContext(r.Context())
+	telemetry.SetTenant(r.Context(), tenant)
 	if !s.seen.add(delivery) {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -301,7 +323,7 @@ func (s *Service) receiveInstallation(ctx context.Context, w http.ResponseWriter
 		return
 	}
 	if s.cfg.Unbind == nil {
-		s.cfg.Logger.Error("webhook service cannot remove a binding", "delivery", delivery, "installation", id)
+		s.cfg.Logger.ErrorContext(ctx, "webhook service cannot remove a binding", "delivery", delivery, "installation", id)
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -311,25 +333,25 @@ func (s *Service) receiveInstallation(ctx context.Context, w http.ResponseWriter
 	// a removal, so the App asks GitHub itself, and a delivery forged with a stolen secret removes nothing.
 	gone, err := s.installationGone(ctx, id)
 	if err != nil {
-		s.cfg.Logger.Error("webhook installation check failed", "delivery", delivery, "installation", id, "error", err)
+		s.cfg.Logger.ErrorContext(ctx, "webhook installation check failed", "delivery", delivery, "installation", id, "error", err)
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if !gone {
-		s.cfg.Logger.Warn("webhook says an installation was deleted and GitHub still has it", "delivery", delivery, "installation", id)
+		s.cfg.Logger.WarnContext(ctx, "webhook says an installation was deleted and GitHub still has it", "delivery", delivery, "installation", id)
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	tenant, removed, err := s.cfg.Unbind(ctx, id)
 	if err != nil {
-		s.cfg.Logger.Error("webhook binding removal failed", "delivery", delivery, "installation", id, "error", "the removal failed")
+		s.cfg.Logger.ErrorContext(ctx, "webhook binding removal failed", "delivery", delivery, "installation", id, "error", "the removal failed")
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if removed {
-		s.cfg.Logger.Info("webhook removed the binding of a deleted installation", "delivery", delivery, "installation", id, "tenant", tenant)
+		s.cfg.Logger.InfoContext(ctx, "webhook removed the binding of a deleted installation", "delivery", delivery, "installation", id, "tenant", tenant)
 	} else {
-		s.cfg.Logger.Info("webhook deleted installation had no binding", "delivery", delivery, "installation", id)
+		s.cfg.Logger.InfoContext(ctx, "webhook deleted installation had no binding", "delivery", delivery, "installation", id)
 	}
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -424,7 +446,7 @@ func (s *Service) routePullRequest(body []byte) (*job, error) {
 		if payload.Number <= 0 {
 			return nil, errors.New("bad pull request")
 		}
-		return &job{name: "merged", merged: true, installation: payload.Installation.ID, run: func(ctx context.Context, tenant uuid.UUID) error {
+		return &job{name: "merged", kind: "merged_pr", merged: true, installation: payload.Installation.ID, run: func(ctx context.Context, tenant uuid.UUID) error {
 			client, err := s.cfg.App.repoClient(ctx, payload.Installation.ID, payload.Repository.ID, payload.Repository.FullName, map[string]string{
 				"metadata": readAccess, "pull_requests": readAccess,
 			})
@@ -435,6 +457,7 @@ func (s *Service) routePullRequest(body []byte) (*job, error) {
 				Tenant:         tenant,
 				InstallationID: payload.Installation.ID,
 				Repo:           payload.Repository.FullName,
+				RepositoryID:   payload.Repository.ID,
 				Number:         payload.Number,
 				Client:         client,
 			})
@@ -489,7 +512,7 @@ func validTarget(install installation, repo repository) error {
 // failure with fixed text, so a broken check does not read as a pass and no internal error
 // reaches the pull request.
 func (s *Service) checkJob(name string, install installation, repo repository, sha string, perms map[string]string, list func(context.Context, *RepoClient) ([]changedFile, error)) *job {
-	return &job{name: name, installation: install.ID, run: func(ctx context.Context, _ uuid.UUID) error {
+	return &job{name: name, kind: "check", installation: install.ID, run: func(ctx context.Context, _ uuid.UUID) error {
 		client, err := s.cfg.App.repoClient(ctx, install.ID, repo.ID, repo.FullName, perms)
 		if err != nil {
 			return err

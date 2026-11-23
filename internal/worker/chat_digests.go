@@ -67,12 +67,12 @@ func (*chatDigests) Timeout(*river.Job[ChatDigestsArgs]) time.Duration {
 // would refuse it again. A failure is stored as an operation only, so a webhook URL cannot reach river_job.
 func (w *chatDigests) Work(ctx context.Context, job *river.Job[ChatDigestsArgs]) error {
 	if job.Args.Tenant != w.tenant {
-		w.log.Warn("a job names another tenant, so it was cancelled", "job", job.ID, "tenant", w.tenant)
+		w.log.WarnContext(ctx, "a job names another tenant, so it was cancelled", "job", job.ID, "tenant", w.tenant)
 		return river.JobCancel(errOtherTenant)
 	}
 	if err := eehooks.DeliverChat(ctx, w.db, w.tenant); err != nil {
 		return reduce("deliver chat digests", err)
 	}
-	w.log.Info("chat digests finished", "job", job.ID, "tenant", w.tenant)
+	w.log.InfoContext(ctx, "chat digests finished", "job", job.ID, "tenant", w.tenant)
 	return nil
 }

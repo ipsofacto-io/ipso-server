@@ -80,7 +80,7 @@ func (*premiseSweep) Timeout(*river.Job[PremiseSweepArgs]) time.Duration {
 // never a premise id or a URL.
 func (w *premiseSweep) Work(ctx context.Context, job *river.Job[PremiseSweepArgs]) error {
 	if job.Args.Tenant != w.tenant {
-		w.log.Warn("a job names another tenant, so it was cancelled", "job", job.ID, "tenant", w.tenant)
+		w.log.WarnContext(ctx, "a job names another tenant, so it was cancelled", "job", job.ID, "tenant", w.tenant)
 		return river.JobCancel(errOtherTenant)
 	}
 	refs, skipped, err := w.due(ctx, w.db, w.tenant)

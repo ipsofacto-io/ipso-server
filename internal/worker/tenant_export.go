@@ -114,7 +114,7 @@ func (*tenantExportSweep) Timeout(*river.Job[TenantExportSweepArgs]) time.Durati
 // and a cause class only, and the log line holds counts and the tenant id.
 func (w *tenantExportSweep) Work(ctx context.Context, job *river.Job[TenantExportSweepArgs]) error {
 	if job.Args.Tenant != w.tenant {
-		w.log.Warn("a job names another tenant, so it was cancelled", "job", job.ID, "tenant", w.tenant)
+		w.log.WarnContext(ctx, "a job names another tenant, so it was cancelled", "job", job.ID, "tenant", w.tenant)
 		return river.JobCancel(errOtherTenant)
 	}
 	swept, err := w.sweep(ctx, w.db, w.tenant)
@@ -169,16 +169,16 @@ func (*tenantExport) Timeout(*river.Job[TenantExportArgs]) time.Duration {
 // is an operation and a cause class, or the fixed text of a sentinel, and never a row or a key.
 func (w *tenantExport) Work(ctx context.Context, job *river.Job[TenantExportArgs]) error {
 	if job.Args.Tenant != w.tenant {
-		w.log.Warn("a job names another tenant, so it was cancelled", "job", job.ID, "tenant", w.tenant)
+		w.log.WarnContext(ctx, "a job names another tenant, so it was cancelled", "job", job.ID, "tenant", w.tenant)
 		return river.JobCancel(errOtherTenant)
 	}
 	report, err := w.run(ctx, w.db, w.tenant, job.Args.Export)
 	switch {
 	case err == nil:
-		w.log.Info("tenant export ready", "job", job.ID, "tenant", w.tenant, "export", job.Args.Export, "rows", report.Total)
+		w.log.InfoContext(ctx, "tenant export ready", "job", job.ID, "tenant", w.tenant, "export", job.Args.Export, "rows", report.Total)
 		return nil
 	case errors.Is(err, tenancy.ErrNoExport):
-		w.log.Info("an export is gone, so its job was cancelled", "job", job.ID, "tenant", w.tenant, "export", job.Args.Export)
+		w.log.InfoContext(ctx, "an export is gone, so its job was cancelled", "job", job.ID, "tenant", w.tenant, "export", job.Args.Export)
 		return river.JobCancel(errExportGone)
 	case errors.Is(err, tenancy.ErrBadRecipient):
 		w.markFailed(ctx, job)
@@ -198,8 +198,8 @@ func (w *tenantExport) markFailed(ctx context.Context, job *river.Job[TenantExpo
 	failCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failTimeout)
 	defer cancel()
 	if err := w.fail(failCtx, w.db, w.tenant, job.Args.Export); err != nil {
-		w.log.Error("an export could not be marked failed", "job", job.ID, "tenant", w.tenant, "export", job.Args.Export)
+		w.log.ErrorContext(ctx, "an export could not be marked failed", "job", job.ID, "tenant", w.tenant, "export", job.Args.Export)
 		return
 	}
-	w.log.Warn("an export failed", "job", job.ID, "tenant", w.tenant, "export", job.Args.Export, "attempt", job.Attempt)
+	w.log.WarnContext(ctx, "an export failed", "job", job.ID, "tenant", w.tenant, "export", job.Args.Export, "attempt", job.Attempt)
 }

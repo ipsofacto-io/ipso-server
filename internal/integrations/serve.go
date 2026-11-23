@@ -7,7 +7,10 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/ipsofacto-io/ipso-server/internal/httpserve"
+	"github.com/ipsofacto-io/ipso-server/internal/telemetry"
 	"github.com/ipsofacto-io/ipso-server/runtask"
 )
 
@@ -32,7 +35,7 @@ func Serve(ctx context.Context, listener net.Listener, cfg Config) error {
 	service := NewService(cfg)
 	mux := http.NewServeMux()
 	mux.Handle(webhookPath, service.Handler())
-	return listen(ctx, listener, mux, service.Run)
+	return listen(ctx, listener, mux, cfg.Telemetry, service.Run)
 }
 
 // ServeRunTasks listens until ctx ends. It serves the HCP Terraform run task and a health route, and
@@ -55,13 +58,14 @@ func ServeRunTasks(ctx context.Context, listener net.Listener, cfg RunTaskConfig
 	service := NewRunTaskService(cfg)
 	mux := http.NewServeMux()
 	mux.Handle(runtask.Path, service.Handler())
-	return listen(ctx, listener, mux, service.Run)
+	return listen(ctx, listener, mux, cfg.Telemetry, service.Run)
 }
 
-// listen serves mux with the health route until ctx ends, and runs the service's workers meanwhile.
-func listen(ctx context.Context, listener net.Listener, mux *http.ServeMux, run func(context.Context)) error {
+// listen serves mux with the health route until ctx ends, and runs the service's workers meanwhile. Neither
+// service has a tenant of its own: the webhooks service learns one for each delivery (ADR-0101).
+func listen(ctx context.Context, listener net.Listener, mux *http.ServeMux, tel *telemetry.Telemetry, run func(context.Context)) error {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	return httpserve.Serve(ctx, listener, mux, run)
+	return httpserve.Serve(ctx, listener, tel.Handler(uuid.Nil, mux), run)
 }

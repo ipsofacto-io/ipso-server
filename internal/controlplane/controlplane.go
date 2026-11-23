@@ -32,6 +32,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/mcpremote"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
+	"github.com/ipsofacto-io/ipso-server/internal/telemetry"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
 	"github.com/ipsofacto-io/ipso-server/internal/webapp"
 	"github.com/ipsofacto-io/ipso-server/trackers"
@@ -78,6 +79,8 @@ type Config struct {
 	Client  *http.Client
 	Version string
 	Log     *slog.Logger
+	// Telemetry observes every request except /healthz (ADR-0155). Nil observes nothing.
+	Telemetry *telemetry.Telemetry
 }
 
 // New runs the start gates and returns the handler to serve. It fails before any request is answered.
@@ -196,7 +199,7 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 	if signIn != nil {
 		// Outside the API's document and its guard, like /healthz: a person who has not signed in has
 		// no token to show. Remote MCP never reads the session cookie.
-		mux.Handle("/auth/", signIn.Handler())
+		mux.Handle("/auth/", telemetry.Routed(signIn.Handler()))
 	} else {
 		// With no provider there is no /auth, and the API's own 401 answers, as it does at /v1.
 		mux.Handle("/auth/", apiHandler)
@@ -216,6 +219,7 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 			Timeout:              cfg.Limits.Timeout,
 			Rate:                 cfg.Limits.Rate,
 			Burst:                cfg.Limits.Burst,
+			Telemetry:            cfg.Telemetry,
 		}
 		mcpHandler, err := mcpremote.NewHandler(mcpConfig,
 			authn.Exclusive(mcpVerifier, cfg.Audience),
@@ -236,7 +240,7 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 			mux.Handle(path, mcpHandler)
 		}
 	}
-	return mux, nil
+	return cfg.Telemetry.Handler(cfg.Tenant, mux), nil
 }
 
 // authorize reads the principal and its role bindings and asks the policy. An unknown principal is

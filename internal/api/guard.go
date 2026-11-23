@@ -22,6 +22,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
+	"github.com/ipsofacto-io/ipso-server/internal/telemetry"
 	"github.com/ipsofacto-io/ipso-server/internal/verification"
 )
 
@@ -93,6 +94,11 @@ func (g *guard) serve(mux *http.ServeMux, table map[string]mounted) http.Handler
 			g.log.Error("a handler has no route entry, so it is refused", "pattern", pattern)
 			rt = mounted{}
 		}
+		// The route is known here for every request, a refused one included. A path that is no operation of the
+		// API is reported as the subtree it was sent to, and not as this mux's catch-all.
+		if rt.op != "" {
+			telemetry.SetRoute(r.Context(), pattern)
+		}
 		if rt.ci {
 			g.guardUpload(w, r, rt.keys, mux)
 			return
@@ -144,7 +150,7 @@ func (g *guard) guardPerson(w http.ResponseWriter, r *http.Request, rt route, ne
 	// that cannot be logged does not run.
 	if principal.Kind == identity.KindAgent && rt.op != "" {
 		if _, err := identity.RecordAction(r.Context(), g.db, caller.Tenant, caller.Principal, "api."+rt.op, loggedSubject(r)); err != nil {
-			g.log.Warn("an agent call could not be logged, so it did not run", "tenant", caller.Tenant, "op", rt.op)
+			g.log.WarnContext(r.Context(), "an agent call could not be logged, so it did not run", "tenant", caller.Tenant, "op", rt.op)
 			writeError(w, http.StatusInternalServerError, errInternal)
 			return
 		}
@@ -161,16 +167,16 @@ func (g *guard) guardPerson(w http.ResponseWriter, r *http.Request, rt route, ne
 func (g *guard) allow(w http.ResponseWriter, r *http.Request, rt route, caller Caller, in authz.Input) bool {
 	allowed, err := g.policy.Allow(r.Context(), in)
 	if err != nil {
-		g.log.Error("the role policy could not decide, so the call was refused", "tenant", caller.Tenant, "op", rt.op, "action", rt.action)
+		g.log.ErrorContext(r.Context(), "the role policy could not decide, so the call was refused", "tenant", caller.Tenant, "op", rt.op, "action", rt.action)
 		writeError(w, http.StatusInternalServerError, errInternal)
 		return false
 	}
-	return allowed || g.refuse(w, caller, rt)
+	return allowed || g.refuse(w, r, caller, rt)
 }
 
 // refuse writes the plain 403 of ADR-0108 and logs the refusal. It returns false for the caller to return.
-func (g *guard) refuse(w http.ResponseWriter, caller Caller, rt route) bool {
-	g.log.Info("the role policy refused a call", "tenant", caller.Tenant, "principal", caller.Principal, "op", rt.op, "action", rt.action)
+func (g *guard) refuse(w http.ResponseWriter, r *http.Request, caller Caller, rt route) bool {
+	g.log.InfoContext(r.Context(), "the role policy refused a call", "tenant", caller.Tenant, "principal", caller.Principal, "op", rt.op, "action", rt.action)
 	writeError(w, http.StatusForbidden, errForbidden)
 	return false
 }
@@ -202,16 +208,16 @@ func (g *guard) coverTargets(w http.ResponseWriter, r *http.Request, rt route, c
 	ctx := r.Context()
 	may, err := g.policy.MayTake(ctx, in)
 	if err != nil {
-		g.log.Error("the role policy could not decide, so the call was refused", "tenant", caller.Tenant, "op", rt.op, "action", rt.action)
+		g.log.ErrorContext(r.Context(), "the role policy could not decide, so the call was refused", "tenant", caller.Tenant, "op", rt.op, "action", rt.action)
 		writeError(w, http.StatusInternalServerError, errInternal)
 		return nil, false
 	}
 	if !may {
-		return nil, g.refuse(w, caller, rt)
+		return nil, g.refuse(w, r, caller, rt)
 	}
 	if rt.targets == nil {
-		g.log.Error("a scoped route names no targets, so it is refused", "op", rt.op, "action", rt.action)
-		return nil, g.refuse(w, caller, rt)
+		g.log.ErrorContext(r.Context(), "a scoped route names no targets, so it is refused", "op", rt.op, "action", rt.action)
+		return nil, g.refuse(w, r, caller, rt)
 	}
 	body, ok := g.readBody(w, r)
 	if !ok {
@@ -232,7 +238,7 @@ func (g *guard) coverTargets(w http.ResponseWriter, r *http.Request, rt route, c
 	if len(n.decisions) > 0 {
 		fromDecisions, missing, err := g.decisionScopes(ctx, caller.Tenant, n.decisions)
 		if err != nil {
-			g.log.Error("the scopes of a call could not be read, so it was refused", "tenant", caller.Tenant, "op", rt.op)
+			g.log.ErrorContext(r.Context(), "the scopes of a call could not be read, so it was refused", "tenant", caller.Tenant, "op", rt.op)
 			writeError(w, http.StatusInternalServerError, errInternal)
 			return nil, false
 		}
@@ -243,8 +249,8 @@ func (g *guard) coverTargets(w http.ResponseWriter, r *http.Request, rt route, c
 	}
 	scopes = registry.UniqueIDs(scopes)
 	if len(scopes) > maxCallTargets {
-		g.log.Warn("a call names too many scopes, so it was refused", "tenant", caller.Tenant, "op", rt.op, "scopes", len(scopes))
-		return nil, g.refuse(w, caller, rt)
+		g.log.WarnContext(r.Context(), "a call names too many scopes, so it was refused", "tenant", caller.Tenant, "op", rt.op, "scopes", len(scopes))
+		return nil, g.refuse(w, r, caller, rt)
 	}
 	var chains [][]uuid.UUID
 	if root {
@@ -253,25 +259,25 @@ func (g *guard) coverTargets(w http.ResponseWriter, r *http.Request, rt route, c
 	for chunk := range slices.Chunk(scopes, authz.MaxTargets) {
 		read, err := g.chains(ctx, caller.Tenant, chunk)
 		if err != nil {
-			g.log.Error("the ancestors of a call could not be read, so it was refused", "tenant", caller.Tenant, "op", rt.op)
+			g.log.ErrorContext(r.Context(), "the ancestors of a call could not be read, so it was refused", "tenant", caller.Tenant, "op", rt.op)
 			writeError(w, http.StatusInternalServerError, errInternal)
 			return nil, false
 		}
 		chains = append(chains, read...)
 	}
 	if len(chains) == 0 {
-		return nil, g.refuse(w, caller, rt)
+		return nil, g.refuse(w, r, caller, rt)
 	}
 	for chunk := range slices.Chunk(chains, authz.MaxTargets) {
 		in.Targets = chunk
 		allowed, err := g.policy.Allow(ctx, in)
 		if err != nil {
-			g.log.Error("the role policy could not decide, so the call was refused", "tenant", caller.Tenant, "op", rt.op, "action", rt.action)
+			g.log.ErrorContext(r.Context(), "the role policy could not decide, so the call was refused", "tenant", caller.Tenant, "op", rt.op, "action", rt.action)
 			writeError(w, http.StatusInternalServerError, errInternal)
 			return nil, false
 		}
 		if !allowed {
-			return nil, g.refuse(w, caller, rt)
+			return nil, g.refuse(w, r, caller, rt)
 		}
 	}
 	return body, true

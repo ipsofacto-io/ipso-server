@@ -4,9 +4,11 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/ipsofacto-io/ipso-server/internal/telemetry"
 	"github.com/ipsofacto-io/ipso-server/runtask"
 )
 
@@ -22,6 +24,8 @@ type RunTaskConfig struct {
 	// Nil means runtask.DefaultPlanHost.
 	PlanHosts []string
 	Logger    *slog.Logger
+	// Telemetry observes the requests and the jobs of the service (ADR-0155). Nil observes nothing.
+	Telemetry *telemetry.Telemetry
 }
 
 // taskRunner is *runtask.Runner. Tests replace it.
@@ -41,7 +45,7 @@ type RunTaskService struct {
 func NewRunTaskService(cfg RunTaskConfig) *RunTaskService {
 	return &RunTaskService{
 		cfg:  cfg,
-		jobs: &Service{cfg: Config{Logger: cfg.Logger}, queue: make(chan job, queueSize), seen: newDeliverySet(seenDeliveries), timeout: runtask.JobTimeout},
+		jobs: &Service{cfg: Config{Logger: cfg.Logger, Telemetry: cfg.Telemetry}, queue: make(chan job, queueSize), seen: newDeliverySet(seenDeliveries), timeout: runtask.JobTimeout},
 		runner: runtask.NewRunner(runtask.RunnerConfig{
 			Bundle:    cfg.Bundle,
 			Env:       cfg.Env,
@@ -66,7 +70,7 @@ func (s *RunTaskService) accept(task runtask.Task) bool {
 	if !s.jobs.seen.add(task.TaskResult) {
 		return true
 	}
-	next := job{delivery: task.TaskResult, name: "run task", run: func(ctx context.Context, _ uuid.UUID) error {
+	next := job{delivery: task.TaskResult, name: "run task", kind: "runtask", received: time.Now(), run: func(ctx context.Context, _ uuid.UUID) error {
 		return s.runner.Run(ctx, task)
 	}}
 	select {
