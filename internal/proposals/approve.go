@@ -127,16 +127,15 @@ func materializeApprovedHumanLLMChecks(ctx context.Context, tx *sql.Tx, tenant, 
 			Engine string `json:"engine"`
 		} `json:"checks"`
 	}
-	hasLLMCheck := false
+	expectedLLMChecks := 0
 	if json.Unmarshal(decisionBody, &approvedBody) == nil {
 		for _, c := range approvedBody.Checks {
 			if c.Engine == "llm" {
-				hasLLMCheck = true
-				break
+				expectedLLMChecks++
 			}
 		}
 	}
-	if !hasLLMCheck {
+	if expectedLLMChecks == 0 {
 		return nil
 	}
 	var draft struct {
@@ -148,8 +147,9 @@ func materializeApprovedHumanLLMChecks(ctx context.Context, tx *sql.Tx, tenant, 
 		} `json:"checks"`
 	}
 	if err := json.Unmarshal(humanPayload, &draft); err != nil {
-		return nil
+		return fmt.Errorf("%w: invalid human proposal payload", registry.ErrInvalidQuery)
 	}
+	materialized := 0
 	for _, ch := range draft.Checks {
 		if ch.Engine == "llm" && ch.LLMSpec != nil {
 			if _, err := InsertLLMCheckProposal(ctx, tx, tenant, LLMCheckProposal{
@@ -161,7 +161,11 @@ func materializeApprovedHumanLLMChecks(ctx context.Context, tx *sql.Tx, tenant, 
 			}, &approver); err != nil {
 				return err
 			}
+			materialized++
 		}
+	}
+	if materialized < expectedLLMChecks {
+		return fmt.Errorf("%w: approved decision declares %d llm checks but proposal holds %d llm_spec definitions", registry.ErrInvalidQuery, expectedLLMChecks, materialized)
 	}
 	return nil
 }

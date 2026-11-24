@@ -309,7 +309,7 @@ func (h *authoringHandlers) createHumanProposal(w http.ResponseWriter, r *http.R
 			writeError(w, http.StatusBadRequest, errInvalidQuery)
 			return
 		}
-		if ch.Engine == "llm" && req.ApproveNow && ch.LLMSpec == nil {
+		if ch.Engine == "llm" && ch.LLMSpec == nil {
 			writeError(w, http.StatusBadRequest, errInvalidQuery)
 			return
 		}

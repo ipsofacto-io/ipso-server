@@ -595,6 +595,8 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 	slugs := make([]string, 0, len(rows))
 	edrToDecision := make(map[string]uuid.UUID, len(rows))
 	slugToDecision := make(map[string]uuid.UUID, len(rows))
+	decisionEDRID := make(map[uuid.UUID]string, len(rows))
+	decisionSlug := make(map[uuid.UUID]string, len(rows))
 	allScopeRefs := make([]uuid.UUID, 0, len(rows))
 	seenRef := map[uuid.UUID]bool{}
 
@@ -614,10 +616,12 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 			if meta.ID != "" {
 				edrIDs = append(edrIDs, meta.ID)
 				edrToDecision[meta.ID] = r.ID
+				decisionEDRID[r.ID] = meta.ID
 			}
 			if meta.Slug != "" {
 				slugs = append(slugs, meta.Slug)
 				slugToDecision[meta.Slug] = r.ID
+				decisionSlug[r.ID] = meta.Slug
 			}
 		}
 	}
@@ -809,8 +813,10 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 			var did uuid.UUID
 			var matched bool
 			if d, ok := edrToDecision[vEDRID]; ok {
-				did, matched = d, true
-			} else if d, ok := slugToDecision[vSlug]; ok {
+				if decisionSlug[d] == "" || vSlug == "" || decisionSlug[d] == vSlug {
+					did, matched = d, true
+				}
+			} else if d, ok := slugToDecision[vSlug]; ok && decisionEDRID[d] == "" {
 				did, matched = d, true
 			}
 			if matched && coverageByDecision[did].coversRepo(snap.Repo) {
