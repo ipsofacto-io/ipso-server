@@ -180,12 +180,17 @@ GRANT SELECT, INSERT ON proposals.human_approval TO ipso_app;
 -- 3. Extend proposals.check_proposal to support engine: llm and max_age_days (ADR-0158, ADR-0159).
 ALTER TABLE proposals.check_proposal DROP CONSTRAINT check_proposal_engine;
 ALTER TABLE proposals.check_proposal DROP CONSTRAINT check_proposal_target;
+ALTER TABLE proposals.check_proposal DROP CONSTRAINT check_proposal_fixtures_pass;
 ALTER TABLE proposals.check_proposal
     ADD COLUMN max_age_days integer,
     ADD CONSTRAINT check_proposal_engine CHECK (engine IN ('opa', 'llm')),
     ADD CONSTRAINT check_proposal_target CHECK (
         (engine = 'opa' AND target = 'agent-edit')
         OR (engine = 'llm' AND target IN ('diff', 'terraform-plan', 'kubernetes-manifest', 'json-snapshot', 'text'))),
+    ADD CONSTRAINT check_proposal_fixtures_pass CHECK (
+        ((engine = 'opa' AND fixtures_total BETWEEN 2 AND 50)
+         OR (engine = 'llm' AND fixtures_total BETWEEN 0 AND 50))
+        AND fixtures_passed = fixtures_total),
     ADD CONSTRAINT check_proposal_max_age_days CHECK (max_age_days IS NULL OR max_age_days BETWEEN 1 AND 365);
 
 -- 4. Explicit per-tenant LLM opt-in policy (off by default, ADR-0160, ADR-0161).
@@ -257,7 +262,8 @@ CREATE TABLE verification.agent_pin (
     sys_period     tstzrange NOT NULL DEFAULT tstzrange(clock_timestamp(), NULL),
     PRIMARY KEY (tenant_id, id),
     CONSTRAINT agent_pin_tenant FOREIGN KEY (tenant_id) REFERENCES tenancy.tenant (tenant_id),
-    CONSTRAINT agent_pin_unique UNIQUE (pin_sha256),
+    CONSTRAINT agent_pin_unique UNIQUE (tenant_id, pin_sha256),
+    CONSTRAINT agent_pin_name_once UNIQUE (tenant_id, name),
     CONSTRAINT agent_pin_name CHECK (
         char_length(name) BETWEEN 1 AND 100 AND name ~ '^[a-z0-9][a-z0-9._-]*$'),
     CONSTRAINT agent_pin_repo CHECK (

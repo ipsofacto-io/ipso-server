@@ -223,6 +223,12 @@ func TestAGoodUploadReachesTheStore(t *testing.T) {
 	if w.Code != http.StatusInternalServerError || errorOf(t, w) != errInternal {
 		t.Fatalf("status %d", w.Code)
 	}
+	// A non-scheduled CI run (such as pull_request or push) cannot mark an upload live: true (ADR-0162).
+	liveBody := strings.Replace(goodBody, `"env":"prod",`, `"env":"prod","live":true,`, 1)
+	wLive := upload(t, newUploadAPI(t, found().uploads(), nil, Limits{}), "/v1/verdicts", "Bearer ci-good", "application/json", liveBody)
+	if wLive.Code != http.StatusForbidden || errorOf(t, wLive) != errForbidden {
+		t.Fatalf("non-scheduled live upload: status %d, want 403", wLive.Code)
+	}
 }
 
 // Without uploads the route does not exist: a caller with no token gets 401 as on every route, and a CI

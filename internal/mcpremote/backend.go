@@ -184,7 +184,7 @@ func (b *Backend) Health(ctx context.Context, in mcptools.HealthInput) (mcptools
 	if strings.TrimSpace(in.Ref) != "" {
 		h, err := registry.DecisionHealthByRef(ctx, b.DB, b.Caller.Tenant, in.Ref, in.Repo, in.Env, now, now)
 		if errors.Is(err, registry.ErrNotFound) {
-			return mcptools.HealthOutput{Decisions: []mcptools.DecisionHealth{}}, nil
+			return mcptools.HealthOutput{}, errors.New("no decision has that id or slug at those times")
 		}
 		if err != nil {
 			return mcptools.HealthOutput{}, publicError(err)
@@ -216,7 +216,11 @@ func (b *Backend) Verifiability(ctx context.Context, in mcptools.VerifiabilityIn
 			complete = b.Gateway.For(b.Caller.Tenant)
 		}
 	}
-	return llmgw.AnalyzeVerifiability(ctx, b.Caller.Tenant, complete, in)
+	out, err := llmgw.AnalyzeVerifiability(ctx, b.Caller.Tenant, complete, in)
+	if errors.Is(err, llmgw.ErrBudget) {
+		return mcptools.VerifiabilityOutput{}, errors.New("the tenant's monthly LLM budget is exhausted")
+	}
+	return out, err
 }
 
 func checkProposal(in mcptools.ProposeInput) error {

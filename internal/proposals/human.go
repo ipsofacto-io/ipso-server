@@ -143,7 +143,7 @@ func InsertLLMCheckProposal(ctx context.Context, tx *sql.Tx, tenant uuid.UUID, p
 		VALUES ($1, $2, $3, 'llm', $4, $5::jsonb, $6, $7, $8::jsonb, $9, $9, false, $10, $11, $12)
 		RETURNING id`,
 		tenant, p.DecisionID, p.Version, validated.Target, string(canonical), string(canonical), digest[:],
-		string(fixturesJSON), max(len(validated.Fixtures), 2), modelID, promptVer, maxAge).Scan(&id)
+		string(fixturesJSON), len(validated.Fixtures), modelID, promptVer, maxAge).Scan(&id)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("insert llm check proposal: %w", err)
 	}

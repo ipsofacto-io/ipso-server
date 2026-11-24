@@ -416,7 +416,7 @@ func (g *guard) guardLiveUpload(w http.ResponseWriter, r *http.Request, keys []s
 		writeError(w, http.StatusUnauthorized, errUnauthorized)
 		return
 	}
-	pinHex := strings.TrimSpace(r.Header.Get("X-Ipso-Agent-Pin"))
+	pinHex := strings.TrimPrefix(strings.TrimSpace(r.Header.Get("X-Ipso-Agent-Pin")), "sha256:")
 	tsHeader := strings.TrimSpace(r.Header.Get("X-Ipso-Timestamp"))
 	sigHeader := strings.TrimSpace(r.Header.Get("X-Ipso-Signature"))
 	if len(pinHex) != 64 || tsHeader == "" || sigHeader == "" {

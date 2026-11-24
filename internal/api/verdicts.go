@@ -2,17 +2,23 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"mime"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/ipsofacto-io/ipso-server/internal/registry"
 	"github.com/ipsofacto-io/ipso-server/internal/verification"
 )
+
+var liveScopeEnvExpr = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 
 // verdictRoutes serves the stored verdicts of CI runs (ADR-0102).
 type verdictRoutes struct {
@@ -59,6 +65,12 @@ func (h *verdictRoutes) upload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errInvalidQuery)
 		return
 	}
+	// Scheduled and manual workflow_dispatch CI runs may report live drift snapshots (ADR-0162);
+	// pull-request and commit-push CI runs may only report change verdicts.
+	if upload.Live && run.Event != "schedule" && run.Event != "workflow_dispatch" {
+		writeError(w, http.StatusForbidden, errForbidden)
+		return
+	}
 	stored, err := verification.Store(r.Context(), h.db, tenant, run, upload)
 	if err != nil {
 		if h.log != nil {
@@ -98,6 +110,46 @@ func (h *verdictRoutes) uploadLive(w http.ResponseWriter, r *http.Request) {
 	}
 	if upload.Env == "" && agent.Pin.Env != "" {
 		upload.Env = agent.Pin.Env
+	}
+	if len(upload.Verdicts) > 0 {
+		now := time.Now().UTC()
+		if h.now != nil {
+			now = h.now()
+		}
+		subj := registry.Subject{Repo: strings.ToLower(agent.Pin.Repo)}
+		if foldedEnv := strings.ToLower(strings.TrimSpace(upload.Env)); liveScopeEnvExpr.MatchString(foldedEnv) {
+			subj.Env = foldedEnv
+		}
+		applicable, err := registry.Resolve(r.Context(), h.db, tenant, subj, now, now)
+		if err != nil {
+			if h.log != nil {
+				h.log.Warn("a live upload could not resolve pin scopes", "pin", agent.Pin.Name, "error", err.Error())
+			}
+			writeError(w, http.StatusInternalServerError, errInternal)
+			return
+		}
+		allowedIDs := make(map[string]bool, len(applicable))
+		allowedSlugs := make(map[string]bool, len(applicable))
+		for _, dec := range applicable {
+			var meta struct {
+				ID   string `json:"id"`
+				Slug string `json:"slug"`
+			}
+			if json.Unmarshal(dec.Body, &meta) == nil {
+				if meta.ID != "" {
+					allowedIDs[meta.ID] = true
+				}
+				if meta.Slug != "" {
+					allowedSlugs[meta.Slug] = true
+				}
+			}
+		}
+		for _, v := range upload.Verdicts {
+			if !allowedIDs[v.DecisionID] && !allowedSlugs[v.Slug] {
+				writeError(w, http.StatusForbidden, errForbidden)
+				return
+			}
+		}
 	}
 	upload.Live = true
 	upload.SourceKind = "live"

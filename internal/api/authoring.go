@@ -68,6 +68,10 @@ func (h *authoringHandlers) analyzeVerifiability(w http.ResponseWriter, r *http.
 		}
 	}
 	out, err := llmgw.AnalyzeVerifiability(r.Context(), tenant, complete, req)
+	if errors.Is(err, llmgw.ErrBudget) {
+		writeError(w, http.StatusTooManyRequests, errRateLimited)
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, errInvalidQuery)
 		return

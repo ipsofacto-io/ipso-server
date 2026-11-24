@@ -141,12 +141,18 @@ func SearchDecisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, q string
 			  AND d.sys_period @> $2::timestamptz
 			  AND ($3::uuid IS NULL OR d.decision_id < $3::uuid)
 			  AND (
-			      to_tsvector('simple',
-			          coalesce(d.body->>'title', '') || ' ' ||
-			          coalesce(d.body->>'slug', '') || ' ' ||
-			          coalesce(d.body->>'statement', '')) @@ plainto_tsquery('simple', $5)
+			      (
+			          NOT (coalesce(d.body->'tags', '[]'::jsonb) ? 'sensitive')
+			          AND NOT coalesce((d.body->>'sensitive')::boolean, false)
+			          AND (
+			              to_tsvector('simple',
+			                  coalesce(d.body->>'title', '') || ' ' ||
+			                  coalesce(d.body->>'slug', '') || ' ' ||
+			                  coalesce(d.body->>'statement', '')) @@ plainto_tsquery('simple', $5)
+			              OR coalesce(d.body->>'title', '') ILIKE '%' || $5 || '%'
+			          )
+			      )
 			      OR coalesce(d.body->>'slug', '') ILIKE '%' || $5 || '%'
-			      OR coalesce(d.body->>'title', '') ILIKE '%' || $5 || '%'
 			  )
 			ORDER BY d.decision_id DESC, d.version DESC
 			LIMIT $4`, validAt, knownAt, page.before(), page.Limit, q)

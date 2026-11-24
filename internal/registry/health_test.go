@@ -86,4 +86,51 @@ func TestComputeValidityAndComplianceSeparatesValidityComplianceAndStaleness(t *
 			t.Fatalf("expected needs_review validity + compliant compliance, got %+v", h)
 		}
 	})
+
+	t.Run("sensitive tag redacts title and sets sensitive flag (ADR-0072)", func(t *testing.T) {
+		sensitiveBody := []byte(`{
+			"id":"01J9Z000000000000000000002",
+			"slug":"vault-host",
+			"title":"Internal HSM cluster address",
+			"statement":"Confidential internal network address.",
+			"status":"verified",
+			"criticality":"blocking",
+			"tags":["security","sensitive"],
+			"checks":[{"engine":"opa","target":"terraform-plan","mode":"block","status":"verified"}]
+		}`)
+		h := ComputeValidityAndCompliance(did, sensitiveBody, now.Add(-10*24*time.Hour), nil, "", []string{"acme/sec"}, nil, nil, false, nil, "", now)
+		if !h.Sensitive || h.Title != "" {
+			t.Fatalf("expected sensitive=true and redacted empty title, got sensitive=%v title=%q", h.Sensitive, h.Title)
+		}
+	})
+
+	t.Run("multiple checks aggregate per scope and passing change never masks failing live drift", func(t *testing.T) {
+		multiBody := []byte(`{
+			"id":"01J9Z000000000000000000003",
+			"slug":"firewall-and-tags",
+			"title":"Enforce firewall egress and resource tags",
+			"statement":"Deny 0.0.0.0/0 egress and require cost tags.",
+			"status":"verified",
+			"criticality":"blocking",
+			"checks":[
+				{"engine":"opa","target":"terraform-plan","mode":"block","status":"verified","max_age_days":7},
+				{"engine":"llm","target":"json-snapshot","mode":"block","status":"verified","max_age_days":7}
+			]
+		}`)
+		h := ComputeValidityAndCompliance(
+			did, multiBody, now.Add(-30*24*time.Hour), nil, "", []string{"acme/net"}, nil,
+			[]storedVerdictSnap{
+				{CheckIndex: 0, SourceKind: "change", Command: "plan", Repo: "acme/net", Env: "prod", Result: "pass", EvaluatedAt: now.Add(-1 * time.Hour)},
+				{CheckIndex: 1, SourceKind: "live", Command: "llm", Repo: "acme/net", Env: "prod", Result: "fail", Violations: 1, EvaluatedAt: now.Add(-2 * time.Hour)},
+				{CheckIndex: 1, SourceKind: "change", Command: "llm", Repo: "acme/net", Env: "prod", Result: "pass", EvaluatedAt: now.Add(-30 * time.Minute)},
+			},
+			false, nil, "prod", now,
+		)
+		if len(h.Compliance.Scopes) != 1 {
+			t.Fatalf("expected 1 aggregated scope row for (acme/net, prod), got %d: %+v", len(h.Compliance.Scopes), h.Compliance.Scopes)
+		}
+		if h.Compliance.State != "violated" || h.Compliance.Scopes[0].State != "violated" {
+			t.Fatalf("expected failing live verdict to keep compliance violated despite newer passing change, got %+v", h.Compliance)
+		}
+	})
 }

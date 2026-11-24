@@ -95,8 +95,12 @@ func AnalyzeVerifiability(ctx context.Context, tenant uuid.UUID, complete Comple
 		return mcptools.VerifiabilityOutput{}, errors.New("title and statement are required")
 	}
 	if complete != nil && tenant != uuid.Nil {
-		if out, err := analyzeWithLLM(ctx, complete, req); err == nil {
+		out, err := analyzeWithLLM(ctx, complete, req)
+		if err == nil {
 			return out, nil
+		}
+		if errors.Is(err, ErrBudget) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return mcptools.VerifiabilityOutput{}, err
 		}
 	}
 	return analyzeDeterministically(req), nil
@@ -131,6 +135,14 @@ func analyzeWithLLM(ctx context.Context, complete CompleteFunc, req mcptools.Ver
 	}
 	if out.CandidateChecks == nil {
 		out.CandidateChecks = []mcptools.CandidateCheck{}
+	}
+	for i := range out.CandidateChecks {
+		c := &out.CandidateChecks[i]
+		if c.Engine == "llm" && strings.TrimSpace(c.LLMSpec) != "" {
+			if _, err := llmcheck.ParseAndValidate([]byte(c.LLMSpec), c.Target, c.Mode == "block"); err != nil {
+				c.LLMSpec = ""
+			}
+		}
 	}
 	if out.CandidatePremises == nil {
 		out.CandidatePremises = []mcptools.CandidatePremise{}

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,7 +17,10 @@ import (
 )
 
 // DefaultMaxAgeDays is the fallback freshness window when neither the check nor tenant/environment policy sets one (ADR-0163).
-const DefaultMaxAgeDays = 30
+const (
+	DefaultMaxAgeDays     = 30
+	DefaultProdMaxAgeDays = 7
+)
 
 // HealthFilter narrows GET /v1/decisions/health and MCP decisions.health queries.
 type HealthFilter struct {
@@ -31,6 +36,7 @@ type rawDecisionRow struct {
 	ID        uuid.UUID
 	Version   int
 	Body      []byte
+	ScopeRefs []uuid.UUID
 	ValidFrom time.Time
 	ValidTo   *time.Time
 }
@@ -46,6 +52,11 @@ type storedVerdictSnap struct {
 	EvaluatedAt   time.Time
 	ModelID       string
 	PromptVersion string
+}
+
+type scopeKey struct {
+	Repo string
+	Env  string
 }
 
 // ComputeValidityAndCompliance evaluates the pure Validity and Compliance axes of one decision from
@@ -65,14 +76,15 @@ func ComputeValidityAndCompliance(
 	now time.Time,
 ) mcptools.DecisionHealth {
 	var parsed struct {
-		ID          string `json:"id"`
-		Slug        string `json:"slug"`
-		Title       string `json:"title"`
-		Statement   string `json:"statement"`
-		Status      string `json:"status"`
-		Criticality string `json:"criticality"`
-		Sensitive   bool   `json:"sensitive"`
-		ReviewBy    string `json:"review_by"`
+		ID          string   `json:"id"`
+		Slug        string   `json:"slug"`
+		Title       string   `json:"title"`
+		Statement   string   `json:"statement"`
+		Status      string   `json:"status"`
+		Criticality string   `json:"criticality"`
+		Sensitive   bool     `json:"sensitive"`
+		Tags        []string `json:"tags"`
+		ReviewBy    string   `json:"review_by"`
 		Checks      []struct {
 			Engine     string `json:"engine"`
 			Target     string `json:"target"`
@@ -95,6 +107,7 @@ func ComputeValidityAndCompliance(
 	if crit == "" {
 		crit = "warning"
 	}
+	isSensitive := parsed.Sensitive || slices.Contains(parsed.Tags, "sensitive")
 
 	validityState := "valid"
 	switch {
@@ -102,7 +115,7 @@ func ComputeValidityAndCompliance(
 		validityState = "superseded"
 	case (validTo != nil && !now.Before(*validTo)) || status == "deprecated" || status == "rejected":
 		validityState = "expired"
-	case len(openPremises) > 0:
+	case len(openPremises) > 0 || status == "needs-review" || status == "proposed":
 		validityState = "needs_review"
 	case parsed.ReviewBy != "":
 		if reviewDate, err := time.Parse("2006-01-02", parsed.ReviewBy); err == nil && now.After(reviewDate.Add(24*time.Hour)) {
@@ -128,114 +141,171 @@ func ComputeValidityAndCompliance(
 		OpenPremiseReasons: openPremises,
 	}
 
-	scopes := []mcptools.ScopeCompliance{}
-	overall := "unverified"
-	activeChecks := 0
+	type activeCheck struct {
+		index      int
+		engine     string
+		maxAgeDays int
+	}
+	var active []activeCheck
 	for idx, ch := range parsed.Checks {
 		if ch.Engine == "llm-advisory" {
 			continue
 		}
-		activeChecks++
-		maxAge := resolveMaxAgeDays(ch.MaxAgeDays, filterEnv, freshness)
+		active = append(active, activeCheck{
+			index:      idx,
+			engine:     ch.Engine,
+			maxAgeDays: ch.MaxAgeDays,
+		})
+	}
 
-		var latestChange, latestLive *storedVerdictSnap
+	scopes := []mcptools.ScopeCompliance{}
+	overall := "unverified"
+	if len(active) > 0 {
+		seenKeys := map[scopeKey]bool{}
+		reposWithVerdicts := map[string]bool{}
+		var keys []scopeKey
+
 		for i := range verdicts {
 			v := &verdicts[i]
-			if v.CheckIndex != idx {
-				continue
-			}
 			if filterEnv != "" && v.Env != "" && !strings.EqualFold(v.Env, filterEnv) {
 				continue
 			}
-			if v.SourceKind == "live" {
-				if latestLive == nil || v.EvaluatedAt.After(latestLive.EvaluatedAt) {
-					latestLive = v
+			envLabel := v.Env
+			if envLabel == "" && filterEnv != "" {
+				envLabel = filterEnv
+			}
+			k := scopeKey{Repo: v.Repo, Env: envLabel}
+			if !seenKeys[k] {
+				seenKeys[k] = true
+				keys = append(keys, k)
+			}
+			if v.Repo != "" {
+				reposWithVerdicts[v.Repo] = true
+			}
+		}
+		for _, repo := range scopeRepos {
+			if !reposWithVerdicts[repo] {
+				k := scopeKey{Repo: repo, Env: filterEnv}
+				if !seenKeys[k] {
+					seenKeys[k] = true
+					keys = append(keys, k)
 				}
-			} else {
-				if latestChange == nil || v.EvaluatedAt.After(latestChange.EvaluatedAt) {
-					latestChange = v
+			}
+		}
+		if len(keys) == 0 {
+			keys = append(keys, scopeKey{Repo: "", Env: filterEnv})
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			if keys[i].Repo != keys[j].Repo {
+				return keys[i].Repo < keys[j].Repo
+			}
+			return keys[i].Env < keys[j].Env
+		})
+
+		for _, k := range keys {
+			entry := mcptools.ScopeCompliance{
+				Repo:   k.Repo,
+				Env:    k.Env,
+				Waived: hasActiveWaiver,
+			}
+			var scopeStates []string
+			var bestChangeState, bestLiveState string
+			var bestChangeTime, bestLiveTime time.Time
+
+			for _, ch := range active {
+				maxAge := resolveMaxAgeDays(ch.maxAgeDays, k.Env, freshness)
+				var latestChange, latestLive *storedVerdictSnap
+				for i := range verdicts {
+					v := &verdicts[i]
+					if v.CheckIndex != ch.index || v.Repo != k.Repo {
+						continue
+					}
+					if filterEnv != "" && v.Env != "" && !strings.EqualFold(v.Env, filterEnv) {
+						continue
+					}
+					vEnv := v.Env
+					if vEnv == "" && filterEnv != "" {
+						vEnv = filterEnv
+					}
+					if !strings.EqualFold(vEnv, k.Env) {
+						continue
+					}
+					if v.SourceKind == "live" {
+						if latestLive == nil || v.EvaluatedAt.After(latestLive.EvaluatedAt) {
+							latestLive = v
+						}
+					} else {
+						if latestChange == nil || v.EvaluatedAt.After(latestChange.EvaluatedAt) {
+							latestChange = v
+						}
+					}
 				}
-			}
-		}
 
-		chosen := latestLive
-		if chosen == nil || (latestChange != nil && latestChange.EvaluatedAt.After(chosen.EvaluatedAt)) {
-			chosen = latestChange
-		}
+				if latestChange == nil && latestLive == nil {
+					scopeStates = append(scopeStates, "unverified")
+					continue
+				}
 
-		repoLabel := strings.Join(scopeRepos, ", ")
-		envLabel := filterEnv
-		if chosen != nil {
-			if chosen.Repo != "" {
-				repoLabel = chosen.Repo
+				var checkStreamStates []string
+				if latestChange != nil {
+					st, baselined, stale := classifyStreamVerdict(latestChange, maxAge, hasActiveWaiver, now)
+					checkStreamStates = append(checkStreamStates, st)
+					if baselined {
+						entry.Baselined = true
+					}
+					summary := &mcptools.VerdictSummary{
+						SourceKind:    "change",
+						Command:       nonEmptyCmd(latestChange.Command, ch.engine),
+						Result:        latestChange.Result,
+						Violations:    latestChange.Violations,
+						EvaluatedAt:   latestChange.EvaluatedAt.UTC().Format(time.RFC3339),
+						Stale:         stale,
+						MaxAgeDays:    maxAge,
+						ModelID:       latestChange.ModelID,
+						PromptVersion: latestChange.PromptVersion,
+					}
+					if entry.LatestChange == nil || complianceRank(st) < complianceRank(bestChangeState) ||
+						(complianceRank(st) == complianceRank(bestChangeState) && latestChange.EvaluatedAt.After(bestChangeTime)) {
+						entry.LatestChange = summary
+						bestChangeState = st
+						bestChangeTime = latestChange.EvaluatedAt
+					}
+				}
+				if latestLive != nil {
+					st, baselined, stale := classifyStreamVerdict(latestLive, maxAge, hasActiveWaiver, now)
+					checkStreamStates = append(checkStreamStates, st)
+					if baselined {
+						entry.Baselined = true
+					}
+					summary := &mcptools.VerdictSummary{
+						SourceKind:    "live",
+						Command:       nonEmptyCmd(latestLive.Command, ch.engine),
+						Result:        latestLive.Result,
+						Violations:    latestLive.Violations,
+						EvaluatedAt:   latestLive.EvaluatedAt.UTC().Format(time.RFC3339),
+						Stale:         stale,
+						MaxAgeDays:    maxAge,
+						ModelID:       latestLive.ModelID,
+						PromptVersion: latestLive.PromptVersion,
+					}
+					if entry.LatestLive == nil || complianceRank(st) < complianceRank(bestLiveState) ||
+						(complianceRank(st) == complianceRank(bestLiveState) && latestLive.EvaluatedAt.After(bestLiveTime)) {
+						entry.LatestLive = summary
+						bestLiveState = st
+						bestLiveTime = latestLive.EvaluatedAt
+					}
+				}
+				scopeStates = append(scopeStates, worstState(checkStreamStates))
 			}
-			if envLabel == "" {
-				envLabel = chosen.Env
-			}
-		}
 
-		entry := mcptools.ScopeCompliance{
-			Repo:   repoLabel,
-			Env:    envLabel,
-			Waived: hasActiveWaiver,
+			entry.State = worstState(scopeStates)
+			scopes = append(scopes, entry)
 		}
-		if latestChange != nil {
-			stale := now.Sub(latestChange.EvaluatedAt) > time.Duration(maxAge)*24*time.Hour
-			entry.LatestChange = &mcptools.VerdictSummary{
-				SourceKind:    "change",
-				Command:       nonEmptyCmd(latestChange.Command, ch.Engine),
-				Result:        latestChange.Result,
-				Violations:    latestChange.Violations,
-				EvaluatedAt:   latestChange.EvaluatedAt.UTC().Format(time.RFC3339),
-				Stale:         stale,
-				MaxAgeDays:    maxAge,
-				ModelID:       latestChange.ModelID,
-				PromptVersion: latestChange.PromptVersion,
-			}
-		}
-		if latestLive != nil {
-			stale := now.Sub(latestLive.EvaluatedAt) > time.Duration(maxAge)*24*time.Hour
-			entry.LatestLive = &mcptools.VerdictSummary{
-				SourceKind:    "live",
-				Command:       nonEmptyCmd(latestLive.Command, ch.Engine),
-				Result:        latestLive.Result,
-				Violations:    latestLive.Violations,
-				EvaluatedAt:   latestLive.EvaluatedAt.UTC().Format(time.RFC3339),
-				Stale:         stale,
-				MaxAgeDays:    maxAge,
-				ModelID:       latestLive.ModelID,
-				PromptVersion: latestLive.PromptVersion,
-			}
-		}
-
-		switch {
-		case chosen == nil:
-			entry.State = "unverified"
-		case chosen.Result == "fail" || chosen.Result == "error":
-			if chosen.Result == "fail" && hasActiveWaiver {
-				entry.State = "waived"
-			} else {
-				entry.State = "violated"
-			}
-		case chosen.Result == "waived" || (hasActiveWaiver && chosen.Violations > 0):
-			entry.State = "waived"
-			entry.Baselined = chosen.Result == "waived" && !hasActiveWaiver
-		default:
-			if now.Sub(chosen.EvaluatedAt) > time.Duration(maxAge)*24*time.Hour {
-				entry.State = "stale"
-			} else {
-				entry.State = "compliant"
-			}
-		}
-		scopes = append(scopes, entry)
-	}
-
-	if activeChecks > 0 {
 		overall = aggregateCompliance(scopes)
 	}
 
 	title := parsed.Title
-	if parsed.Sensitive {
+	if isSensitive {
 		title = ""
 	}
 
@@ -244,13 +314,59 @@ func ComputeValidityAndCompliance(
 		Slug:        parsed.Slug,
 		Title:       title,
 		Criticality: crit,
-		Sensitive:   parsed.Sensitive,
+		Sensitive:   isSensitive,
 		Validity:    validity,
 		Compliance: mcptools.ComplianceHealth{
 			State:  overall,
 			Scopes: scopes,
 		},
 	}
+}
+
+func classifyStreamVerdict(v *storedVerdictSnap, maxAge int, hasActiveWaiver bool, now time.Time) (state string, baselined bool, stale bool) {
+	stale = now.Sub(v.EvaluatedAt) > time.Duration(maxAge)*24*time.Hour
+	switch {
+	case v.Result == "error":
+		return "violated", false, stale
+	case v.Result == "fail" && !hasActiveWaiver:
+		return "violated", false, stale
+	case stale:
+		return "stale", v.Result == "waived" && !hasActiveWaiver, true
+	case v.Result == "waived" || v.Result == "fail" || (hasActiveWaiver && v.Violations > 0):
+		return "waived", v.Result == "waived" && !hasActiveWaiver, false
+	default:
+		return "compliant", false, false
+	}
+}
+
+func complianceRank(state string) int {
+	switch state {
+	case "violated":
+		return 0
+	case "stale":
+		return 1
+	case "unverified":
+		return 2
+	case "waived":
+		return 3
+	case "compliant":
+		return 4
+	default:
+		return 2
+	}
+}
+
+func worstState(states []string) string {
+	if len(states) == 0 {
+		return "unverified"
+	}
+	best := states[0]
+	for _, s := range states[1:] {
+		if complianceRank(s) < complianceRank(best) {
+			best = s
+		}
+	}
+	return best
 }
 
 func nonEmptyCmd(cmd, fallback string) string {
@@ -264,48 +380,36 @@ func resolveMaxAgeDays(checkMax int, env string, freshness map[string]int) int {
 	if checkMax >= 1 && checkMax <= 365 {
 		return checkMax
 	}
-	if env != "" {
+	envKey := strings.ToLower(strings.TrimSpace(env))
+	if envKey != "" {
+		if age, ok := freshness[envKey]; ok && age >= 1 {
+			return age
+		}
 		if age, ok := freshness[env]; ok && age >= 1 {
 			return age
 		}
 	}
+	if age, ok := freshness["default"]; ok && age >= 1 {
+		return age
+	}
 	if age, ok := freshness[""]; ok && age >= 1 {
 		return age
+	}
+	if envKey == "prod" {
+		return DefaultProdMaxAgeDays
 	}
 	return DefaultMaxAgeDays
 }
 
 func aggregateCompliance(scopes []mcptools.ScopeCompliance) string {
-	hasWaived := false
-	hasStale := false
-	hasUnverified := false
-	hasCompliant := false
-	for _, s := range scopes {
-		switch s.State {
-		case "violated":
-			return "violated"
-		case "stale":
-			hasStale = true
-		case "unverified":
-			hasUnverified = true
-		case "waived":
-			hasWaived = true
-		case "compliant":
-			hasCompliant = true
-		}
-	}
-	switch {
-	case hasStale:
-		return "stale"
-	case hasUnverified:
-		return "unverified"
-	case hasWaived:
-		return "waived"
-	case hasCompliant:
-		return "compliant"
-	default:
+	if len(scopes) == 0 {
 		return "unverified"
 	}
+	states := make([]string, len(scopes))
+	for i, s := range scopes {
+		states[i] = s.State
+	}
+	return worstState(states)
 }
 
 // DecisionHealthByRef computes unified Validity and Compliance for one decision referenced by UUID, EDR ULID, or slug (ADR-0163).
@@ -323,9 +427,10 @@ func DecisionHealthByRef(ctx context.Context, db *sql.DB, tenant uuid.UUID, ref,
 			parsedUUID = uuid.NullUUID{UUID: u, Valid: true}
 		}
 		var row rawDecisionRow
+		var refsText string
 		var upper sql.NullTime
 		err := tx.QueryRowContext(ctx, `
-			SELECT d.decision_id, d.version, d.body, lower(d.valid_period), upper(d.valid_period)
+			SELECT d.decision_id, d.version, d.body, d.scope_refs::text, lower(d.valid_period), upper(d.valid_period)
 			FROM registry.decision_version_all d
 			WHERE d.tenant_id = ipso.current_tenant()
 			  AND d.sys_period @> $1::timestamptz
@@ -335,13 +440,18 @@ func DecisionHealthByRef(ctx context.Context, db *sql.DB, tenant uuid.UUID, ref,
 			      OR d.body->>'slug' = $3
 			  )
 			ORDER BY (d.valid_period @> $4::timestamptz) DESC, d.version DESC
-			LIMIT 1`, knownAt, parsedUUID, ref, validAt).Scan(&row.ID, &row.Version, &row.Body, &row.ValidFrom, &upper)
+			LIMIT 1`, knownAt, parsedUUID, ref, validAt).Scan(&row.ID, &row.Version, &row.Body, &refsText, &row.ValidFrom, &upper)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return fmt.Errorf("read decision health: %w", err)
 		}
+		refs, err := parseUUIDArray(refsText)
+		if err != nil {
+			return err
+		}
+		row.ScopeRefs = refs
 		if upper.Valid {
 			t := upper.Time
 			row.ValidTo = &t
@@ -371,33 +481,40 @@ func ListDecisionHealth(ctx context.Context, db *sql.DB, tenant uuid.UUID, f Hea
 	out := []mcptools.DecisionHealth{}
 	err := readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT DISTINCT ON (d.decision_id) d.decision_id, d.version, d.body, lower(d.valid_period), upper(d.valid_period)
+			SELECT DISTINCT ON (d.decision_id) d.decision_id, d.version, d.body, d.scope_refs::text, lower(d.valid_period), upper(d.valid_period)
 			FROM registry.decision_version_all d
 			WHERE d.tenant_id = ipso.current_tenant()
 			  AND d.sys_period @> $1::timestamptz
 			  AND ($2::uuid IS NULL OR d.decision_id < $2::uuid)
 			  AND (
 			      $3 = ''
-			      OR to_tsvector('simple',
-			          coalesce(d.body->>'title', '') || ' ' ||
-			          coalesce(d.body->>'slug', '') || ' ' ||
-			          coalesce(d.body->>'statement', '')) @@ plainto_tsquery('simple', $3)
+			      OR (
+			          NOT (coalesce(d.body->'tags', '[]'::jsonb) ? 'sensitive')
+			          AND NOT coalesce((d.body->>'sensitive')::boolean, false)
+			          AND (
+			              to_tsvector('simple',
+			                  coalesce(d.body->>'title', '') || ' ' ||
+			                  coalesce(d.body->>'slug', '') || ' ' ||
+			                  coalesce(d.body->>'statement', '')) @@ plainto_tsquery('simple', $3)
+			              OR coalesce(d.body->>'title', '') ILIKE '%' || $3 || '%'
+			          )
+			      )
 			      OR coalesce(d.body->>'slug', '') ILIKE '%' || $3 || '%'
-			      OR coalesce(d.body->>'title', '') ILIKE '%' || $3 || '%'
 			  )
 			  AND (
 			      $4 = ''
 			      OR EXISTS (
 			          SELECT 1
-			          FROM registry.decision_scope ds
-			          JOIN registry.scope_all s ON s.tenant_id = ds.tenant_id AND s.id = ds.scope_id
-			          WHERE ds.tenant_id = d.tenant_id
-			            AND ds.decision_id = d.decision_id
-			            AND ds.version = d.version
+			          FROM registry.scope_all s
+			          JOIN registry.scope_closure_all sc
+			            ON sc.tenant_id = s.tenant_id AND sc.descendant_id = s.id
+			          WHERE s.tenant_id = d.tenant_id
 			            AND s.sys_period @> $1::timestamptz
+			            AND sc.sys_period @> $1::timestamptz
+			            AND sc.ancestor_id = ANY(d.scope_refs)
 			            AND (
-			                (s.kind = 'repo' AND s.selector = $4)
-			                OR (s.kind = 'org' AND split_part($4, '/', 1) = s.selector)
+			                (s.kind IN ('repo', 'path', 'env') AND s.match_repo = $4)
+			                OR (s.kind = 'org' AND s.match_org = split_part($4, '/', 1))
 			            )
 			      )
 			  )
@@ -412,10 +529,16 @@ func ListDecisionHealth(ctx context.Context, db *sql.DB, tenant uuid.UUID, f Hea
 		var rawRows []rawDecisionRow
 		for rows.Next() {
 			var r rawDecisionRow
+			var refsText string
 			var upper sql.NullTime
-			if err := rows.Scan(&r.ID, &r.Version, &r.Body, &r.ValidFrom, &upper); err != nil {
+			if err := rows.Scan(&r.ID, &r.Version, &r.Body, &refsText, &r.ValidFrom, &upper); err != nil {
 				return err
 			}
+			refs, err := parseUUIDArray(refsText)
+			if err != nil {
+				return err
+			}
+			r.ScopeRefs = refs
 			if upper.Valid {
 				t := upper.Time
 				r.ValidTo = &t
@@ -438,14 +561,50 @@ func ListDecisionHealth(ctx context.Context, db *sql.DB, tenant uuid.UUID, f Hea
 	return out, err
 }
 
+type scopeCoverage struct {
+	orgs         []string
+	repoPatterns []repoPattern
+	literalRepos []string
+}
+
+func (c scopeCoverage) coversRepo(repo string) bool {
+	repo = strings.ToLower(strings.TrimSpace(repo))
+	if repo == "" {
+		return true
+	}
+	org, _, hasSlash := strings.Cut(repo, "/")
+	if slices.Contains(c.orgs, org) {
+		return true
+	}
+	if !hasSlash {
+		return false
+	}
+	segs := strings.Split(repo, "/")
+	for _, pat := range c.repoPatterns {
+		if pat.matches(segs) {
+			return true
+		}
+	}
+	return false
+}
+
 func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, filterRepo, filterEnv string, validAt, knownAt time.Time) ([]mcptools.DecisionHealth, error) {
 	ids := make([]uuid.UUID, len(rows))
 	edrIDs := make([]string, 0, len(rows))
 	slugs := make([]string, 0, len(rows))
 	edrToDecision := make(map[string]uuid.UUID, len(rows))
 	slugToDecision := make(map[string]uuid.UUID, len(rows))
+	allScopeRefs := make([]uuid.UUID, 0, len(rows))
+	seenRef := map[uuid.UUID]bool{}
+
 	for i, r := range rows {
 		ids[i] = r.ID
+		for _, sref := range r.ScopeRefs {
+			if !seenRef[sref] {
+				seenRef[sref] = true
+				allScopeRefs = append(allScopeRefs, sref)
+			}
+		}
 		var meta struct {
 			ID   string `json:"id"`
 			Slug string `json:"slug"`
@@ -481,37 +640,79 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 	}
 	_ = fRows.Close()
 
-	scopesByDecision := map[uuid.UUID][]string{}
-	sRows, err := tx.QueryContext(ctx, `
-		SELECT ds.decision_id, s.selector
-		FROM registry.decision_scope ds
-		JOIN registry.scope_all s ON s.tenant_id = ds.tenant_id AND s.id = ds.scope_id
-		WHERE ds.tenant_id = ipso.current_tenant()
-		  AND ds.decision_id = ANY($1::uuid[])
-		  AND s.sys_period @> $2::timestamptz
-		ORDER BY ds.decision_id, s.kind, s.selector`, ids, knownAt)
-	if err != nil {
-		return nil, err
-	}
-	for sRows.Next() {
-		var did uuid.UUID
-		var sel string
-		if err := sRows.Scan(&did, &sel); err != nil {
-			_ = sRows.Close()
+	coverageByRef := map[uuid.UUID]*scopeCoverage{}
+	if len(allScopeRefs) > 0 {
+		sRows, err := tx.QueryContext(ctx, `
+			SELECT sc.ancestor_id, s.kind, s.match_org, coalesce(s.match_repo, ''), s.repo_key
+			FROM registry.scope_closure_all sc
+			JOIN registry.scope_all s ON s.tenant_id = sc.tenant_id AND s.id = sc.descendant_id
+			WHERE sc.tenant_id = ipso.current_tenant()
+			  AND sc.ancestor_id = ANY($1::uuid[])
+			  AND sc.sys_period @> $2::timestamptz
+			  AND s.sys_period @> $2::timestamptz
+			ORDER BY sc.ancestor_id, s.kind, s.selector`, allScopeRefs, knownAt)
+		if err != nil {
 			return nil, err
 		}
-		if !containsString(scopesByDecision[did], sel) {
-			scopesByDecision[did] = append(scopesByDecision[did], sel)
+		for sRows.Next() {
+			var anc uuid.UUID
+			var kind, matchOrg, matchRepo, repoKey string
+			if err := sRows.Scan(&anc, &kind, &matchOrg, &matchRepo, &repoKey); err != nil {
+				_ = sRows.Close()
+				return nil, err
+			}
+			cov := coverageByRef[anc]
+			if cov == nil {
+				cov = &scopeCoverage{}
+				coverageByRef[anc] = cov
+			}
+			if kind == "org" && matchOrg != "" && !slices.Contains(cov.orgs, matchOrg) {
+				cov.orgs = append(cov.orgs, matchOrg)
+			}
+			if matchRepo != "" {
+				if pat, err := parseRepoSelector(matchRepo); err == nil {
+					cov.repoPatterns = append(cov.repoPatterns, pat)
+				}
+				if repoKey != "" && (filterRepo == "" || repoKey == filterRepo) && !slices.Contains(cov.literalRepos, repoKey) {
+					cov.literalRepos = append(cov.literalRepos, repoKey)
+				}
+			}
 		}
+		_ = sRows.Close()
 	}
-	_ = sRows.Close()
+
+	coverageByDecision := make(map[uuid.UUID]scopeCoverage, len(rows))
+	for _, r := range rows {
+		var combined scopeCoverage
+		for _, sref := range r.ScopeRefs {
+			cov := coverageByRef[sref]
+			if cov == nil {
+				continue
+			}
+			for _, o := range cov.orgs {
+				if !slices.Contains(combined.orgs, o) {
+					combined.orgs = append(combined.orgs, o)
+				}
+			}
+			combined.repoPatterns = append(combined.repoPatterns, cov.repoPatterns...)
+			for _, lr := range cov.literalRepos {
+				if !slices.Contains(combined.literalRepos, lr) {
+					combined.literalRepos = append(combined.literalRepos, lr)
+				}
+			}
+		}
+		if filterRepo != "" && len(combined.literalRepos) == 0 && combined.coversRepo(filterRepo) {
+			combined.literalRepos = []string{filterRepo}
+		}
+		coverageByDecision[r.ID] = combined
+	}
 
 	supersededBy := map[uuid.UUID]string{}
 	supRows, err := tx.QueryContext(ctx, `
-		SELECT s.from_decision_id, s.to_decision_id::text
+		SELECT s.from_decision, s.to_decision::text
 		FROM registry.supersession s
 		WHERE s.tenant_id = ipso.current_tenant()
-		  AND s.from_decision_id = ANY($1::uuid[])
+		  AND s.from_decision = ANY($1::uuid[])
 		  AND s.effective_at <= $2::timestamptz
 		  AND s.sys_period @> $3::timestamptz`, ids, validAt, knownAt)
 	if err != nil {
@@ -581,7 +782,7 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 	verdictsByDecision := map[uuid.UUID][]storedVerdictSnap{}
 	if len(edrIDs) > 0 || len(slugs) > 0 {
 		vRows, err := tx.QueryContext(ctx, `
-			SELECT DISTINCT ON (v.decision_id, v.slug, v.check_index, u.source_kind)
+			SELECT DISTINCT ON (v.decision_id, v.slug, u.repo, u.env, v.check_index, u.source_kind)
 			       v.decision_id, v.slug, v.check_index, u.source_kind, u.check_name, u.repo, u.env,
 			       v.result, v.violations, u.evaluated_at, coalesce(v.model_id, ''), coalesce(v.prompt_version, '')
 			FROM verification.verdict v
@@ -591,7 +792,7 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 			  AND ($2 = '' OR u.repo = $2)
 			  AND ($3 = '' OR u.env = '' OR u.env = $3)
 			  AND (v.decision_id = ANY($4::text[]) OR v.slug = ANY($5::text[]))
-			ORDER BY v.decision_id, v.slug, v.check_index, u.source_kind, u.evaluated_at DESC, v.id DESC`,
+			ORDER BY v.decision_id, v.slug, u.repo, u.env, v.check_index, u.source_kind, u.evaluated_at DESC, v.id DESC`,
 			knownAt, filterRepo, filterEnv, edrIDs, slugs)
 		if err != nil {
 			return nil, err
@@ -604,9 +805,14 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 				_ = vRows.Close()
 				return nil, err
 			}
-			if did, ok := edrToDecision[vEDRID]; ok {
-				verdictsByDecision[did] = append(verdictsByDecision[did], snap)
-			} else if did, ok := slugToDecision[vSlug]; ok {
+			var did uuid.UUID
+			var matched bool
+			if d, ok := edrToDecision[vEDRID]; ok {
+				did, matched = d, true
+			} else if d, ok := slugToDecision[vSlug]; ok {
+				did, matched = d, true
+			}
+			if matched && coverageByDecision[did].coversRepo(snap.Repo) {
 				verdictsByDecision[did] = append(verdictsByDecision[did], snap)
 			}
 		}
@@ -621,7 +827,7 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 			r.ValidFrom,
 			r.ValidTo,
 			supersededBy[r.ID],
-			scopesByDecision[r.ID],
+			coverageByDecision[r.ID].literalRepos,
 			openPremises[r.ID],
 			verdictsByDecision[r.ID],
 			waivedDecisions[r.ID],
@@ -631,13 +837,4 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 		)
 	}
 	return out, nil
-}
-
-func containsString(list []string, target string) bool {
-	for _, s := range list {
-		if s == target {
-			return true
-		}
-	}
-	return false
 }
