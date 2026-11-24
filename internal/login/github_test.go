@@ -109,7 +109,7 @@ func (g *githubRig) signIn(mutate func(url.Values)) (*httptest.ResponseRecorder,
 	g.challenge = loc.Query().Get("code_challenge")
 	g.mu.Unlock()
 	cookie := cookieNamed(rec.Result().Cookies(), attemptCookieName)
-	query := url.Values{"code": {"good-code"}, "state": {loc.Query().Get("state")}}
+	query := url.Values{"code": {"good-code"}, "state": {loc.Query().Get("state")}, "iss": {githubAuthorizationIssuer}}
 	if mutate != nil {
 		mutate(query)
 	}
@@ -204,9 +204,15 @@ func TestAGitHubCallbackWithAnotherIssIsRefused(t *testing.T) {
 	if rec, _ := g.signIn(func(q url.Values) { q.Set("iss", "https://evil.example.test") }); rec.Code != http.StatusBadRequest {
 		t.Errorf("another iss: %d", rec.Code)
 	}
-	// GitHub sends none; one that names GitHub is not a reason to refuse.
-	if rec, _ := g.signIn(func(q url.Values) { q.Set("iss", githubIssuer) }); rec.Code != http.StatusSeeOther {
-		t.Errorf("iss of GitHub: %d %s", rec.Code, rec.Body)
+	// The stored login issuer is not the authorization server's issuer.
+	if rec, _ := g.signIn(func(q url.Values) { q.Set("iss", githubIssuer) }); rec.Code != http.StatusBadRequest {
+		t.Errorf("login issuer: %d %s", rec.Code, rec.Body)
+	}
+	if rec, _ := g.signIn(func(q url.Values) { q.Del("iss") }); rec.Code != http.StatusBadRequest {
+		t.Errorf("missing iss: %d %s", rec.Code, rec.Body)
+	}
+	if g.store.sessionCount() != 0 {
+		t.Errorf("%d sessions", g.store.sessionCount())
 	}
 }
 
