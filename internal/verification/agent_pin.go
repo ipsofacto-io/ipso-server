@@ -28,7 +28,8 @@ const (
 )
 
 var (
-	pinNameExpr = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,99}$`)
+	pinNameExpr   = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,99}$`)
+	pinEnvExpr    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 	ErrUnknownPin = errors.New("unknown agent pin")
 )
 
@@ -182,8 +183,8 @@ func LiveAgentRun(pin AgentPin, timestampHeader string, digest []byte) Run {
 func RegisterAgentPin(ctx context.Context, tx *sql.Tx, tenant uuid.UUID, name, repo, env, rawPublicKey string) (AgentPin, error) {
 	name = strings.TrimSpace(name)
 	repo = strings.ToLower(strings.TrimSpace(repo))
-	env = strings.TrimSpace(env)
-	if tenant == uuid.Nil || !pinNameExpr.MatchString(name) || !validRepo(repo) || !plain(env, 0, maxEnvBytes) {
+	env = strings.ToLower(strings.TrimSpace(env))
+	if tenant == uuid.Nil || !pinNameExpr.MatchString(name) || !validRepo(repo) || (env != "" && !pinEnvExpr.MatchString(env)) {
 		return AgentPin{}, invalid("invalid agent pin name, repo, or env")
 	}
 	der, sum, err := ParseSPKI(rawPublicKey)

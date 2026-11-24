@@ -282,8 +282,8 @@ function write(request: FixtureRequest, path: string, now: Date, state: FixtureS
             target: 'json-snapshot',
             rubric: statement.trim(),
             fixtures: [
-              { name: 'compliant', expect: 'allow', input: '{"cidr":"10.0.0.0/8"}' },
-              { name: 'violating', expect: 'deny', input: '{"cidr":"0.0.0.0/0"}', expected_quote: '0.0.0.0/0' },
+              { id: 'compliant', expect: 'allow', input: '{"cidr":"10.0.0.0/8"}' },
+              { id: 'violating', expect: 'deny', input: '{"cidr":"0.0.0.0/0"}', note: '0.0.0.0/0' },
             ],
           }),
         },
@@ -307,6 +307,27 @@ function write(request: FixtureRequest, path: string, now: Date, state: FixtureS
     const { title, statement, scope_refs: refs, approve_now: approveNow } = parsed.fields;
     if (typeof title !== 'string' || !title.trim() || typeof statement !== 'string' || !statement.trim()) return bad;
     if (!Array.isArray(refs) || refs.length < 1 || refs.length > 100) return bad;
+    if (Array.isArray(parsed.fields.checks)) {
+      for (const ch of parsed.fields.checks) {
+        if (typeof ch !== 'object' || ch === null) return bad;
+        const rec = ch as Record<string, unknown>;
+        if (rec.engine === 'llm' && approveNow === true && (typeof rec.llm_spec !== 'object' || rec.llm_spec === null)) {
+          return bad;
+        }
+        if (rec.engine === 'llm' && typeof rec.llm_spec === 'object' && rec.llm_spec !== null) {
+          const spec = rec.llm_spec as Record<string, unknown>;
+          if (spec.version !== 1 || typeof spec.rubric !== 'string' || !spec.rubric.trim()) return bad;
+          if (Array.isArray(spec.fixtures)) {
+            for (const fx of spec.fixtures) {
+              if (typeof fx !== 'object' || fx === null) return bad;
+              const fRec = fx as Record<string, unknown>;
+              if (typeof fRec.id !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(fRec.id)) return bad;
+              if ('name' in fRec || 'expected_quote' in fRec) return bad;
+            }
+          }
+        }
+      }
+    }
     const slug = title
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')

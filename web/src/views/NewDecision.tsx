@@ -55,6 +55,17 @@ const DEFAULT_FIXTURES: LLMFixtureRow[] = [
   },
 ];
 
+function toFixtureID(raw: string, fallbackIndex: number): string {
+  const slug = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64)
+    .replace(/-+$/g, '');
+  return slug || `fixture-${fallbackIndex + 1}`;
+}
+
 function parseCandidateLLMSpec(raw: string | undefined): { rubric: string; fixtures: LLMFixtureRow[] } {
   if (!raw) return { rubric: '', fixtures: DEFAULT_FIXTURES.map((f) => ({ ...f })) };
   try {
@@ -64,10 +75,20 @@ function parseCandidateLLMSpec(raw: string | undefined): { rubric: string; fixtu
     const fixtures: LLMFixtureRow[] = fixturesRaw
       .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
       .map((item, idx) => ({
-        name: typeof item.name === 'string' && item.name ? item.name : `case-${idx + 1}`,
+        name:
+          typeof item.id === 'string' && item.id
+            ? item.id
+            : typeof item.name === 'string' && item.name
+              ? item.name
+              : `case-${idx + 1}`,
         expect: item.expect === 'deny' ? 'deny' : 'allow',
         input: typeof item.input === 'string' ? item.input : '',
-        expectedQuote: typeof item.expected_quote === 'string' ? item.expected_quote : '',
+        expectedQuote:
+          typeof item.note === 'string'
+            ? item.note
+            : typeof item.expected_quote === 'string'
+              ? item.expected_quote
+              : '',
       }));
     return {
       rubric,
@@ -210,16 +231,24 @@ export function NewDecisionView() {
       if (ch.ref.trim()) item.ref = ch.ref.trim();
       if (days !== undefined) item.max_age_days = days;
       if (ch.engine === 'llm') {
+        const usedIds = new Set<string>();
         item.llm_spec = {
           version: 1,
           target: ch.target,
           rubric: ch.rubric.trim(),
-          fixtures: ch.fixtures.map((f) => ({
-            name: f.name.trim() || 'fixture',
-            expect: f.expect,
-            input: f.input,
-            ...(f.expectedQuote.trim() ? { expected_quote: f.expectedQuote.trim() } : {}),
-          })),
+          fixtures: ch.fixtures.map((f, fxIdx) => {
+            let id = toFixtureID(f.name, fxIdx);
+            while (usedIds.has(id)) {
+              id = `${id.slice(0, 58)}-${fxIdx + 1}`;
+            }
+            usedIds.add(id);
+            return {
+              id,
+              expect: f.expect,
+              input: f.input,
+              ...(f.expectedQuote.trim() ? { note: f.expectedQuote.trim() } : {}),
+            };
+          }),
         };
       }
       return item;
