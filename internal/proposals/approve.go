@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -121,51 +122,125 @@ func Approve(ctx context.Context, tx *sql.Tx, tenant, approver uuid.UUID, queue 
 	return out, nil
 }
 
-func materializeApprovedHumanLLMChecks(ctx context.Context, tx *sql.Tx, tenant, approver, decisionID uuid.UUID, decisionBody, humanPayload []byte) error {
-	var approvedBody struct {
-		Checks []struct {
-			Engine string `json:"engine"`
-		} `json:"checks"`
+type humanLLMCheckEntry struct {
+	Engine     string         `json:"engine"`
+	Target     string         `json:"target"`
+	Mode       string         `json:"mode"`
+	MaxAgeDays *int           `json:"max_age_days"`
+	LLMSpec    *llmcheck.Spec `json:"llm_spec"`
+}
+
+func normalizeLLMCheckMode(mode string) string {
+	m := strings.TrimSpace(mode)
+	if m == "" {
+		return "block"
 	}
-	expectedLLMChecks := 0
-	if json.Unmarshal(decisionBody, &approvedBody) == nil {
-		for _, c := range approvedBody.Checks {
-			if c.Engine == "llm" {
-				expectedLLMChecks++
-			}
+	return m
+}
+
+func sameOptionalInt(a, b *int) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func matchApprovedHumanLLMChecks(decisionID uuid.UUID, decisionBody, humanPayload []byte) ([]LLMCheckProposal, error) {
+	var approvedBody struct {
+		Checks []humanLLMCheckEntry `json:"checks"`
+	}
+	if err := json.Unmarshal(decisionBody, &approvedBody); err != nil {
+		return nil, fmt.Errorf("%w: invalid approved decision body", registry.ErrInvalidQuery)
+	}
+	var approvedLLM []humanLLMCheckEntry
+	for _, c := range approvedBody.Checks {
+		if c.Engine == "llm" {
+			approvedLLM = append(approvedLLM, c)
 		}
 	}
-	if expectedLLMChecks == 0 {
-		return nil
+	if len(approvedLLM) == 0 {
+		return nil, nil
 	}
 	var draft struct {
-		Checks []struct {
-			Engine     string         `json:"engine"`
-			Mode       string         `json:"mode"`
-			MaxAgeDays *int           `json:"max_age_days"`
-			LLMSpec    *llmcheck.Spec `json:"llm_spec"`
-		} `json:"checks"`
+		Checks []humanLLMCheckEntry `json:"checks"`
 	}
 	if err := json.Unmarshal(humanPayload, &draft); err != nil {
-		return fmt.Errorf("%w: invalid human proposal payload", registry.ErrInvalidQuery)
+		return nil, fmt.Errorf("%w: invalid human proposal payload", registry.ErrInvalidQuery)
 	}
-	materialized := 0
+	var draftLLM []humanLLMCheckEntry
 	for _, ch := range draft.Checks {
 		if ch.Engine == "llm" && ch.LLMSpec != nil {
-			if _, err := InsertLLMCheckProposal(ctx, tx, tenant, LLMCheckProposal{
-				DecisionID: decisionID,
-				Version:    1,
-				Mode:       ch.Mode,
-				MaxAgeDays: ch.MaxAgeDays,
-				Spec:       *ch.LLMSpec,
-			}, &approver); err != nil {
-				return err
-			}
-			materialized++
+			draftLLM = append(draftLLM, ch)
 		}
 	}
-	if materialized != expectedLLMChecks {
-		return fmt.Errorf("%w: approved decision declares %d llm checks but proposal holds %d llm_spec definitions", registry.ErrInvalidQuery, expectedLLMChecks, materialized)
+	out := make([]LLMCheckProposal, 0, len(approvedLLM))
+	draftIdx := 0
+	for _, approved := range approvedLLM {
+		mode := normalizeLLMCheckMode(approved.Mode)
+		switch mode {
+		case "block", "warn", "advise":
+		default:
+			return nil, fmt.Errorf("%w: invalid llm check mode %q", registry.ErrInvalidQuery, approved.Mode)
+		}
+		var spec llmcheck.Spec
+		if approved.LLMSpec != nil {
+			spec = *approved.LLMSpec
+		} else {
+			if draftIdx >= len(draftLLM) {
+				return nil, fmt.Errorf("%w: approved decision declares %d llm checks but proposal holds %d llm_spec definitions", registry.ErrInvalidQuery, len(approvedLLM), len(draftLLM))
+			}
+			candidate := draftLLM[draftIdx]
+			draftIdx++
+			if normalizeLLMCheckMode(candidate.Mode) != mode {
+				return nil, fmt.Errorf("%w: approved llm check mode %q disagrees with proposed mode %q", registry.ErrInvalidQuery, mode, normalizeLLMCheckMode(candidate.Mode))
+			}
+			candTarget := strings.TrimSpace(candidate.Target)
+			if candTarget == "" {
+				candTarget = strings.TrimSpace(candidate.LLMSpec.Target)
+			}
+			appTarget := strings.TrimSpace(approved.Target)
+			if appTarget != "" && candTarget != "" && appTarget != candTarget {
+				return nil, fmt.Errorf("%w: approved llm check target %q disagrees with proposed target %q", registry.ErrInvalidQuery, appTarget, candTarget)
+			}
+			if !sameOptionalInt(approved.MaxAgeDays, candidate.MaxAgeDays) {
+				return nil, fmt.Errorf("%w: approved llm check max_age_days disagrees with proposed check", registry.ErrInvalidQuery)
+			}
+			spec = *candidate.LLMSpec
+		}
+		raw, err := llmcheck.MarshalCanonical(spec)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
+		}
+		validated, err := llmcheck.ParseAndValidate(raw, strings.TrimSpace(approved.Target), mode == "block")
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
+		}
+		out = append(out, LLMCheckProposal{
+			DecisionID: decisionID,
+			Version:    1,
+			Mode:       mode,
+			MaxAgeDays: approved.MaxAgeDays,
+			Spec:       validated,
+		})
+	}
+	if draftIdx != 0 && draftIdx != len(draftLLM) {
+		return nil, fmt.Errorf("%w: approved decision declares %d llm checks without inline llm_spec but proposal holds %d llm_spec definitions", registry.ErrInvalidQuery, draftIdx, len(draftLLM))
+	}
+	return out, nil
+}
+
+func materializeApprovedHumanLLMChecks(ctx context.Context, tx *sql.Tx, tenant, approver, decisionID uuid.UUID, decisionBody, humanPayload []byte) error {
+	planned, err := matchApprovedHumanLLMChecks(decisionID, decisionBody, humanPayload)
+	if err != nil {
+		return err
+	}
+	for _, p := range planned {
+		if _, err := InsertLLMCheckProposal(ctx, tx, tenant, p, &approver); err != nil {
+			return err
+		}
 	}
 	return nil
 }

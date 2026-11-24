@@ -498,10 +498,10 @@ func ListDecisionHealth(ctx context.Context, db *sql.DB, tenant uuid.UUID, f Hea
 			                  coalesce(d.body->>'title', '') || ' ' ||
 			                  coalesce(d.body->>'slug', '') || ' ' ||
 			                  coalesce(d.body->>'statement', '')) @@ plainto_tsquery('simple', $3)
-			              OR coalesce(d.body->>'title', '') ILIKE '%' || $3 || '%'
+			              OR coalesce(d.body->>'title', '') ILIKE '%' || $7 || '%' ESCAPE '\'
 			          )
 			      )
-			      OR coalesce(d.body->>'slug', '') ILIKE '%' || $3 || '%'
+			      OR coalesce(d.body->>'slug', '') ILIKE '%' || $7 || '%' ESCAPE '\'
 			  )
 			  AND (
 			      $4 = ''
@@ -522,7 +522,7 @@ func ListDecisionHealth(ctx context.Context, db *sql.DB, tenant uuid.UUID, f Hea
 			  )
 			ORDER BY d.decision_id DESC, (d.valid_period @> $5::timestamptz) DESC, d.version DESC
 			LIMIT $6`,
-			f.KnownAt, f.Page.before(), q, repo, f.ValidAt, f.Page.Limit)
+			f.KnownAt, f.Page.before(), q, repo, f.ValidAt, f.Page.Limit, escapeILIKE(q))
 		if err != nil {
 			return fmt.Errorf("list decision health: %w", err)
 		}

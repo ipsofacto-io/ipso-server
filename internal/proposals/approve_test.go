@@ -54,3 +54,27 @@ func TestApproveCheckRefusesWhatItIsNotGiven(t *testing.T) {
 		}
 	}
 }
+
+func TestMatchApprovedHumanLLMChecksEnforcesParity(t *testing.T) {
+	id := uuid.MustParse("00000000-0000-4000-8000-00000000000a")
+	warnDraft := []byte(`{"checks":[{"engine":"llm","target":"diff","mode":"warn","llm_spec":{"version":1,"target":"diff","rubric":"Must require TLS 1.3"}}]}`)
+	blockDraft := []byte(`{"checks":[{"engine":"llm","target":"diff","mode":"block","max_age_days":7,"llm_spec":{"version":1,"target":"diff","rubric":"Must require TLS 1.3","fixtures":[{"id":"ok","input":"MinVersion: tls.VersionTLS13","expect":"allow"},{"id":"bad","input":"MinVersion: tls.VersionTLS12","expect":"deny"}]}}]}`)
+
+	// Escalating mode from warn in the draft to block in the approved decision body is rejected.
+	if _, err := matchApprovedHumanLLMChecks(id, []byte(`{"slug":"tls","title":"TLS","checks":[{"engine":"llm","target":"diff","mode":"block"}]}`), warnDraft); !errors.Is(err, registry.ErrInvalidQuery) {
+		t.Fatalf("mode mismatch got %v, want ErrInvalidQuery", err)
+	}
+	// Changing target between draft and approved decision body is rejected.
+	if _, err := matchApprovedHumanLLMChecks(id, []byte(`{"slug":"tls","title":"TLS","checks":[{"engine":"llm","target":"terraform-plan","mode":"warn"}]}`), warnDraft); !errors.Is(err, registry.ErrInvalidQuery) {
+		t.Fatalf("target mismatch got %v, want ErrInvalidQuery", err)
+	}
+	// Changing max_age_days between draft and approved decision body is rejected.
+	if _, err := matchApprovedHumanLLMChecks(id, []byte(`{"slug":"tls","title":"TLS","checks":[{"engine":"llm","target":"diff","mode":"block","max_age_days":14}]}`), blockDraft); !errors.Is(err, registry.ErrInvalidQuery) {
+		t.Fatalf("max_age_days mismatch got %v, want ErrInvalidQuery", err)
+	}
+	// Matching block check succeeds with mode=block and max_age_days=7.
+	planned, err := matchApprovedHumanLLMChecks(id, []byte(`{"slug":"tls","title":"TLS","checks":[{"engine":"llm","target":"diff","mode":"block","max_age_days":7}]}`), blockDraft)
+	if err != nil || len(planned) != 1 || planned[0].Mode != "block" || planned[0].MaxAgeDays == nil || *planned[0].MaxAgeDays != 7 {
+		t.Fatalf("matching block check got %+v, %v", planned, err)
+	}
+}

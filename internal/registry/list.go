@@ -119,6 +119,10 @@ func Decisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, validAt, known
 	return decisions, nil
 }
 
+func escapeILIKE(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
 // SearchDecisions returns one page of decisions in force matching an optional full-text query q (ADR-0163).
 func SearchDecisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, q string, validAt, knownAt time.Time, page Page) ([]Decision, error) {
 	q = strings.TrimSpace(q)
@@ -131,6 +135,7 @@ func SearchDecisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, q string
 	if err := checkList(tenant, page, validAt, knownAt); err != nil {
 		return nil, err
 	}
+	escapedQ := escapeILIKE(q)
 	decisions := []Decision{}
 	err := readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
@@ -149,13 +154,13 @@ func SearchDecisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, q string
 			                  coalesce(d.body->>'title', '') || ' ' ||
 			                  coalesce(d.body->>'slug', '') || ' ' ||
 			                  coalesce(d.body->>'statement', '')) @@ plainto_tsquery('simple', $5)
-			              OR coalesce(d.body->>'title', '') ILIKE '%' || $5 || '%'
+			              OR coalesce(d.body->>'title', '') ILIKE '%' || $6 || '%' ESCAPE '\'
 			          )
 			      )
-			      OR coalesce(d.body->>'slug', '') ILIKE '%' || $5 || '%'
+			      OR coalesce(d.body->>'slug', '') ILIKE '%' || $6 || '%' ESCAPE '\'
 			  )
 			ORDER BY d.decision_id DESC, d.version DESC
-			LIMIT $4`, validAt, knownAt, page.before(), page.Limit, q)
+			LIMIT $4`, validAt, knownAt, page.before(), page.Limit, q, escapedQ)
 		if err != nil {
 			return fmt.Errorf("search decisions: %w", err)
 		}

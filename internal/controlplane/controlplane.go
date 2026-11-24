@@ -150,10 +150,15 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		}
 	}
 	installDirectory(cfg, signIn)
-	livePinLimiter := ratelimit.New(limits.Rate, limits.Burst)
+	livePinCache := newKnownPinCache(256, 15*time.Second)
+	livePinMisses := ratelimit.New(limits.Rate, limits.Burst)
 	liveUploads := &api.LiveUploads{
 		LookupPin: func(ctx context.Context, pinHex string) (verification.AgentPin, api.SessionStatus) {
-			if _, ok := livePinLimiter.Allow(cfg.Tenant, time.Now()); !ok {
+			now := time.Now()
+			if pin, ok := livePinCache.get(pinHex, now); ok {
+				return pin, api.SessionFound
+			}
+			if _, ok := livePinMisses.Allow(cfg.Tenant, now); !ok {
 				return verification.AgentPin{}, api.SessionBusy
 			}
 			pin, err := verification.LookupAgentPin(ctx, cfg.DB, cfg.Tenant, pinHex)
@@ -163,6 +168,7 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 			if err != nil {
 				return verification.AgentPin{}, api.SessionFailed
 			}
+			livePinCache.put(pinHex, pin, now)
 			return pin, api.SessionFound
 		},
 	}
@@ -323,6 +329,55 @@ func sessionStatus(status login.Status) api.SessionStatus {
 	default:
 		return api.SessionUnknown
 	}
+}
+
+type cachedAgentPin struct {
+	pin       verification.AgentPin
+	expiresAt time.Time
+}
+
+type knownPinCache struct {
+	mu      sync.Mutex
+	max     int
+	ttl     time.Duration
+	entries map[string]cachedAgentPin
+}
+
+func newKnownPinCache(max int, ttl time.Duration) *knownPinCache {
+	return &knownPinCache{max: max, ttl: ttl, entries: make(map[string]cachedAgentPin)}
+}
+
+func (c *knownPinCache) get(pinHex string, now time.Time) (verification.AgentPin, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[pinHex]
+	if !ok {
+		return verification.AgentPin{}, false
+	}
+	if !now.Before(entry.expiresAt) {
+		delete(c.entries, pinHex)
+		return verification.AgentPin{}, false
+	}
+	return entry.pin, true
+}
+
+func (c *knownPinCache) put(pinHex string, pin verification.AgentPin, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.entries) >= c.max {
+		for k, v := range c.entries {
+			if !now.Before(v.expiresAt) {
+				delete(c.entries, k)
+			}
+		}
+	}
+	if len(c.entries) >= c.max {
+		for k := range c.entries {
+			delete(c.entries, k)
+			break
+		}
+	}
+	c.entries[pinHex] = cachedAgentPin{pin: pin, expiresAt: now.Add(c.ttl)}
 }
 
 func (c Config) validate() error {
