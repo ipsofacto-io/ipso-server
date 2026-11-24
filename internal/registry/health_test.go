@@ -143,4 +143,23 @@ func TestComputeValidityAndComplianceSeparatesValidityComplianceAndStaleness(t *
 			t.Fatalf("expected failing live verdict to keep compliance violated despite newer passing change, got %+v", h.Compliance)
 		}
 	})
+
+	t.Run("env-less verdicts do not satisfy an explicit environment filter", func(t *testing.T) {
+		h := ComputeValidityAndCompliance(
+			did, body, now.Add(-30*24*time.Hour), nil, "", []string{"acme/net"}, nil,
+			[]storedVerdictSnap{{
+				CheckIndex:  0,
+				SourceKind:  "change",
+				Command:     "llm",
+				Repo:        "acme/net",
+				Env:         "",
+				Result:      "pass",
+				EvaluatedAt: now.Add(-1 * time.Hour),
+			}},
+			false, nil, "prod", now,
+		)
+		if h.Compliance.State != "unverified" {
+			t.Fatalf("expected unverified when only env-less verdict exists for env=prod, got %+v", h.Compliance)
+		}
+	})
 }

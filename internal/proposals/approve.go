@@ -3,12 +3,14 @@ package proposals
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
+	"github.com/ipsofacto-io/ipso/pkg/llmcheck"
 )
 
 // Queue is the review queue a proposal sits in.
@@ -83,11 +85,20 @@ func Approve(ctx context.Context, tx *sql.Tx, tenant, approver uuid.UUID, queue 
 	if (outcome == OutcomeApproved) != (decision != nil) || (outcome != OutcomeApproved && outcome != OutcomeRejected) {
 		return Approval{}, fmt.Errorf("%w: an approval carries the decision and a rejection carries none", registry.ErrInvalidQuery)
 	}
-	var found bool
-	if err := tx.QueryRowContext(ctx, exists, tenant, proposal).Scan(&found); errors.Is(err, sql.ErrNoRows) {
-		return Approval{}, registry.ErrNotFound
-	} else if err != nil {
-		return Approval{}, fmt.Errorf("read the proposal: %w", err)
+	var humanPayload []byte
+	if queue == QueueHumanProposals {
+		if err := tx.QueryRowContext(ctx, `SELECT payload FROM proposals.human_proposal WHERE tenant_id = $1 AND id = $2`, tenant, proposal).Scan(&humanPayload); errors.Is(err, sql.ErrNoRows) {
+			return Approval{}, registry.ErrNotFound
+		} else if err != nil {
+			return Approval{}, fmt.Errorf("read the proposal: %w", err)
+		}
+	} else {
+		var found bool
+		if err := tx.QueryRowContext(ctx, exists, tenant, proposal).Scan(&found); errors.Is(err, sql.ErrNoRows) {
+			return Approval{}, registry.ErrNotFound
+		} else if err != nil {
+			return Approval{}, fmt.Errorf("read the proposal: %w", err)
+		}
 	}
 	out := Approval{ProposalID: proposal, Outcome: outcome}
 	var decisionID any
@@ -102,7 +113,57 @@ func Approve(ctx context.Context, tx *sql.Tx, tenant, approver uuid.UUID, queue 
 	if err := tx.QueryRowContext(ctx, insert, tenant, proposal, approver, outcome, decisionID).Scan(&out.ID); err != nil {
 		return Approval{}, fmt.Errorf("record the approval: %w", err)
 	}
+	if queue == QueueHumanProposals && outcome == OutcomeApproved && decision != nil && len(humanPayload) > 0 {
+		if err := materializeApprovedHumanLLMChecks(ctx, tx, tenant, approver, out.DecisionID, decision.Body, humanPayload); err != nil {
+			return Approval{}, err
+		}
+	}
 	return out, nil
+}
+
+func materializeApprovedHumanLLMChecks(ctx context.Context, tx *sql.Tx, tenant, approver, decisionID uuid.UUID, decisionBody, humanPayload []byte) error {
+	var approvedBody struct {
+		Checks []struct {
+			Engine string `json:"engine"`
+		} `json:"checks"`
+	}
+	hasLLMCheck := false
+	if json.Unmarshal(decisionBody, &approvedBody) == nil {
+		for _, c := range approvedBody.Checks {
+			if c.Engine == "llm" {
+				hasLLMCheck = true
+				break
+			}
+		}
+	}
+	if !hasLLMCheck {
+		return nil
+	}
+	var draft struct {
+		Checks []struct {
+			Engine     string         `json:"engine"`
+			Mode       string         `json:"mode"`
+			MaxAgeDays *int           `json:"max_age_days"`
+			LLMSpec    *llmcheck.Spec `json:"llm_spec"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(humanPayload, &draft); err != nil {
+		return nil
+	}
+	for _, ch := range draft.Checks {
+		if ch.Engine == "llm" && ch.LLMSpec != nil {
+			if _, err := InsertLLMCheckProposal(ctx, tx, tenant, LLMCheckProposal{
+				DecisionID: decisionID,
+				Version:    1,
+				Mode:       ch.Mode,
+				MaxAgeDays: ch.MaxAgeDays,
+				Spec:       *ch.LLMSpec,
+			}, &approver); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // CheckApproval is the outcome a person recorded for one drafted check.

@@ -388,19 +388,6 @@ func (h *authoringHandlers) createHumanProposal(w http.ResponseWriter, r *http.R
 		if err != nil {
 			return "", err
 		}
-		for _, ch := range req.Checks {
-			if ch.Engine == "llm" && ch.LLMSpec != nil {
-				if _, err := proposals.InsertLLMCheckProposal(ctx, tx, caller.Tenant, proposals.LLMCheckProposal{
-					DecisionID: approval.DecisionID,
-					Version:    1,
-					Mode:       ch.Mode,
-					MaxAgeDays: ch.MaxAgeDays,
-					Spec:       *ch.LLMSpec,
-				}, &caller.Principal); err != nil {
-					return "", err
-				}
-			}
-		}
 		answer = createHumanProposalAnswer{
 			ProposalID: propID.String(),
 			Status:     "approved",

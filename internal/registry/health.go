@@ -176,14 +176,10 @@ func ComputeValidityAndCompliance(
 
 		for i := range verdicts {
 			v := &verdicts[i]
-			if filterEnv != "" && v.Env != "" && !strings.EqualFold(v.Env, filterEnv) {
+			if filterEnv != "" && !strings.EqualFold(v.Env, filterEnv) {
 				continue
 			}
-			envLabel := v.Env
-			if envLabel == "" && filterEnv != "" {
-				envLabel = filterEnv
-			}
-			k := scopeKey{Repo: v.Repo, Env: envLabel}
+			k := scopeKey{Repo: v.Repo, Env: v.Env}
 			if !seenKeys[k] {
 				seenKeys[k] = true
 				keys = append(keys, k)
@@ -229,14 +225,10 @@ func ComputeValidityAndCompliance(
 					if v.CheckIndex != ch.index || v.Repo != k.Repo {
 						continue
 					}
-					if filterEnv != "" && v.Env != "" && !strings.EqualFold(v.Env, filterEnv) {
+					if filterEnv != "" && !strings.EqualFold(v.Env, filterEnv) {
 						continue
 					}
-					vEnv := v.Env
-					if vEnv == "" && filterEnv != "" {
-						vEnv = filterEnv
-					}
-					if !strings.EqualFold(vEnv, k.Env) {
+					if !strings.EqualFold(v.Env, k.Env) {
 						continue
 					}
 					if v.SourceKind == "live" {
@@ -799,7 +791,7 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 			WHERE v.tenant_id = ipso.current_tenant()
 			  AND u.sys_period @> $1::timestamptz
 			  AND ($2 = '' OR u.repo = $2)
-			  AND ($3 = '' OR u.env = '' OR u.env = $3)
+			  AND ($3 = '' OR lower(u.env) = lower($3))
 			  AND (v.decision_id = ANY($4::text[]) OR v.slug = ANY($5::text[]))
 			ORDER BY v.decision_id, v.slug, u.repo, u.env, v.check_index, u.source_kind, u.evaluated_at DESC, v.id DESC`,
 			knownAt, filterRepo, filterEnv, edrIDs, slugs)
