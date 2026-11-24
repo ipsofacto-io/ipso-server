@@ -104,13 +104,16 @@ func (h *verdictRoutes) uploadLive(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errInvalidQuery)
 		return
 	}
-	if agent.Pin.Env != "" && upload.Env != "" && upload.Env != agent.Pin.Env {
+	pinEnv := strings.ToLower(strings.TrimSpace(agent.Pin.Env))
+	reportEnv := strings.ToLower(strings.TrimSpace(upload.Env))
+	if reportEnv == "" {
+		reportEnv = pinEnv
+	}
+	if reportEnv != pinEnv {
 		writeError(w, http.StatusForbidden, errForbidden)
 		return
 	}
-	if upload.Env == "" && agent.Pin.Env != "" {
-		upload.Env = agent.Pin.Env
-	}
+	upload.Env = reportEnv
 	if len(upload.Verdicts) > 0 {
 		now := time.Now().UTC()
 		if h.now != nil {
