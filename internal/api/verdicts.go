@@ -168,24 +168,34 @@ func (h *verdictRoutes) authorizeLiveVerdictScopes(w http.ResponseWriter, ctx co
 		writeError(w, http.StatusInternalServerError, errInternal)
 		return false
 	}
-	allowedIDs := make(map[string]bool, len(applicable))
-	allowedSlugs := make(map[string]bool, len(applicable))
+	type allowedPair struct {
+		id   string
+		slug string
+	}
+	allowed := make([]allowedPair, 0, len(applicable))
 	for _, dec := range applicable {
 		var meta struct {
 			ID   string `json:"id"`
 			Slug string `json:"slug"`
 		}
-		if json.Unmarshal(dec.Body, &meta) == nil {
-			if meta.ID != "" {
-				allowedIDs[meta.ID] = true
-			}
-			if meta.Slug != "" {
-				allowedSlugs[meta.Slug] = true
-			}
+		if json.Unmarshal(dec.Body, &meta) == nil && (meta.ID != "" || meta.Slug != "") {
+			allowed = append(allowed, allowedPair{id: meta.ID, slug: meta.Slug})
 		}
 	}
 	for _, v := range verdicts {
-		if !allowedIDs[v.DecisionID] && !allowedSlugs[v.Slug] {
+		matched := false
+		for _, a := range allowed {
+			if a.id != "" {
+				if a.id == v.DecisionID && (a.slug == "" || a.slug == v.Slug) {
+					matched = true
+					break
+				}
+			} else if a.slug == v.Slug {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			writeError(w, http.StatusForbidden, errForbidden)
 			return false
 		}

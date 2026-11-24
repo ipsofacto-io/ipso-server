@@ -303,6 +303,12 @@ func (h *authoringHandlers) createHumanProposal(w http.ResponseWriter, r *http.R
 	// Contextual approval requires an inline llm_spec for every engine: llm check so runners always
 	// receive an approved spec in AcceptedChecks alongside decision version 1.
 	for _, ch := range req.Checks {
+		switch ch.Engine {
+		case "opa", "semgrep", "checkov", "kyverno", "llm", "llm-advisory":
+		default:
+			writeError(w, http.StatusBadRequest, errInvalidQuery)
+			return
+		}
 		if ch.Engine == "llm" && req.ApproveNow && ch.LLMSpec == nil {
 			writeError(w, http.StatusBadRequest, errInvalidQuery)
 			return

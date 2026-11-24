@@ -129,6 +129,15 @@ func ComputeValidityAndCompliance(
 	}
 	if openPremises == nil {
 		openPremises = []mcptools.PremiseAlert{}
+	} else if isSensitive {
+		redactedPremises := make([]mcptools.PremiseAlert, len(openPremises))
+		for i, p := range openPremises {
+			redactedPremises[i] = mcptools.PremiseAlert{
+				PremiseID:  p.PremiseID,
+				ReasonCode: p.ReasonCode,
+			}
+		}
+		openPremises = redactedPremises
 	}
 
 	validity := mcptools.ValidityHealth{

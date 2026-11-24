@@ -98,9 +98,16 @@ func TestComputeValidityAndComplianceSeparatesValidityComplianceAndStaleness(t *
 			"tags":["security","sensitive"],
 			"checks":[{"engine":"opa","target":"terraform-plan","mode":"block","status":"verified"}]
 		}`)
-		h := ComputeValidityAndCompliance(did, sensitiveBody, now.Add(-10*24*time.Hour), nil, "", []string{"acme/sec"}, nil, nil, false, nil, "", now)
+		h := ComputeValidityAndCompliance(
+			did, sensitiveBody, now.Add(-10*24*time.Hour), nil, "", []string{"acme/sec"},
+			[]mcptools.PremiseAlert{{PremiseID: "vault-probe", ReasonCode: "premise_failed", Detail: "https://internal.vault.acme/v1/sys/health /sealed"}},
+			nil, false, nil, "", now,
+		)
 		if !h.Sensitive || h.Title != "" {
 			t.Fatalf("expected sensitive=true and redacted empty title, got sensitive=%v title=%q", h.Sensitive, h.Title)
+		}
+		if len(h.Validity.OpenPremiseReasons) != 1 || h.Validity.OpenPremiseReasons[0].Detail != "" {
+			t.Fatalf("expected sensitive premise detail redacted, got %+v", h.Validity.OpenPremiseReasons)
 		}
 	})
 
