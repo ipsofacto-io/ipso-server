@@ -56,8 +56,16 @@ func (c *cliCodeStore) put(code string, entry cliCodeEntry, now time.Time) {
 			delete(c.entries, k)
 		}
 	}
-	if len(c.entries) >= maxCLICodes {
-		clear(c.entries)
+	for len(c.entries) >= maxCLICodes {
+		var oldestKey string
+		var oldestTime time.Time
+		for k, v := range c.entries {
+			if oldestKey == "" || v.expiresAt.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = v.expiresAt
+			}
+		}
+		delete(c.entries, oldestKey)
 	}
 	c.entries[code] = entry
 }

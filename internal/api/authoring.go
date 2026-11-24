@@ -505,8 +505,12 @@ func buildEDRBodyFromHumanDraft(slug string, req createHumanProposalRequest) ([]
 			item["status"] = "advisory"
 			item["mode"] = "advise"
 		}
-		if ch.Target != "" {
-			item["target"] = ch.Target
+		target := strings.TrimSpace(ch.Target)
+		if target == "" && ch.LLMSpec != nil {
+			target = strings.TrimSpace(ch.LLMSpec.Target)
+		}
+		if target != "" {
+			item["target"] = target
 		}
 		if ref != "" {
 			item["ref"] = ref
