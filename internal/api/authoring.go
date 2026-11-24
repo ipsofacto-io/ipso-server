@@ -27,17 +27,18 @@ import (
 )
 
 type authoringHandlers struct {
-	db      *sql.DB
-	policy  *authz.Policy
-	gateway *llmgw.Gateway
-	log     *slog.Logger
+	db       *sql.DB
+	policy   *authz.Policy
+	gateway  *llmgw.Gateway
+	log      *slog.Logger
+	evictPin func(uuid.UUID)
 }
 
-func authoringWriteRoutes(db *sql.DB, policy *authz.Policy, log *slog.Logger) []route {
+func authoringWriteRoutes(db *sql.DB, policy *authz.Policy, log *slog.Logger, evictPin func(uuid.UUID)) []route {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	h := &authoringHandlers{db: db, policy: policy, log: log}
+	h := &authoringHandlers{db: db, policy: policy, log: log, evictPin: evictPin}
 	return []route{
 		{"POST /v1/human-proposals", "create_human_proposal", authz.HumanPropose, nil, nil, http.HandlerFunc(h.createHumanProposal)},
 		{"PUT /v1/llm-policy", "set_llm_policy", authz.AllowlistWrite, nil, nil, http.HandlerFunc(h.setLLMPolicy)},
@@ -233,6 +234,7 @@ func (h *authoringHandlers) revokeAgentPin(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	revoked := false
 	wh := &writeHandlers{db: h.db, log: h.log}
 	wh.write(w, r, "revoke_agent_pin", http.StatusNoContent, func(ctx context.Context, tx *sql.Tx, caller Caller) (string, any, error) {
 		removed, err := verification.RevokeAgentPin(ctx, tx, caller.Tenant, id)
@@ -242,8 +244,12 @@ func (h *authoringHandlers) revokeAgentPin(w http.ResponseWriter, r *http.Reques
 		if !removed {
 			return "", nil, registry.ErrNotFound
 		}
+		revoked = true
 		return "agent_pin " + id.String(), nil, nil
 	})
+	if revoked && h.evictPin != nil {
+		h.evictPin(id)
+	}
 }
 
 type humanDraftCheck struct {

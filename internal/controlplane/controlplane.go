@@ -171,6 +171,7 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 			livePinCache.put(pinHex, pin, now)
 			return pin, api.SessionFound
 		},
+		EvictPin: livePinCache.evictByID,
 	}
 	var uploads *api.Uploads
 	if cfg.CIAudience != "" {
@@ -378,6 +379,16 @@ func (c *knownPinCache) put(pinHex string, pin verification.AgentPin, now time.T
 		}
 	}
 	c.entries[pinHex] = cachedAgentPin{pin: pin, expiresAt: now.Add(c.ttl)}
+}
+
+func (c *knownPinCache) evictByID(id uuid.UUID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, v := range c.entries {
+		if v.pin.ID == id {
+			delete(c.entries, k)
+		}
+	}
 }
 
 func (c Config) validate() error {

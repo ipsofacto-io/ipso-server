@@ -1,6 +1,7 @@
 package proposals
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -176,8 +177,48 @@ func matchApprovedHumanLLMChecks(decisionID uuid.UUID, decisionBody, humanPayloa
 			draftLLM = append(draftLLM, ch)
 		}
 	}
+	if len(draftLLM) != len(approvedLLM) {
+		return nil, fmt.Errorf("%w: approved decision declares %d llm checks but proposal holds %d llm_spec definitions", registry.ErrInvalidQuery, len(approvedLLM), len(draftLLM))
+	}
+	type preparedDraft struct {
+		target     string
+		mode       string
+		maxAgeDays *int
+		spec       llmcheck.Spec
+		canonical  []byte
+		used       bool
+	}
+	prepared := make([]preparedDraft, len(draftLLM))
+	for i, ch := range draftLLM {
+		mode := normalizeLLMCheckMode(ch.Mode)
+		target := strings.TrimSpace(ch.Target)
+		if target == "" {
+			target = strings.TrimSpace(ch.LLMSpec.Target)
+		}
+		if target == "" {
+			return nil, fmt.Errorf("%w: proposed llm check requires a non-empty target", registry.ErrInvalidQuery)
+		}
+		raw, err := llmcheck.MarshalCanonical(*ch.LLMSpec)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
+		}
+		validated, err := llmcheck.ParseAndValidate(raw, target, mode == "block")
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
+		}
+		canonical, err := llmcheck.MarshalCanonical(validated)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
+		}
+		prepared[i] = preparedDraft{
+			target:     validated.Target,
+			mode:       mode,
+			maxAgeDays: ch.MaxAgeDays,
+			spec:       validated,
+			canonical:  canonical,
+		}
+	}
 	out := make([]LLMCheckProposal, 0, len(approvedLLM))
-	draftIdx := 0
 	for _, approved := range approvedLLM {
 		mode := normalizeLLMCheckMode(approved.Mode)
 		switch mode {
@@ -185,49 +226,56 @@ func matchApprovedHumanLLMChecks(decisionID uuid.UUID, decisionBody, humanPayloa
 		default:
 			return nil, fmt.Errorf("%w: invalid llm check mode %q", registry.ErrInvalidQuery, approved.Mode)
 		}
-		var spec llmcheck.Spec
+		appTarget := strings.TrimSpace(approved.Target)
+		if appTarget == "" && approved.LLMSpec != nil {
+			appTarget = strings.TrimSpace(approved.LLMSpec.Target)
+		}
+		if appTarget == "" {
+			return nil, fmt.Errorf("%w: approved llm check requires a non-empty target", registry.ErrInvalidQuery)
+		}
+		var inlineCanonical []byte
 		if approved.LLMSpec != nil {
-			spec = *approved.LLMSpec
-		} else {
-			if draftIdx >= len(draftLLM) {
-				return nil, fmt.Errorf("%w: approved decision declares %d llm checks but proposal holds %d llm_spec definitions", registry.ErrInvalidQuery, len(approvedLLM), len(draftLLM))
+			raw, err := llmcheck.MarshalCanonical(*approved.LLMSpec)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
 			}
-			candidate := draftLLM[draftIdx]
-			draftIdx++
-			if normalizeLLMCheckMode(candidate.Mode) != mode {
-				return nil, fmt.Errorf("%w: approved llm check mode %q disagrees with proposed mode %q", registry.ErrInvalidQuery, mode, normalizeLLMCheckMode(candidate.Mode))
+			validatedInline, err := llmcheck.ParseAndValidate(raw, appTarget, mode == "block")
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
 			}
-			candTarget := strings.TrimSpace(candidate.Target)
-			if candTarget == "" {
-				candTarget = strings.TrimSpace(candidate.LLMSpec.Target)
+			inlineCanonical, err = llmcheck.MarshalCanonical(validatedInline)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
 			}
-			appTarget := strings.TrimSpace(approved.Target)
-			if appTarget != "" && candTarget != "" && appTarget != candTarget {
-				return nil, fmt.Errorf("%w: approved llm check target %q disagrees with proposed target %q", registry.ErrInvalidQuery, appTarget, candTarget)
-			}
-			if !sameOptionalInt(approved.MaxAgeDays, candidate.MaxAgeDays) {
-				return nil, fmt.Errorf("%w: approved llm check max_age_days disagrees with proposed check", registry.ErrInvalidQuery)
-			}
-			spec = *candidate.LLMSpec
 		}
-		raw, err := llmcheck.MarshalCanonical(spec)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
+		matches := make([]int, 0, 1)
+		for i := range prepared {
+			if prepared[i].used {
+				continue
+			}
+			if prepared[i].target != appTarget || prepared[i].mode != mode || !sameOptionalInt(prepared[i].maxAgeDays, approved.MaxAgeDays) {
+				continue
+			}
+			if inlineCanonical != nil && !bytes.Equal(prepared[i].canonical, inlineCanonical) {
+				continue
+			}
+			matches = append(matches, i)
 		}
-		validated, err := llmcheck.ParseAndValidate(raw, strings.TrimSpace(approved.Target), mode == "block")
-		if err != nil {
-			return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("%w: approved llm check (%s, %s) has no matching proposed llm_spec", registry.ErrInvalidQuery, appTarget, mode)
 		}
+		if inlineCanonical == nil && len(matches) > 1 {
+			return nil, fmt.Errorf("%w: ambiguous duplicate llm checks (%s, %s) without inline llm_spec disambiguation", registry.ErrInvalidQuery, appTarget, mode)
+		}
+		chosen := matches[0]
+		prepared[chosen].used = true
 		out = append(out, LLMCheckProposal{
 			DecisionID: decisionID,
 			Version:    1,
 			Mode:       mode,
 			MaxAgeDays: approved.MaxAgeDays,
-			Spec:       validated,
+			Spec:       prepared[chosen].spec,
 		})
-	}
-	if draftIdx != 0 && draftIdx != len(draftLLM) {
-		return nil, fmt.Errorf("%w: approved decision declares %d llm checks without inline llm_spec but proposal holds %d llm_spec definitions", registry.ErrInvalidQuery, draftIdx, len(draftLLM))
 	}
 	return out, nil
 }

@@ -109,6 +109,7 @@ type Uploads struct {
 // LiveUploads turns on POST /v1/verdicts/live signed with a tenant-registered ipso-agent public key pin (ADR-0162).
 type LiveUploads struct {
 	LookupPin func(ctx context.Context, pinHex string) (verification.AgentPin, SessionStatus)
+	EvictPin  func(id uuid.UUID)
 }
 
 // Limits bound every request. A zero field takes its default.
@@ -198,14 +199,16 @@ func New(cfg Config) (http.Handler, error) {
 		ci = ciRoutes(cfg.DB, g.log)
 	}
 	var live []route
+	var evictPin func(uuid.UUID)
 	if g.liveUploads != nil {
 		live = liveRoutes(cfg.DB, g.log)
+		evictPin = g.liveUploads.EvictPin
 	}
 	var origin string
 	if cfg.Sessions != nil {
 		origin = cfg.Sessions.Origin
 	}
-	mux, table := mount(routesWith(cfg.DB, cfg.Now, g.log, origin, cfg.Policy, cfg.Gateway), ci, live)
+	mux, table := mount(routesWithLive(cfg.DB, cfg.Now, g.log, origin, cfg.Policy, cfg.Gateway, evictPin), ci, live)
 	guarded := g.serve(mux, table)
 	capped := bounded(guarded, limits, g.log)
 	stream := streamed(guarded, limits)
@@ -291,11 +294,15 @@ func routes(db *sql.DB, now func() time.Time, log *slog.Logger, origin string) [
 }
 
 func routesWith(db *sql.DB, now func() time.Time, log *slog.Logger, origin string, policy *authz.Policy, gateway *llmgw.Gateway) []route {
+	return routesWithLive(db, now, log, origin, policy, gateway, nil)
+}
+
+func routesWithLive(db *sql.DB, now func() time.Time, log *slog.Logger, origin string, policy *authz.Policy, gateway *llmgw.Gateway, evictPin func(uuid.UUID)) []route {
 	reg := &registryRoutes{db: db, now: now}
 	audits := audit.Handler(db, tenantOf)
 	reviews := proposals.Handler(db, tenantOf)
 	verdicts := &verdictRoutes{db: db, now: now}
-	auth := &authoringHandlers{db: db, policy: policy, gateway: gateway, log: log}
+	auth := &authoringHandlers{db: db, policy: policy, gateway: gateway, log: log, evictPin: evictPin}
 	reads := []route{
 		{"POST /v1/resolve", "resolve", authz.RegistryRead, nil, nil, http.HandlerFunc(reg.resolve)},
 		{"POST /v1/verifiability", "analyze_verifiability", authz.ProposalCreate, nil, nil, http.HandlerFunc(auth.analyzeVerifiability)},
@@ -323,7 +330,7 @@ func routesWith(db *sql.DB, now func() time.Time, log *slog.Logger, origin strin
 		{"GET /v1/audit/waivers", "audit_waivers", authz.AuditRead, []string{"known", "now"}, nil, audits},
 		{"GET /v1/verdicts", "list_verdicts", authz.VerdictsRead, []string{"repo", "decision", "known", "limit", "before"}, nil, http.HandlerFunc(verdicts.list)},
 	}
-	return slices.Concat(reads, writeRoutes(db, log), authoringWriteRoutes(db, policy, log), exportRoutes(db, log), invitationRoutes(db, log, origin), roleBindingRoutes(db, log), erasureRoutes(db, log), auditLogRoutes(db, log), enterpriseRoutes(), trackerRoutes(db, log), chatRoutes())
+	return slices.Concat(reads, writeRoutes(db, log), authoringWriteRoutes(db, policy, log, evictPin), exportRoutes(db, log), invitationRoutes(db, log, origin), roleBindingRoutes(db, log), erasureRoutes(db, log), auditLogRoutes(db, log), enterpriseRoutes(), trackerRoutes(db, log), chatRoutes())
 }
 
 // enterpriseRoutes are the admin routes the enterprise binary registered. They are absent unless
