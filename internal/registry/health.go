@@ -644,6 +644,10 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 		}
 		freshness[e] = age
 	}
+	if err := fRows.Err(); err != nil {
+		_ = fRows.Close()
+		return nil, err
+	}
 	_ = fRows.Close()
 
 	coverageByRef := map[uuid.UUID]*scopeCoverage{}
@@ -683,6 +687,10 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 					cov.literalRepos = append(cov.literalRepos, repoKey)
 				}
 			}
+		}
+		if err := sRows.Err(); err != nil {
+			_ = sRows.Close()
+			return nil, err
 		}
 		_ = sRows.Close()
 	}
@@ -733,6 +741,10 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 		}
 		supersededBy[from] = to
 	}
+	if err := supRows.Err(); err != nil {
+		_ = supRows.Close()
+		return nil, err
+	}
 	_ = supRows.Close()
 
 	openPremises := map[uuid.UUID][]mcptools.PremiseAlert{}
@@ -762,6 +774,10 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 			Detail:     strings.TrimSpace(urlStr + " " + ptr),
 		})
 	}
+	if err := pRows.Err(); err != nil {
+		_ = pRows.Close()
+		return nil, err
+	}
 	_ = pRows.Close()
 
 	waiverScopesByDecision := map[uuid.UUID][]uuid.UUID{}
@@ -790,6 +806,10 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 			return nil, err
 		}
 		waiverScopesByDecision[did] = append(waiverScopesByDecision[did], sid)
+	}
+	if err := wRows.Err(); err != nil {
+		_ = wRows.Close()
+		return nil, err
 	}
 	_ = wRows.Close()
 
@@ -831,6 +851,10 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 			if matched && coverageByDecision[did].coversRepo(snap.Repo) {
 				verdictsByDecision[did] = append(verdictsByDecision[did], snap)
 			}
+		}
+		if err := vRows.Err(); err != nil {
+			_ = vRows.Close()
+			return nil, err
 		}
 		_ = vRows.Close()
 	}
