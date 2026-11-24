@@ -70,7 +70,7 @@ func ComputeValidityAndCompliance(
 	scopeRepos []string,
 	openPremises []mcptools.PremiseAlert,
 	verdicts []storedVerdictSnap,
-	hasActiveWaiver bool,
+	isScopeWaived func(repo, env string) bool,
 	freshness map[string]int,
 	filterEnv string,
 	now time.Time,
@@ -208,10 +208,11 @@ func ComputeValidityAndCompliance(
 		})
 
 		for _, k := range keys {
+			scopeWaived := isScopeWaived != nil && isScopeWaived(k.Repo, k.Env)
 			entry := mcptools.ScopeCompliance{
 				Repo:   k.Repo,
 				Env:    k.Env,
-				Waived: hasActiveWaiver,
+				Waived: scopeWaived,
 			}
 			var scopeStates []string
 			var bestChangeState, bestLiveState string
@@ -249,7 +250,7 @@ func ComputeValidityAndCompliance(
 
 				var checkStreamStates []string
 				if latestChange != nil {
-					st, baselined, stale := classifyStreamVerdict(latestChange, maxAge, hasActiveWaiver, now)
+					st, baselined, stale := classifyStreamVerdict(latestChange, maxAge, scopeWaived, now)
 					checkStreamStates = append(checkStreamStates, st)
 					if baselined {
 						entry.Baselined = true
@@ -273,7 +274,7 @@ func ComputeValidityAndCompliance(
 					}
 				}
 				if latestLive != nil {
-					st, baselined, stale := classifyStreamVerdict(latestLive, maxAge, hasActiveWaiver, now)
+					st, baselined, stale := classifyStreamVerdict(latestLive, maxAge, scopeWaived, now)
 					checkStreamStates = append(checkStreamStates, st)
 					if baselined {
 						entry.Baselined = true
@@ -763,24 +764,32 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 	}
 	_ = pRows.Close()
 
-	waivedDecisions := map[uuid.UUID]bool{}
+	waiverScopesByDecision := map[uuid.UUID][]uuid.UUID{}
 	wRows, err := tx.QueryContext(ctx, `
-		SELECT DISTINCT w.decision_id
+		SELECT DISTINCT w.decision_id, w.scope_id
 		FROM registry.waiver w
 		WHERE w.tenant_id = ipso.current_tenant()
 		  AND w.decision_id = ANY($1::uuid[])
 		  AND w.valid_period @> $2::timestamptz
-		  AND w.sys_period @> $3::timestamptz`, ids, validAt, knownAt)
+		  AND w.sys_period @> $3::timestamptz
+		  AND EXISTS (
+		      SELECT 1
+		      FROM registry.decision_version_all d
+		      WHERE d.tenant_id = w.tenant_id
+		        AND d.decision_id = w.decision_id
+		        AND d.valid_period @> $2::timestamptz
+		        AND d.sys_period @> $3::timestamptz
+		  )`, ids, validAt, knownAt)
 	if err != nil {
 		return nil, err
 	}
 	for wRows.Next() {
-		var did uuid.UUID
-		if err := wRows.Scan(&did); err != nil {
+		var did, sid uuid.UUID
+		if err := wRows.Scan(&did, &sid); err != nil {
 			_ = wRows.Close()
 			return nil, err
 		}
-		waivedDecisions[did] = true
+		waiverScopesByDecision[did] = append(waiverScopesByDecision[did], sid)
 	}
 	_ = wRows.Close()
 
@@ -826,8 +835,62 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 		_ = vRows.Close()
 	}
 
+	scopesBySubject := map[scopeKey][]uuid.UUID{}
+	resolveSubjectScopes := func(repo, env string) ([]uuid.UUID, error) {
+		normKey := scopeKey{
+			Repo: strings.ToLower(strings.TrimSpace(repo)),
+			Env:  strings.ToLower(strings.TrimSpace(env)),
+		}
+		if normKey.Repo == "" {
+			return nil, nil
+		}
+		if cached, ok := scopesBySubject[normKey]; ok {
+			return cached, nil
+		}
+		subj, err := newWholeSubject(normKey.Repo, normKey.Env)
+		if err != nil {
+			scopesBySubject[normKey] = nil
+			return nil, nil
+		}
+		sc, err := scopesOf(ctx, tx, subj, knownAt)
+		if err != nil {
+			return nil, err
+		}
+		scopesBySubject[normKey] = sc
+		return sc, nil
+	}
+
 	out := make([]mcptools.DecisionHealth, len(rows))
 	for i, r := range rows {
+		var isWaived func(repo, env string) bool
+		if wScopes := waiverScopesByDecision[r.ID]; len(wScopes) > 0 {
+			covered := map[scopeKey]bool{}
+			candidates := map[scopeKey]bool{}
+			for _, v := range verdictsByDecision[r.ID] {
+				candidates[scopeKey{Repo: v.Repo, Env: strings.ToLower(strings.TrimSpace(v.Env))}] = true
+			}
+			for _, lr := range coverageByDecision[r.ID].literalRepos {
+				candidates[scopeKey{Repo: lr, Env: strings.ToLower(strings.TrimSpace(filterEnv))}] = true
+			}
+			for cand := range candidates {
+				sc, err := resolveSubjectScopes(cand.Repo, cand.Env)
+				if err != nil {
+					return nil, err
+				}
+				for _, ws := range wScopes {
+					if slices.Contains(sc, ws) {
+						covered[cand] = true
+						break
+					}
+				}
+			}
+			isWaived = func(repo, env string) bool {
+				return covered[scopeKey{
+					Repo: strings.ToLower(strings.TrimSpace(repo)),
+					Env:  strings.ToLower(strings.TrimSpace(env)),
+				}]
+			}
+		}
 		out[i] = ComputeValidityAndCompliance(
 			r.ID,
 			r.Body,
@@ -837,7 +900,7 @@ func hydrateHealthRows(ctx context.Context, tx *sql.Tx, rows []rawDecisionRow, f
 			coverageByDecision[r.ID].literalRepos,
 			openPremises[r.ID],
 			verdictsByDecision[r.ID],
-			waivedDecisions[r.ID],
+			isWaived,
 			freshness,
 			filterEnv,
 			validAt,

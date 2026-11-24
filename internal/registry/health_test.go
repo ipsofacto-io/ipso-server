@@ -38,7 +38,7 @@ func TestComputeValidityAndComplianceSeparatesValidityComplianceAndStaleness(t *
 				ModelID:       "mistral-large-eu",
 				PromptVersion: "llm-check-v1",
 			}},
-			false, nil, "prod", now,
+			nil, nil, "prod", now,
 		)
 		if h.ID != did.String() {
 			t.Fatalf("expected registry UUID id %s for keyset pagination, got %s", did, h.ID)
@@ -63,7 +63,7 @@ func TestComputeValidityAndComplianceSeparatesValidityComplianceAndStaleness(t *
 				Result:      "pass",
 				EvaluatedAt: now.Add(-10 * 24 * time.Hour),
 			}},
-			false, nil, "prod", now,
+			nil, nil, "prod", now,
 		)
 		if h.Validity.State != "valid" || h.Compliance.State != "stale" || !h.Compliance.Scopes[0].LatestLive.Stale {
 			t.Fatalf("expected stale compliance, got %+v", h)
@@ -83,7 +83,7 @@ func TestComputeValidityAndComplianceSeparatesValidityComplianceAndStaleness(t *
 				Result:      "pass",
 				EvaluatedAt: now.Add(-1 * time.Hour),
 			}},
-			false, nil, "prod", now,
+			nil, nil, "prod", now,
 		)
 		if h.Validity.State != "needs_review" || h.Compliance.State != "compliant" {
 			t.Fatalf("expected needs_review validity + compliant compliance, got %+v", h)
@@ -104,7 +104,7 @@ func TestComputeValidityAndComplianceSeparatesValidityComplianceAndStaleness(t *
 		h := ComputeValidityAndCompliance(
 			did, sensitiveBody, now.Add(-10*24*time.Hour), nil, "", []string{"acme/sec"},
 			[]mcptools.PremiseAlert{{PremiseID: "vault-probe", ReasonCode: "premise_failed", Detail: "https://internal.vault.acme/v1/sys/health /sealed"}},
-			nil, false, nil, "", now,
+			nil, nil, nil, "", now,
 		)
 		if !h.Sensitive || h.Title != "" {
 			t.Fatalf("expected sensitive=true and redacted empty title, got sensitive=%v title=%q", h.Sensitive, h.Title)
@@ -134,7 +134,7 @@ func TestComputeValidityAndComplianceSeparatesValidityComplianceAndStaleness(t *
 				{CheckIndex: 1, SourceKind: "live", Command: "llm", Repo: "acme/net", Env: "prod", Result: "fail", Violations: 1, EvaluatedAt: now.Add(-2 * time.Hour)},
 				{CheckIndex: 1, SourceKind: "change", Command: "llm", Repo: "acme/net", Env: "prod", Result: "pass", EvaluatedAt: now.Add(-30 * time.Minute)},
 			},
-			false, nil, "prod", now,
+			nil, nil, "prod", now,
 		)
 		if len(h.Compliance.Scopes) != 1 {
 			t.Fatalf("expected 1 aggregated scope row for (acme/net, prod), got %d: %+v", len(h.Compliance.Scopes), h.Compliance.Scopes)
@@ -156,10 +156,28 @@ func TestComputeValidityAndComplianceSeparatesValidityComplianceAndStaleness(t *
 				Result:      "pass",
 				EvaluatedAt: now.Add(-1 * time.Hour),
 			}},
-			false, nil, "prod", now,
+			nil, nil, "prod", now,
 		)
 		if h.Compliance.State != "unverified" {
 			t.Fatalf("expected unverified when only env-less verdict exists for env=prod, got %+v", h.Compliance)
+		}
+	})
+
+	t.Run("waiver applies only to covered scope and leaves uncovered scopes violated", func(t *testing.T) {
+		h := ComputeValidityAndCompliance(
+			did, body, now.Add(-30*24*time.Hour), nil, "", []string{"acme/other", "acme/waived"}, nil,
+			[]storedVerdictSnap{
+				{CheckIndex: 0, SourceKind: "live", Command: "llm", Repo: "acme/waived", Env: "prod", Result: "fail", Violations: 1, EvaluatedAt: now.Add(-1 * time.Hour)},
+				{CheckIndex: 0, SourceKind: "live", Command: "llm", Repo: "acme/other", Env: "prod", Result: "fail", Violations: 1, EvaluatedAt: now.Add(-1 * time.Hour)},
+			},
+			func(repo, env string) bool { return repo == "acme/waived" && env == "prod" },
+			nil, "prod", now,
+		)
+		if h.Compliance.State != "violated" {
+			t.Fatalf("expected overall compliance violated due to acme/other, got %+v", h.Compliance)
+		}
+		if len(h.Compliance.Scopes) != 2 || h.Compliance.Scopes[0].State != "violated" || h.Compliance.Scopes[1].State != "waived" {
+			t.Fatalf("expected acme/other=violated and acme/waived=waived, got %+v", h.Compliance.Scopes)
 		}
 	})
 }

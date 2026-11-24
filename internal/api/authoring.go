@@ -295,7 +295,7 @@ func (h *authoringHandlers) createHumanProposal(w http.ResponseWriter, r *http.R
 	}
 	title := strings.TrimSpace(req.Title)
 	statement := strings.TrimSpace(req.Statement)
-	if title == "" || statement == "" || len(req.ScopeRefs) > 100 {
+	if title == "" || statement == "" || len(req.ScopeRefs) == 0 || len(req.ScopeRefs) > 100 {
 		writeError(w, http.StatusBadRequest, errInvalidQuery)
 		return
 	}
@@ -468,7 +468,10 @@ func resolveScopeRefsTx(ctx context.Context, tx *sql.Tx, refs []string) ([]uuid.
 			SELECT id FROM registry.scope
 			WHERE tenant_id = ipso.current_tenant() AND kind = $1 AND lower(selector) = lower($2)
 			LIMIT 1`, kind, selector).Scan(&found); err != nil {
-			return nil, registry.ErrInvalidQuery
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, registry.ErrInvalidQuery
+			}
+			return nil, err
 		}
 		ids = append(ids, found)
 	}

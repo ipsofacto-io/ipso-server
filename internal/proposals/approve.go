@@ -164,7 +164,7 @@ func materializeApprovedHumanLLMChecks(ctx context.Context, tx *sql.Tx, tenant, 
 			materialized++
 		}
 	}
-	if materialized < expectedLLMChecks {
+	if materialized != expectedLLMChecks {
 		return fmt.Errorf("%w: approved decision declares %d llm checks but proposal holds %d llm_spec definitions", registry.ErrInvalidQuery, expectedLLMChecks, materialized)
 	}
 	return nil
