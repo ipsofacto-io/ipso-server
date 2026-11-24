@@ -100,4 +100,8 @@ func TestMatchApprovedHumanLLMChecksEnforcesParity(t *testing.T) {
 	if _, err := matchApprovedHumanLLMChecks(id, dupApproved, dupDraft); !errors.Is(err, registry.ErrInvalidQuery) {
 		t.Fatalf("ambiguous duplicate checks got %v, want ErrInvalidQuery", err)
 	}
+	// Dropping all proposed LLM checks in the approved body is rejected.
+	if _, err := matchApprovedHumanLLMChecks(id, []byte(`{"slug":"tls","title":"TLS"}`), warnDraft); !errors.Is(err, registry.ErrInvalidQuery) {
+		t.Fatalf("dropped llm checks got %v, want ErrInvalidQuery", err)
+	}
 }

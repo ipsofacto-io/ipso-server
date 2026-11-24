@@ -365,18 +365,23 @@ func (c *knownPinCache) get(pinHex string, now time.Time) (verification.AgentPin
 func (c *knownPinCache) put(pinHex string, pin verification.AgentPin, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.entries) >= c.max {
+	if _, exists := c.entries[pinHex]; !exists && len(c.entries) >= c.max {
 		for k, v := range c.entries {
 			if !now.Before(v.expiresAt) {
 				delete(c.entries, k)
 			}
 		}
 	}
-	if len(c.entries) >= c.max {
-		for k := range c.entries {
-			delete(c.entries, k)
-			break
+	for _, exists := c.entries[pinHex]; !exists && len(c.entries) >= c.max; _, exists = c.entries[pinHex] {
+		var oldestKey string
+		var oldestTime time.Time
+		for k, v := range c.entries {
+			if oldestKey == "" || v.expiresAt.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = v.expiresAt
+			}
 		}
+		delete(c.entries, oldestKey)
 	}
 	c.entries[pinHex] = cachedAgentPin{pin: pin, expiresAt: now.Add(c.ttl)}
 }

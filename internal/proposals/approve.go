@@ -162,9 +162,6 @@ func matchApprovedHumanLLMChecks(decisionID uuid.UUID, decisionBody, humanPayloa
 			approvedLLM = append(approvedLLM, c)
 		}
 	}
-	if len(approvedLLM) == 0 {
-		return nil, nil
-	}
 	var draft struct {
 		Checks []humanLLMCheckEntry `json:"checks"`
 	}
@@ -179,6 +176,9 @@ func matchApprovedHumanLLMChecks(decisionID uuid.UUID, decisionBody, humanPayloa
 	}
 	if len(draftLLM) != len(approvedLLM) {
 		return nil, fmt.Errorf("%w: approved decision declares %d llm checks but proposal holds %d llm_spec definitions", registry.ErrInvalidQuery, len(approvedLLM), len(draftLLM))
+	}
+	if len(approvedLLM) == 0 {
+		return nil, nil
 	}
 	type preparedDraft struct {
 		target     string
