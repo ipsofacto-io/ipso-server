@@ -315,6 +315,13 @@ func (h *authoringHandlers) createHumanProposal(w http.ResponseWriter, r *http.R
 			writeError(w, http.StatusBadRequest, errInvalidQuery)
 			return
 		}
+		modeTrimmed := strings.TrimSpace(ch.Mode)
+		switch modeTrimmed {
+		case "", "block", "warn", "advise":
+		default:
+			writeError(w, http.StatusBadRequest, errInvalidQuery)
+			return
+		}
 		if ch.Engine == "llm" && ch.LLMSpec == nil {
 			writeError(w, http.StatusBadRequest, errInvalidQuery)
 			return
@@ -325,7 +332,7 @@ func (h *authoringHandlers) createHumanProposal(w http.ResponseWriter, r *http.R
 				writeError(w, http.StatusBadRequest, errInvalidQuery)
 				return
 			}
-			requireBlock := ch.Mode == "" || ch.Mode == "block"
+			requireBlock := modeTrimmed == "" || modeTrimmed == "block"
 			if _, err := llmcheck.ParseAndValidate(raw, ch.Target, requireBlock); err != nil {
 				writeError(w, http.StatusBadRequest, errInvalidQuery)
 				return
@@ -491,7 +498,7 @@ func buildEDRBodyFromHumanDraft(slug string, req createHumanProposalRequest) ([]
 		if ch.Engine != "llm-advisory" {
 			status = "verified"
 		}
-		mode := nonEmptyText(ch.Mode, "warn")
+		mode := nonEmptyText(ch.Mode, "block")
 		ref := strings.TrimSpace(ch.Ref)
 		if ref == "" && ch.Engine == "llm" {
 			ref = fmt.Sprintf(".ipso/checks/%s-%d.llm.json", slug, i)
