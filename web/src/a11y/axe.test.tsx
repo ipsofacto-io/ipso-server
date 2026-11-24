@@ -54,6 +54,7 @@ describe('the page shell', () => {
 describe('WCAG 2.2 A and AA on each route', () => {
   const pages: { path: string; settle: () => Promise<unknown>; signedIn?: boolean }[] = [
     { path: '/decisions', settle: () => screen.findByRole('table', { name: 'Decisions in force' }) },
+    { path: '/decisions/new', settle: () => screen.findByRole('button', { name: 'Check verifiability' }) },
     { path: `/decisions/${ids.useTls}`, settle: () => screen.findByRole('heading', { level: 2, name: 'Public ingress terminates TLS 1.2 or later' }) },
     { path: '/decisions/no-such-decision', settle: () => screen.findByText('No decision matches this reference.') },
     { path: '/scopes', settle: () => screen.findByText('acme', { exact: true }) },

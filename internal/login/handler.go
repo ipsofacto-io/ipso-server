@@ -58,6 +58,9 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("/auth/invitation/{provider}", s.invite)
 	mux.HandleFunc("/auth/callback/{provider}", s.callback)
 	mux.HandleFunc("GET /auth/saml/{provider}/metadata", s.metadata)
+	mux.HandleFunc("/auth/cli/start", s.cliStart)
+	mux.HandleFunc("/auth/cli/token", s.cliToken)
+	mux.HandleFunc("/auth/cli/logout", s.cliLogout)
 	mux.HandleFunc("/auth/logout", s.logout)
 	mux.HandleFunc("/auth/", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusNotFound, codeNotFound) })
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -364,6 +367,10 @@ func (s *Service) postedCallback(w http.ResponseWriter, r *http.Request, id stri
 // finishSignIn opens the session after the provider has named a subject. It is shared by the GET
 // callback and the posted one.
 func (s *Service) finishSignIn(w http.ResponseWriter, r *http.Request, ctx context.Context, id string, who subject, a attempt, now time.Time) {
+	if a.CLIRedirect != "" {
+		s.finishCLISignIn(w, r, ctx, id, who, a, now)
+		return
+	}
 	previous := previousSession(r, a)
 	var invitation []byte
 	if a.Invitation != "" {

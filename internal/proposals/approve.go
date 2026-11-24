@@ -21,6 +21,8 @@ const (
 	QueueAgentProposals
 	// QueueTrackerProposals holds the decisions read from a tracker ticket (ADR-0133).
 	QueueTrackerProposals
+	// QueueHumanProposals holds the decisions authored directly by people (ADR-0161).
+	QueueHumanProposals
 )
 
 // The outcomes of a review.
@@ -67,6 +69,12 @@ func Approve(ctx context.Context, tx *sql.Tx, tenant, approver uuid.UUID, queue 
 		exists = `SELECT true FROM proposals.tracker_proposal WHERE tenant_id = $1 AND id = $2`
 		insert = `
 			INSERT INTO proposals.tracker_approval (tenant_id, proposal_id, approver_id, outcome, decision_id)
+			VALUES ($1, $2, $3, $4, $5)
+			RETURNING id`
+	case QueueHumanProposals:
+		exists = `SELECT true FROM proposals.human_proposal WHERE tenant_id = $1 AND id = $2`
+		insert = `
+			INSERT INTO proposals.human_approval (tenant_id, proposal_id, approver_id, outcome, decision_id)
 			VALUES ($1, $2, $3, $4, $5)
 			RETURNING id`
 	default:

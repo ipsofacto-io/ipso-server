@@ -82,7 +82,7 @@ func TestDocumentIsValidOpenAPI31(t *testing.T) {
 
 // allRoutes is every route the API can mount: the ones behind a person's token and the one behind a CI job's.
 func allRoutes() []route {
-	return slices.Concat(routes(nil, time.Now, nil, ""), ciRoutes(nil, nil))
+	return slices.Concat(routes(nil, time.Now, nil, ""), ciRoutes(nil, nil), liveRoutes(nil, nil))
 }
 
 // The document describes exactly the routes the API mounts, under the same operationIds, so a route
@@ -153,7 +153,12 @@ func TestRoutesReadTheDocumentsQueryKeys(t *testing.T) {
 // not a GET is a write of ADR-0109, so it is in writeOps and names an action only a person takes.
 func TestEveryOperationIsAGetOrANamedWrite(t *testing.T) {
 	for pattern, op := range operations(t, loadDocument(t)) {
-		if strings.HasPrefix(pattern, "GET ") || pattern == "POST /v1/resolve" || pattern == "POST /v1/verdicts" {
+		if strings.HasPrefix(pattern, "GET ") ||
+			pattern == "POST /v1/resolve" ||
+			pattern == "POST /v1/verifiability" ||
+			pattern == "POST /v1/llm/evaluate" ||
+			pattern == "POST /v1/verdicts" ||
+			pattern == "POST /v1/verdicts/live" {
 			continue
 		}
 		if !slices.Contains(writeOps, op) {
@@ -225,6 +230,12 @@ func TestOnlyTheUploadTakesACIToken(t *testing.T) {
 				}
 				continue
 			}
+			if pattern == "POST /v1/verdicts/live" {
+				if !slices.Equal(schemes, []string{"agentPinSignature"}) {
+					t.Errorf("%s takes %v, want only agentPinSignature", pattern, schemes)
+				}
+				continue
+			}
 			if len(operation.Security) != 0 {
 				t.Errorf("%s sets its own security %v, and a person's credentials are the default", pattern, schemes)
 			}
@@ -232,8 +243,8 @@ func TestOnlyTheUploadTakesACIToken(t *testing.T) {
 	}
 	for _, requirement := range model.Model.Security {
 		for name := range requirement.Requirements.FromOldest() {
-			if name == "ciToken" {
-				t.Error("ciToken is a default security scheme")
+			if name == "ciToken" || name == "agentPinSignature" {
+				t.Errorf("%s is a default security scheme", name)
 			}
 		}
 	}

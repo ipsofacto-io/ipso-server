@@ -5,6 +5,7 @@ import { Page } from '../components/Page';
 /** Every page a person can open, apart from a step that belongs to one of these. */
 export const PAGES = [
   { to: '/decisions', label: 'Decisions' },
+  { to: '/decisions/new', label: 'New decision' },
   { to: '/scopes', label: 'Scopes' },
   { to: '/inbox', label: 'Inbox' },
   { to: '/waivers', label: 'Waivers' },

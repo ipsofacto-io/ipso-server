@@ -30,10 +30,10 @@ const (
 	// MaxVerdicts bounds the verdicts of one upload. A repository has far fewer decision checks, and the
 	// body cap of the API bounds the bytes.
 	MaxVerdicts = 5000
-	// A report is ADR-0030 version 1, or version 2 when each verdict also carries the digests of its
-	// violations (ADR-0122).
+	// A report is ADR-0030 version 1, version 2 with violation fingerprints (ADR-0122), or version 3 with
+	// engine: llm model metadata and live snapshot marker (ADR-0158, ADR-0162).
 	reportVersionFirst = 1
-	reportVersionLast  = 2
+	reportVersionLast  = 3
 	// maxFingerprints bounds the digests of one verdict. It is the bound of a baseline (ADR-0052), and the
 	// body cap of the API allows far fewer in all.
 	maxFingerprints = 100000
@@ -65,6 +65,8 @@ const (
 	pathsField
 	versionField
 	adapterField
+	targetField
+	modelField
 )
 
 type field struct {
@@ -95,6 +97,7 @@ var kinds = map[string][]field{
 	"kyverno":        {{"paths", pathsField}, {"kyverno_version", versionField}},
 	"gatekeeper":     {{"paths", pathsField}, {"gator_version", versionField}},
 	"eslint":         {{"paths", pathsField}, {"eslint_version", versionField}},
+	"llm":            {{"input_sha256", hashField}, {"target", targetField}, {"model_id", modelField}, {"prompt_version", versionField}},
 }
 
 // Verdict is the outcome of one decision check, as the report states it.
@@ -110,7 +113,9 @@ type Verdict struct {
 	// of the check, covered by the baseline of the runner or not. None means the runner sent none (ADR-0122).
 	// The key is left out of the canonical form when there are none, so a verdict without digests keeps the
 	// digest it had before the field existed.
-	Fingerprints []string `json:"fingerprints,omitempty"`
+	Fingerprints  []string `json:"fingerprints,omitempty"`
+	ModelID       string   `json:"model_id,omitempty"`
+	PromptVersion string   `json:"prompt_version,omitempty"`
 }
 
 // verdictWire is a verdict as a report writes it. The digests stay raw, so that a version 1 verdict that has
@@ -124,6 +129,8 @@ type verdictWire struct {
 type Upload struct {
 	Check       string
 	Env         string
+	SourceKind  string
+	Live        bool
 	IpsoVersion string
 	EvaluatedAt time.Time
 	BuildSHA256 []byte
@@ -163,6 +170,13 @@ func Parse(body []byte) (Upload, error) {
 	for _, f := range fields {
 		want = append(want, f.name)
 	}
+	var liveFlag bool
+	if rawLive, hasLive := report["live"]; hasLive {
+		if err := decodeStrict(rawLive, &liveFlag); err != nil {
+			return Upload{}, invalid("live is not a boolean")
+		}
+		want = append(want, "live")
+	}
 	if len(report) != len(want) {
 		return Upload{}, invalid("report does not have exactly the keys of this check")
 	}
@@ -172,10 +186,14 @@ func Parse(body []byte) (Upload, error) {
 		}
 	}
 
-	up := Upload{Check: env.Check}
+	sourceKind := "change"
+	if liveFlag {
+		sourceKind = "live"
+	}
+	up := Upload{Check: env.Check, SourceKind: sourceKind, Live: liveFlag}
 	var version int
 	if err := decodeStrict(report["report_version"], &version); err != nil || version < reportVersionFirst || version > reportVersionLast {
-		return Upload{}, invalid("report_version is not 1 or 2")
+		return Upload{}, invalid("report_version is not 1, 2 or 3")
 	}
 	var evaluated string
 	if err := decodeStrict(report["evaluated_at"], &evaluated); err != nil {
@@ -204,7 +222,12 @@ func Parse(body []byte) (Upload, error) {
 	if up.Evidence, err = readEvidence(env.Check, fields, report); err != nil {
 		return Upload{}, err
 	}
-	if up.Verdicts, err = readVerdicts(report["verdicts"], version); err != nil {
+	var reportModel, reportPrompt string
+	if env.Check == "llm" {
+		_ = readText(report["model_id"], &reportModel, 1, 200)
+		_ = readText(report["prompt_version"], &reportPrompt, 1, 100)
+	}
+	if up.Verdicts, err = readVerdicts(report["verdicts"], version, env.Check, reportModel, reportPrompt); err != nil {
 		return Upload{}, err
 	}
 	up.Digest = digest(up)
@@ -240,6 +263,23 @@ func readEvidence(check string, fields []field, report map[string]json.RawMessag
 				return nil, invalid(f.name + " is not the adapter of this check")
 			}
 			evidence[f.name] = name
+		case targetField:
+			var target string
+			if err := readText(raw, &target, 1, maxTextBytes); err != nil {
+				return nil, invalid(f.name + " is not a valid target")
+			}
+			switch target {
+			case "diff", "terraform-plan", "kubernetes-manifest", "json-snapshot", "text":
+			default:
+				return nil, invalid(f.name + " is not a supported target")
+			}
+			evidence[f.name] = target
+		case modelField:
+			var model string
+			if err := readText(raw, &model, 1, 200); err != nil {
+				return nil, invalid(f.name + " is not a valid model identifier")
+			}
+			evidence[f.name] = model
 		case pathsField:
 			var paths []string
 			if err := decodeStrict(raw, &paths); err != nil || paths == nil || len(paths) > maxPaths {
@@ -260,7 +300,7 @@ func readEvidence(check string, fields []field, report map[string]json.RawMessag
 	return encoded, nil
 }
 
-func readVerdicts(raw json.RawMessage, version int) ([]Verdict, error) {
+func readVerdicts(raw json.RawMessage, version int, check, reportModel, reportPrompt string) ([]Verdict, error) {
 	var wires []verdictWire
 	if err := decodeStrict(raw, &wires); err != nil || wires == nil {
 		return nil, invalid("verdicts is not a list of verdicts")
@@ -291,6 +331,19 @@ func readVerdicts(raw json.RawMessage, version int) ([]Verdict, error) {
 			return nil, invalid("a verdict with no denial has violations")
 		case (v.Result == "fail" || v.Result == "waived") && (v.Violations < 1 || v.Violations > maxViolations):
 			return nil, invalid("a verdict with a denial has no violations or too many")
+		}
+		if check == "llm" {
+			if v.ModelID == "" {
+				v.ModelID = reportModel
+			}
+			if v.PromptVersion == "" {
+				v.PromptVersion = reportPrompt
+			}
+			if !plain(v.ModelID, 1, 200) || !plain(v.PromptVersion, 1, 100) {
+				return nil, invalid("an llm verdict requires model_id and prompt_version")
+			}
+		} else if v.ModelID != "" || v.PromptVersion != "" {
+			return nil, invalid("a non-llm verdict cannot set model_id or prompt_version")
 		}
 		k := key{v.DecisionID, v.CheckIndex}
 		if seen[k] {
@@ -359,9 +412,14 @@ func readFingerprints(raw json.RawMessage, version int, v Verdict) ([]string, er
 // digest is the sha256 of the upload as the server would write it again: fixed key order, the verdicts
 // sorted, the time in UTC. Reformatting a report therefore does not make it a different upload.
 func digest(up Upload) []byte {
+	var source string
+	if up.Live {
+		source = "live"
+	}
 	canonical, _ := json.Marshal(struct {
 		Check       string          `json:"check"`
 		Env         string          `json:"env"`
+		SourceKind  string          `json:"source_kind,omitempty"`
 		IpsoVersion string          `json:"ipso_version"`
 		EvaluatedAt string          `json:"evaluated_at"`
 		BuildSHA256 string          `json:"build_sha256"`
@@ -369,7 +427,7 @@ func digest(up Upload) []byte {
 		Evidence    json.RawMessage `json:"evidence"`
 		Verdicts    []Verdict       `json:"verdicts"`
 	}{
-		up.Check, up.Env, up.IpsoVersion, up.EvaluatedAt.Format(time.RFC3339Nano),
+		up.Check, up.Env, source, up.IpsoVersion, up.EvaluatedAt.Format(time.RFC3339Nano),
 		hex.EncodeToString(up.BuildSHA256), hex.EncodeToString(up.SarifSHA256), up.Evidence, up.Verdicts,
 	})
 	sum := sha256.Sum256(canonical)

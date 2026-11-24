@@ -30,6 +30,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/authz"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
+	"github.com/ipsofacto-io/ipso-server/internal/llmgw"
 	"github.com/ipsofacto-io/ipso-server/internal/proposals"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
@@ -70,6 +71,8 @@ type Sessions struct {
 	// Lookup returns the caller of a session token the guard has checked is well formed. The tenant is
 	// the process's, never the request's.
 	Lookup func(ctx context.Context, token []byte) (Caller, SessionStatus)
+	// LookupCLI returns the caller of an opaque ipsocli_ bearer token (ADR-0160).
+	LookupCLI func(ctx context.Context, token string) (Caller, SessionStatus)
 }
 
 // MappingStatus is what the mapping of a CI run to its tenant found.
@@ -101,6 +104,11 @@ type Uploads struct {
 	// must answer MappingUnknown for a tenant other than the one this process serves. The tenant comes from
 	// here and never from the request.
 	Lookup func(ctx context.Context, run authn.RunClaims) (Mapping, MappingStatus)
+}
+
+// LiveUploads turns on POST /v1/verdicts/live signed with a tenant-registered ipso-agent public key pin (ADR-0162).
+type LiveUploads struct {
+	LookupPin func(ctx context.Context, pinHex string) (verification.AgentPin, SessionStatus)
 }
 
 // Limits bound every request. A zero field takes its default.
@@ -147,6 +155,10 @@ type Config struct {
 	Sessions *Sessions
 	// Uploads turns on the CI upload route. The session cookie is never read on it.
 	Uploads *Uploads
+	// LiveUploads turns on POST /v1/verdicts/live for pinned ipso-agent keys (ADR-0162).
+	LiveUploads *LiveUploads
+	// Gateway runs model calls for POST /v1/verifiability and POST /v1/llm/evaluate when tenant opt-in allows.
+	Gateway *llmgw.Gateway
 	// Policy is the role policy every route but the upload asks (ADR-0108). It is required.
 	Policy *authz.Policy
 	Limits Limits
@@ -185,11 +197,15 @@ func New(cfg Config) (http.Handler, error) {
 	if g.uploads != nil {
 		ci = ciRoutes(cfg.DB, g.log)
 	}
+	var live []route
+	if g.liveUploads != nil {
+		live = liveRoutes(cfg.DB, g.log)
+	}
 	var origin string
 	if cfg.Sessions != nil {
 		origin = cfg.Sessions.Origin
 	}
-	mux, table := mount(routes(cfg.DB, cfg.Now, g.log, origin), ci)
+	mux, table := mount(routesWith(cfg.DB, cfg.Now, g.log, origin, cfg.Policy, cfg.Gateway), ci, live)
 	guarded := g.serve(mux, table)
 	capped := bounded(guarded, limits, g.log)
 	stream := streamed(guarded, limits)
@@ -237,8 +253,11 @@ func newGuard(cfg Config) (*guard, Limits, error) {
 			return authz.Targets(ctx, db, tenant, scopes)
 		},
 		maxBody: limits.RequestBytes,
-		now:     time.Now,
+		now:     cfg.Now,
 		log:     cfg.Log,
+	}
+	if g.now == nil {
+		g.now = time.Now
 	}
 	if cfg.Sessions != nil {
 		if cfg.Sessions.Lookup == nil {
@@ -256,28 +275,47 @@ func newGuard(cfg Config) (*guard, Limits, error) {
 		}
 		g.uploads = cfg.Uploads
 	}
+	if cfg.LiveUploads != nil {
+		if cfg.LiveUploads.LookupPin == nil {
+			return nil, Limits{}, errors.New("live uploads need a pin lookup")
+		}
+		g.liveUploads = cfg.LiveUploads
+	}
 	return g, limits, nil
 }
 
 // routes is every operation the API serves. Each reads the tenant from the caller that wrap put in
 // the request context. The reads come first, and the writes of ADR-0109 after them.
 func routes(db *sql.DB, now func() time.Time, log *slog.Logger, origin string) []route {
+	return routesWith(db, now, log, origin, nil, nil)
+}
+
+func routesWith(db *sql.DB, now func() time.Time, log *slog.Logger, origin string, policy *authz.Policy, gateway *llmgw.Gateway) []route {
 	reg := &registryRoutes{db: db, now: now}
 	audits := audit.Handler(db, tenantOf)
 	reviews := proposals.Handler(db, tenantOf)
 	verdicts := &verdictRoutes{db: db, now: now}
+	auth := &authoringHandlers{db: db, policy: policy, gateway: gateway, log: log}
 	reads := []route{
 		{"POST /v1/resolve", "resolve", authz.RegistryRead, nil, nil, http.HandlerFunc(reg.resolve)},
-		{"GET /v1/decisions", "list_decisions", authz.RegistryRead, []string{"valid", "known", "limit", "before"}, nil, http.HandlerFunc(reg.decisions)},
+		{"POST /v1/verifiability", "analyze_verifiability", authz.ProposalCreate, nil, nil, http.HandlerFunc(auth.analyzeVerifiability)},
+		{"POST /v1/llm/evaluate", "evaluate_llm_check", authz.LLMEvaluate, nil, nil, http.HandlerFunc(auth.evaluateLLMCheck)},
+		{"GET /v1/decisions", "list_decisions", authz.RegistryRead, []string{"valid", "known", "limit", "before", "q"}, nil, http.HandlerFunc(reg.decisions)},
+		{"GET /v1/decisions/health", "list_decisions_health", authz.RegistryRead, []string{"q", "repo", "env", "valid", "known", "limit", "before"}, nil, http.HandlerFunc(reg.decisionsHealth)},
 		{"GET /v1/decisions/{ref}", "get_decision", authz.RegistryRead, []string{"valid", "known"}, nil, http.HandlerFunc(reg.decision)},
+		{"GET /v1/decisions/{ref}/health", "get_decision_health", authz.RegistryRead, []string{"repo", "env", "valid", "known"}, nil, http.HandlerFunc(reg.decisionHealth)},
 		{"GET /v1/scopes", "list_scopes", authz.RegistryRead, []string{"known", "limit", "before"}, nil, http.HandlerFunc(reg.scopes)},
 		{"GET /v1/waivers", "list_waivers", authz.RegistryRead, []string{"valid", "known", "limit", "before"}, nil, http.HandlerFunc(reg.waivers)},
 		{"GET /v1/premise-reasons", "list_premise_reasons", authz.RegistryRead, []string{"limit", "before"}, nil, http.HandlerFunc(reg.premiseReasons)},
 		{"GET /v1/premise-hosts", "list_premise_hosts", authz.RegistryRead, []string{"limit", "before"}, nil, http.HandlerFunc(reg.premiseHosts)},
 		{"GET /v1/proposals", "list_proposals", authz.ProposalsRead, []string{"limit", "before"}, nil, reviews},
 		{"GET /v1/agent-proposals", "list_agent_proposals", authz.ProposalsRead, []string{"limit", "before"}, nil, reviews},
+		{"GET /v1/human-proposals", "list_human_proposals", authz.ProposalsRead, []string{"limit", "before"}, nil, reviews},
 		{"GET /v1/check-proposals", "list_check_proposals", authz.ProposalsRead, []string{"limit", "before"}, nil, reviews},
 		{"GET /v1/accepted-checks", "list_accepted_checks", authz.ProposalsRead, []string{"repo", "limit", "before"}, nil, http.HandlerFunc(reg.acceptedChecks)},
+		{"GET /v1/llm-policy", "get_llm_policy", authz.RegistryRead, nil, nil, http.HandlerFunc(auth.getLLMPolicy)},
+		{"GET /v1/freshness-policies", "list_freshness_policies", authz.RegistryRead, nil, nil, http.HandlerFunc(auth.listFreshnessPolicies)},
+		{"GET /v1/agent-pins", "list_agent_pins", authz.PrincipalManage, nil, nil, http.HandlerFunc(auth.listAgentPins)},
 		{"GET /v1/audit/decisions", "audit_decisions", authz.AuditRead, []string{"repo", "path", "env", "valid", "known"}, nil, audits},
 		{"GET /v1/audit/beliefs", "audit_beliefs", authz.AuditRead, []string{"repo", "path", "env", "valid", "then", "now"}, nil, audits},
 		{"GET /v1/audit/merges", "audit_merges", authz.AuditRead, []string{"repo", "path", "env", "at", "known", "sha"}, nil, audits},
@@ -285,7 +323,7 @@ func routes(db *sql.DB, now func() time.Time, log *slog.Logger, origin string) [
 		{"GET /v1/audit/waivers", "audit_waivers", authz.AuditRead, []string{"known", "now"}, nil, audits},
 		{"GET /v1/verdicts", "list_verdicts", authz.VerdictsRead, []string{"repo", "decision", "known", "limit", "before"}, nil, http.HandlerFunc(verdicts.list)},
 	}
-	return slices.Concat(reads, writeRoutes(db, log), exportRoutes(db, log), invitationRoutes(db, log, origin), roleBindingRoutes(db, log), erasureRoutes(db, log), auditLogRoutes(db, log), enterpriseRoutes(), trackerRoutes(db, log), chatRoutes())
+	return slices.Concat(reads, writeRoutes(db, log), authoringWriteRoutes(db, policy, log), exportRoutes(db, log), invitationRoutes(db, log, origin), roleBindingRoutes(db, log), erasureRoutes(db, log), auditLogRoutes(db, log), enterpriseRoutes(), trackerRoutes(db, log), chatRoutes())
 }
 
 // enterpriseRoutes are the admin routes the enterprise binary registered. They are absent unless
@@ -398,10 +436,29 @@ func ciRoutes(db *sql.DB, log *slog.Logger) []route {
 	}
 }
 
+func liveRoutes(db *sql.DB, log *slog.Logger) []route {
+	verdicts := &verdictRoutes{db: db, log: log}
+	return []route{
+		{"POST /v1/verdicts/live", "upload_live_verdicts", "", nil, nil, http.HandlerFunc(verdicts.uploadLive)},
+	}
+}
+
 type callerKey struct{}
 
 // runKey carries the CI run that wrapUpload verified and mapped. Only the upload route reads it.
 type runKey struct{}
+
+type livePinKey struct{}
+
+type verifiedLiveAgent struct {
+	Pin       verification.AgentPin
+	Timestamp string
+}
+
+func liveAgentOf(r *http.Request) (verifiedLiveAgent, bool) {
+	v, ok := r.Context().Value(livePinKey{}).(verifiedLiveAgent)
+	return v, ok
+}
 
 // runOf is the run of an upload, as the token and the installation mapping describe it.
 func runOf(r *http.Request) (verification.Run, bool) {

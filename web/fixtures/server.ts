@@ -4,8 +4,8 @@
 // answered once, and a review reason is cleared once.
 // `respond` takes the state of its writes as an argument, so a test starts from nothing and `npm run fixtures`
 // keeps one state for as long as it runs. The role policy is not played here: every person may write.
-import type { Decision, PremiseHost, Waiver } from '../src/api/types.ts';
-import { agentProposals, checkProposals, decisions, ids, premiseHostRows, premiseReasons, proposals, scopes, verdicts, waivers } from './data.ts';
+import type { Decision, HumanProposal, PremiseHost, Waiver } from '../src/api/types.ts';
+import { agentProposals, checkProposals, decisionHealthOf, decisions, humanProposals, ids, premiseHostRows, premiseReasons, proposals, scopes, verdicts, waivers } from './data.ts';
 
 export interface FixtureRequest {
   method: string;
@@ -38,6 +38,8 @@ export interface FixtureState {
   hosts: PremiseHost[];
   /** The invitations an admin made and nobody used or revoked yet (ADR-0127). A token is never kept: the link is the answer to create. */
   invitations: FixtureInvitation[];
+  /** Pending human proposals created via POST /v1/human-proposals. */
+  humanProposals: HumanProposal[];
 }
 
 /** An invitation of the stand-in, as the list shows it. It holds no token, like the table of the server. */
@@ -59,7 +61,7 @@ export interface FixtureExport {
 }
 
 export function newFixtureState(): FixtureState {
-  return { answered: new Set(), decisions: [], waivers: [], superseded: new Set([ids.legacyFtp]), terms: new Set(), baselined: new Set(), sequence: 1000, held: null, cleared: new Set(), hosts: [], invitations: [] };
+  return { answered: new Set(), decisions: [], waivers: [], superseded: new Set([ids.legacyFtp]), terms: new Set(), baselined: new Set(), sequence: 1000, held: null, cleared: new Set(), hosts: [], invitations: [], humanProposals: [] };
 }
 
 export interface FixtureReply {
@@ -220,7 +222,7 @@ function write(request: FixtureRequest, path: string, now: Date, state: FixtureS
   const known = (id: string) => [...decisions, ...state.decisions].some((decision) => decision.id === id);
   const bad = error(400, 'invalid query');
 
-  const approval = /^\/v1\/(proposals|agent-proposals)\/([^/]+)\/approval$/.exec(path);
+  const approval = /^\/v1\/(proposals|agent-proposals|human-proposals)\/([^/]+)\/approval$/.exec(path);
   if (approval) {
     const id = decodeURIComponent(approval[2] ?? '');
     const parsed = parse(request, ['outcome', 'decision']);
@@ -238,7 +240,12 @@ function write(request: FixtureRequest, path: string, now: Date, state: FixtureS
       if (!isTime(from)) return bad;
       draft = body;
     }
-    const queue = approval[1] === 'proposals' ? proposals(now) : agentProposals(now);
+    const queue =
+      approval[1] === 'proposals'
+        ? proposals(now)
+        : approval[1] === 'agent-proposals'
+          ? agentProposals(now)
+          : [...humanProposals(now), ...state.humanProposals];
     if (!queue.some((item) => item.id === id)) return error(404, 'not found');
     if (state.answered.has(id)) return error(409, 'conflict');
     state.answered.add(id);
@@ -248,6 +255,88 @@ function write(request: FixtureRequest, path: string, now: Date, state: FixtureS
       state.decisions.push({ id: decisionId, version: 1, body: draft });
     }
     return json(201, { id: fresh(state), proposal_id: id, outcome, decision_id: decisionId });
+  }
+
+  if (path === '/v1/verifiability') {
+    const parsed = parse(request, ['title', 'statement', 'context', 'repo', 'env']);
+    if (!parsed.ok) return parsed.reply;
+    const { title, statement } = parsed.fields;
+    if (typeof title !== 'string' || !title.trim() || typeof statement !== 'string' || !statement.trim()) return bad;
+    const lower = statement.toLowerCase();
+    const hedge = ['where appropriate', 'when possible', 'as needed', 'best effort'].some((w) => lower.includes(w));
+    return json(200, {
+      classification: hedge ? 'ambiguous' : 'verifiable',
+      summary: hedge
+        ? 'The statement contains hedging words that cannot be enforced deterministically without concrete thresholds.'
+        : 'The statement names concrete technical invariants suitable for automated verification.',
+      suggestions: hedge ? ['Replace hedging phrases with explicit ports, CIDRs, or resource attributes.'] : [],
+      candidate_checks: [
+        {
+          engine: 'llm',
+          target: 'json-snapshot',
+          mode: 'warn',
+          max_age_days: 7,
+          rationale: 'Verify live configuration snapshots with grounded quotes.',
+          llm_spec: JSON.stringify({
+            version: 1,
+            target: 'json-snapshot',
+            rubric: statement.trim(),
+            fixtures: [
+              { name: 'compliant', expect: 'allow', input: '{"cidr":"10.0.0.0/8"}' },
+              { name: 'violating', expect: 'deny', input: '{"cidr":"0.0.0.0/0"}', expected_quote: '0.0.0.0/0' },
+            ],
+          }),
+        },
+      ],
+      candidate_premises: [
+        {
+          id: 'periodic-architecture-review',
+          statement: 'Underlying platform assumptions remain unchanged.',
+          every: 30,
+        },
+      ],
+      ai_generated: true,
+      model_id: 'mistral-large-latest',
+      prompt_version: 'verifiability-v1',
+    });
+  }
+
+  if (path === '/v1/human-proposals') {
+    const parsed = parse(request, ['title', 'statement', 'context', 'owner', 'criticality', 'review_by', 'premises', 'checks', 'scope_refs', 'approve_now']);
+    if (!parsed.ok) return parsed.reply;
+    const { title, statement, scope_refs: refs, approve_now: approveNow } = parsed.fields;
+    if (typeof title !== 'string' || !title.trim() || typeof statement !== 'string' || !statement.trim()) return bad;
+    if (!Array.isArray(refs) || refs.length < 1 || refs.length > 100) return bad;
+    const slug = title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '') || 'decision';
+    const proposalId = fresh(state);
+    if (approveNow === true) {
+      const decisionId = fresh(state);
+      state.decisions.push({
+        id: decisionId,
+        version: 1,
+        body: {
+          edr_version: '1.1',
+          slug,
+          title: title.trim(),
+          statement: statement.trim(),
+          status: Array.isArray(parsed.fields.checks) && parsed.fields.checks.length > 0 ? 'verified' : 'accepted',
+          owner: typeof parsed.fields.owner === 'string' && parsed.fields.owner ? parsed.fields.owner : 'team:platform',
+          criticality: typeof parsed.fields.criticality === 'string' ? parsed.fields.criticality : 'warning',
+        },
+      });
+      return json(201, { proposal_id: proposalId, status: 'approved', decision_id: decisionId, slug });
+    }
+    state.humanProposals.push({
+      id: proposalId,
+      principal_id: INVITER,
+      status: 'pending',
+      payload: { slug, title: title.trim(), statement: statement.trim() },
+      captured_at: now.toISOString(),
+    });
+    return json(201, { proposal_id: proposalId, status: 'pending', slug });
   }
 
   // The answer to a drafted check (ADR-0116): an outcome and nothing else, under the decision the check is for.
@@ -431,8 +520,36 @@ export function respond(request: FixtureRequest, now: Date = new Date(), state: 
   const need = (...keys: string[]): FixtureReply | null => (keys.every((key) => query.get(key)) ? null : error(400, 'invalid query'));
   const echo = { valid: query.get('valid') ?? now.toISOString(), known: query.get('known') ?? now.toISOString() };
 
+  const matchesQuery = (d: Decision, q: string | null): boolean => {
+    if (!q || !q.trim()) return true;
+    const needle = q.trim().toLowerCase();
+    const rec = d.body as Record<string, unknown>;
+    const hay = [rec.title, rec.slug, rec.statement, ...(Array.isArray(rec.tags) ? rec.tags : [])]
+      .filter((v): v is string => typeof v === 'string')
+      .join(' ')
+      .toLowerCase();
+    return hay.includes(needle);
+  };
+
   if (path === '/v1/decisions') {
-    return allow(...TIMES, ...PAGED) ?? json(200, { ...echo, decisions: page(everyDecision, query) });
+    const refused = allow('q', ...TIMES, ...PAGED);
+    if (refused) return refused;
+    const filtered = everyDecision.filter((d) => matchesQuery(d, query.get('q')));
+    return json(200, { ...echo, decisions: page(filtered, query) });
+  }
+  if (path === '/v1/decisions/health') {
+    const refused = allow('q', 'repo', 'env', ...TIMES, ...PAGED);
+    if (refused) return refused;
+    const filtered = everyDecision.filter((d) => matchesQuery(d, query.get('q')));
+    return json(200, { decisions: page(filtered, query).map((d) => decisionHealthOf(d, now)) });
+  }
+  const healthDetail = /^\/v1\/decisions\/([^/]+)\/health$/.exec(path);
+  if (healthDetail) {
+    const refused = allow('repo', 'env', ...TIMES);
+    if (refused) return refused;
+    const ref = decodeURIComponent(healthDetail[1] ?? '');
+    const found = everyDecision.find((d) => d.id === ref || (d.body as Record<string, unknown>).slug === ref);
+    return found ? json(200, decisionHealthOf(found, now)) : error(404, 'not found');
   }
   if (path.startsWith('/v1/decisions/')) {
     const ref = decodeURIComponent(path.slice('/v1/decisions/'.length));
@@ -470,6 +587,10 @@ export function respond(request: FixtureRequest, now: Date = new Date(), state: 
   if (path === '/v1/waivers') return allow(...TIMES, ...PAGED) ?? json(200, { ...echo, waivers: page([...waivers(now), ...state.waivers], query) });
   if (path === '/v1/proposals') return allow(...PAGED) ?? json(200, { proposals: page(proposals(now).filter((p) => !state.answered.has(p.id)), query) });
   if (path === '/v1/agent-proposals') return allow(...PAGED) ?? json(200, { agent_proposals: page(agentProposals(now).filter((p) => !state.answered.has(p.id)), query) });
+  if (path === '/v1/human-proposals') {
+    const allHuman = [...humanProposals(now), ...state.humanProposals].filter((p) => !state.answered.has(p.id));
+    return allow(...PAGED) ?? json(200, { human_proposals: page(allHuman, query) });
+  }
   if (path === '/v1/check-proposals') return allow(...PAGED) ?? json(200, { check_proposals: page(checkProposals(now).filter((p) => !state.answered.has(p.id)), query) });
   if (path === '/v1/premise-reasons') {
     return allow(...PAGED) ?? json(200, { premise_reasons: page(premiseReasons(now).filter((reason) => !state.cleared.has(reason.id)), query) });

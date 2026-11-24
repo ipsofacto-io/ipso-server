@@ -28,12 +28,14 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/authz"
 	"github.com/ipsofacto-io/ipso-server/internal/httpserve"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
+	"github.com/ipsofacto-io/ipso-server/internal/llmgw"
 	"github.com/ipsofacto-io/ipso-server/internal/login"
 	"github.com/ipsofacto-io/ipso-server/internal/mcpremote"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
 	"github.com/ipsofacto-io/ipso-server/internal/telemetry"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
+	"github.com/ipsofacto-io/ipso-server/internal/verification"
 	"github.com/ipsofacto-io/ipso-server/internal/webapp"
 	"github.com/ipsofacto-io/ipso-server/trackers"
 )
@@ -81,6 +83,8 @@ type Config struct {
 	Log     *slog.Logger
 	// Telemetry observes every request except /healthz (ADR-0155). Nil observes nothing.
 	Telemetry *telemetry.Telemetry
+	// Gateway serves tenant-opted-in LLM calls for verifiability analysis and engine: llm evaluation.
+	Gateway *llmgw.Gateway
 }
 
 // New runs the start gates and returns the handler to serve. It fails before any request is answered.
@@ -139,9 +143,29 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		if err != nil {
 			return nil, fmt.Errorf("sign-in: %w", err)
 		}
-		sessions = &api.Sessions{Origin: signIn.Origin(), Lookup: sessionCaller(signIn, cfg.Tenant)}
+		sessions = &api.Sessions{
+			Origin:    signIn.Origin(),
+			Lookup:    sessionCaller(signIn, cfg.Tenant),
+			LookupCLI: cliSessionCaller(signIn, cfg.Tenant),
+		}
 	}
 	installDirectory(cfg, signIn)
+	livePinLimiter := ratelimit.New(limits.Rate, limits.Burst)
+	liveUploads := &api.LiveUploads{
+		LookupPin: func(ctx context.Context, pinHex string) (verification.AgentPin, api.SessionStatus) {
+			if _, ok := livePinLimiter.Allow(cfg.Tenant, time.Now()); !ok {
+				return verification.AgentPin{}, api.SessionBusy
+			}
+			pin, err := verification.LookupAgentPin(ctx, cfg.DB, cfg.Tenant, pinHex)
+			if errors.Is(err, verification.ErrUnknownPin) {
+				return verification.AgentPin{}, api.SessionUnknown
+			}
+			if err != nil {
+				return verification.AgentPin{}, api.SessionFailed
+			}
+			return pin, api.SessionFound
+		},
+	}
 	var uploads *api.Uploads
 	if cfg.CIAudience != "" {
 		if cfg.CIIssuer == "" {
@@ -165,9 +189,11 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		}
 	}
 	apiHandler, err := api.New(api.Config{
-		DB:       cfg.DB,
-		Verifier: verifier,
-		Uploads:  uploads,
+		DB:          cfg.DB,
+		Verifier:    verifier,
+		Uploads:     uploads,
+		LiveUploads: liveUploads,
+		Gateway:     cfg.Gateway,
 		Callers: func(ctx context.Context, claims authn.Claims) (api.Caller, bool) {
 			principal, ok := svc.principal(ctx, claims)
 			return api.Caller{Tenant: cfg.Tenant, Principal: principal}, ok
@@ -228,7 +254,7 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 				return mcpremote.Caller{Tenant: cfg.Tenant, Principal: principal}, ok
 			},
 			func(caller mcpremote.Caller) mcptools.Backend {
-				return &mcpremote.Backend{DB: cfg.DB, Caller: caller, Now: time.Now}
+				return &mcpremote.Backend{DB: cfg.DB, Caller: caller, Now: time.Now, Gateway: cfg.Gateway}
 			},
 			func(ctx context.Context, caller mcpremote.Caller, action authz.Action) (bool, error) {
 				return authorize(ctx, cfg.DB, policy, caller.Tenant, caller.Principal, action)
@@ -269,6 +295,16 @@ func Serve(ctx context.Context, listener net.Listener, cfg Config) error {
 func sessionCaller(signIn *login.Service, tenant uuid.UUID) func(context.Context, []byte) (api.Caller, api.SessionStatus) {
 	return func(ctx context.Context, token []byte) (api.Caller, api.SessionStatus) {
 		principal, status := signIn.Lookup(ctx, token)
+		if status != login.Found {
+			return api.Caller{}, sessionStatus(status)
+		}
+		return api.Caller{Tenant: tenant, Principal: principal}, api.SessionFound
+	}
+}
+
+func cliSessionCaller(signIn *login.Service, tenant uuid.UUID) func(context.Context, string) (api.Caller, api.SessionStatus) {
+	return func(ctx context.Context, token string) (api.Caller, api.SessionStatus) {
+		principal, status := signIn.LookupCLI(ctx, token)
 		if status != login.Found {
 			return api.Caller{}, sessionStatus(status)
 		}

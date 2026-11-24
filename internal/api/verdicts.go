@@ -74,6 +74,49 @@ func (h *verdictRoutes) upload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, uploadAnswer{ID: stored.ID, Verdicts: stored.Verdicts})
 }
 
+// uploadLive stores a live/drift verdict report signed by a pinned ipso-agent key (ADR-0162).
+func (h *verdictRoutes) uploadLive(w http.ResponseWriter, r *http.Request) {
+	tenant, ok := tenantOf(r)
+	agent, hasAgent := liveAgentOf(r)
+	if !ok || !hasAgent {
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errInvalidQuery)
+		return
+	}
+	upload, err := verification.Parse(body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errInvalidQuery)
+		return
+	}
+	if agent.Pin.Env != "" && upload.Env != "" && upload.Env != agent.Pin.Env {
+		writeError(w, http.StatusForbidden, errForbidden)
+		return
+	}
+	if upload.Env == "" && agent.Pin.Env != "" {
+		upload.Env = agent.Pin.Env
+	}
+	upload.Live = true
+	upload.SourceKind = "live"
+	run := verification.LiveAgentRun(agent.Pin, agent.Timestamp, upload.Digest)
+	stored, err := verification.Store(r.Context(), h.db, tenant, run, upload)
+	if err != nil {
+		if h.log != nil {
+			h.log.Warn("a live upload could not be stored", "pin", agent.Pin.Name, "error", err.Error())
+		}
+		writeError(w, http.StatusInternalServerError, errInternal)
+		return
+	}
+	status := http.StatusOK
+	if stored.Created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, uploadAnswer{ID: stored.ID, Verdicts: stored.Verdicts})
+}
+
 // list reads the tenant's stored verdicts, newest first, for one repository or decision or all.
 func (h *verdictRoutes) list(w http.ResponseWriter, r *http.Request) {
 	tenant, ok := tenantOf(r)

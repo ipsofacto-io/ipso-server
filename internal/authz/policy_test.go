@@ -17,12 +17,12 @@ var reads = []Action{Member, RegistryRead, ProposalsRead, VerdictsRead}
 // until the other says the same.
 var granted = map[string][]Action{
 	identity.RoleViewer:        reads,
-	identity.RoleContributor:   append(slices.Clone(reads), ProposalCreate),
-	identity.RoleDecisionOwner: append(slices.Clone(reads), ProposalCreate, DecisionApprove, WaiverRecord, DecisionSupersede, PremiseWrite, ScopeWrite),
-	identity.RoleApprover:      append(slices.Clone(reads), ProposalCreate, DecisionApprove, WaiverRecord),
-	identity.RoleAdmin:         append(slices.Clone(reads), AuditRead, ScopeWrite, AllowlistWrite, PrincipalManage, TenantExport),
+	identity.RoleContributor:   append(slices.Clone(reads), ProposalCreate, LLMEvaluate, HumanPropose),
+	identity.RoleDecisionOwner: append(slices.Clone(reads), ProposalCreate, LLMEvaluate, HumanPropose, DecisionApprove, WaiverRecord, DecisionSupersede, PremiseWrite, ScopeWrite),
+	identity.RoleApprover:      append(slices.Clone(reads), ProposalCreate, LLMEvaluate, HumanPropose, DecisionApprove, WaiverRecord),
+	identity.RoleAdmin:         append(slices.Clone(reads), ProposalCreate, LLMEvaluate, HumanPropose, AuditRead, ScopeWrite, AllowlistWrite, PrincipalManage, TenantExport),
 	identity.RoleAuditor:       append(slices.Clone(reads), AuditRead),
-	identity.RoleAgent:         append(slices.Clone(reads), ProposalCreate),
+	identity.RoleAgent:         append(slices.Clone(reads), ProposalCreate, LLMEvaluate),
 }
 
 // scopedActions name the scopes they act on.

@@ -69,10 +69,13 @@ type Item struct {
 	RunID       int64  `json:"run_id"`
 	RunAttempt  int    `json:"run_attempt"`
 	// RunURL is built from the repository and the run the signed token named.
-	RunURL      string          `json:"run_url"`
-	Check       string          `json:"check"`
-	Env         string          `json:"env"`
-	IpsoVersion string          `json:"ipso_version"`
+	RunURL        string          `json:"run_url"`
+	Check         string          `json:"check"`
+	Env           string          `json:"env"`
+	SourceKind    string          `json:"source_kind"`
+	ModelID       *string         `json:"model_id,omitempty"`
+	PromptVersion *string         `json:"prompt_version,omitempty"`
+	IpsoVersion   string          `json:"ipso_version"`
 	EvaluatedAt time.Time       `json:"evaluated_at"`
 	RecordedAt  time.Time       `json:"recorded_at"`
 	BuildSHA256 string          `json:"build_sha256"`
@@ -143,7 +146,7 @@ const (
 	verdictColumns = `v.id, v.upload_id, v.decision_id, v.slug, v.check_index, v.mode, v.result, v.violations,
 		       (SELECT string_agg(encode(d, 'hex'), ' ' ORDER BY n) FROM unnest(v.fingerprints) WITH ORDINALITY AS t(d, n)),
 		       u.repo, u.sha, u.ref, u.event_name, u.workflow_ref, u.run_id, u.run_attempt,
-		       u.check_name, u.env, u.ipso_version, u.evaluated_at, lower(u.sys_period),
+		       u.check_name, u.env, u.source_kind, v.model_id, v.prompt_version, u.ipso_version, u.evaluated_at, lower(u.sys_period),
 		       encode(u.build_sha256, 'hex'), encode(u.sarif_sha256, 'hex'), u.evidence`
 	verdictFrom = `FROM verification.verdict AS v
 		JOIN verification.upload AS u ON u.tenant_id = v.tenant_id AND u.id = v.upload_id`
@@ -160,14 +163,25 @@ func scanVerdicts(rows *sql.Rows, operation string) ([]Item, [][]registry.Finger
 		var it Item
 		var evidence []byte
 		var joined sql.NullString
+		var modelID, promptVer sql.NullString
 		if err := rows.Scan(&it.ID, &it.UploadID, &it.DecisionID, &it.Slug, &it.CheckIndex, &it.Mode, &it.Result, &it.Violations,
 			&joined, &it.Repo, &it.SHA, &it.Ref, &it.Event, &it.WorkflowRef, &it.RunID, &it.RunAttempt,
-			&it.Check, &it.Env, &it.IpsoVersion, &it.EvaluatedAt, &it.RecordedAt,
+			&it.Check, &it.Env, &it.SourceKind, &modelID, &promptVer, &it.IpsoVersion, &it.EvaluatedAt, &it.RecordedAt,
 			&it.BuildSHA256, &it.SarifSHA256, &evidence); err != nil {
 			return nil, nil, reduce(operation+": scan", err)
 		}
+		if modelID.Valid {
+			it.ModelID = &modelID.String
+		}
+		if promptVer.Valid {
+			it.PromptVersion = &promptVer.String
+		}
 		it.Evidence = evidence
-		it.RunURL = "https://github.com/" + it.Repo + "/actions/runs/" + strconv.FormatInt(it.RunID, 10)
+		if it.RunID > 0 {
+			it.RunURL = "https://github.com/" + it.Repo + "/actions/runs/" + strconv.FormatInt(it.RunID, 10)
+		} else {
+			it.RunURL = "urn:ipso:agent-live:" + it.UploadID.String()
+		}
 		fingerprints, err := parseDigests(joined.String)
 		if err != nil {
 			return nil, nil, reduce(operation+": read", err)

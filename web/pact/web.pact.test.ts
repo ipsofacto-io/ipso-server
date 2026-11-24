@@ -403,6 +403,7 @@ describe('the web app and the control plane API', () => {
     run_attempt: integer(1),
     run_url: like('https://github.com/acme/api/actions/runs/1001'),
     check: like('plan'),
+    source_kind: like('change'),
     env: like('prod'),
     ipso_version: like('0.5.0'),
     evaluated_at: timestamp(VALID),
@@ -1415,6 +1416,173 @@ describe('the role bindings of the web app', () => {
       },
       async (calls) => {
         await expect(calls.revokeRoleBinding(NO_SUCH_BINDING)).rejects.toMatchObject({ status: 404, code: 'not found' });
+      },
+    );
+  });
+});
+
+// Verifiable decisions, assisted authoring, and Decision Health (ADR-0161, ADR-0163).
+const HUMAN_AUTHORING = 'tenant A holds a pending human proposal and an org scope, and the session belongs to an approver';
+
+const decisionHealthShape = {
+  id: like('00000000-0000-7000-8000-000000000001'),
+  slug: like('use-tls'),
+  title: like('use-tls'),
+  criticality: like('warning'),
+  validity: {
+    state: regex('^(valid|needs_review|superseded|expired)$', 'valid'),
+    status: like('accepted'),
+    open_premise_reasons: [],
+  },
+  compliance: {
+    state: regex('^(compliant|violated|waived|stale|unverified)$', 'unverified'),
+    scopes: [],
+  },
+};
+
+describe('verifiable decisions and decision health in the web app', () => {
+  it('searches decisions in force with full-text query q', async () => {
+    await interact(
+      {
+        description: 'a full-text search for decisions in force',
+        state: REGISTRY,
+        path: '/v1/decisions',
+        query: { q: 'tls', limit: '50' },
+        status: 200,
+        body: decisionPage,
+      },
+      async (calls) => {
+        const page = await calls.listDecisions({ q: 'tls', limit: 50 });
+        expect(page.decisions).not.toHaveLength(0);
+      },
+    );
+  });
+
+  it('lists decision validity and compliance health', async () => {
+    await interact(
+      {
+        description: 'a request for decision health summaries',
+        state: REGISTRY,
+        path: '/v1/decisions/health',
+        query: { q: 'tls', limit: '50' },
+        status: 200,
+        body: { decisions: eachLike(decisionHealthShape) },
+      },
+      async (calls) => {
+        const page = await calls.listDecisionsHealth({ q: 'tls', limit: 50 });
+        expect(page.decisions[0]?.validity.state).toBe('valid');
+      },
+    );
+  });
+
+  it('reads validity and compliance health of one decision by slug', async () => {
+    await interact(
+      {
+        description: 'a request for the health of the decision use-tls',
+        state: REGISTRY,
+        path: '/v1/decisions/use-tls/health',
+        status: 200,
+        body: decisionHealthShape,
+      },
+      async (calls) => {
+        const item = await calls.getDecisionHealth('use-tls');
+        expect(item.slug).toBe('use-tls');
+      },
+    );
+  });
+
+  it('analyzes verifiability of drafted decision prose', async () => {
+    await interact(
+      {
+        description: 'a request to analyze decision verifiability',
+        state: REGISTRY,
+        method: 'POST',
+        path: '/v1/verifiability',
+        requestBody: {
+          title: 'Use TLS where appropriate',
+          statement: 'Services should use TLS where appropriate.',
+        },
+        status: 200,
+        body: {
+          classification: regex('^(verifiable|ambiguous|human_attestation_only)$', 'ambiguous'),
+          summary: like('Contains hedging words.'),
+          suggestions: eachLike('State explicit port and TLS version constraints.'),
+          candidate_checks: eachLike({
+            engine: regex('^(opa|semgrep|checkov|kyverno|llm|llm-advisory)$', 'llm'),
+            target: like('json-snapshot'),
+            mode: regex('^(block|warn|advise)$', 'warn'),
+            rationale: like('Evaluate snapshot against rubric.'),
+          }),
+          candidate_premises: [],
+          ai_generated: like(false),
+        },
+      },
+      async (calls) => {
+        const out = await calls.analyzeVerifiability({
+          title: 'Use TLS where appropriate',
+          statement: 'Services should use TLS where appropriate.',
+        });
+        expect(out.classification).toBe('ambiguous');
+      },
+    );
+  });
+
+  it('lists pending human proposals and submits a human proposal', async () => {
+    await interact(
+      {
+        description: 'a request for pending human proposals',
+        state: HUMAN_AUTHORING,
+        path: '/v1/human-proposals',
+        query: { limit: '25' },
+        status: 200,
+        body: {
+          human_proposals: eachLike({
+            id: uuid(),
+            principal_id: uuid(),
+            status: 'pending',
+            payload: like({ title: 'Deny default egress' }),
+            captured_at: timestamp(KNOWN),
+          }),
+        },
+      },
+      async (calls) => {
+        const page = await calls.listHumanProposals({ limit: 25 });
+        expect(page.human_proposals).not.toHaveLength(0);
+      },
+    );
+
+    await interact(
+      {
+        description: 'a request to create and contextually approve a human proposal',
+        state: HUMAN_AUTHORING,
+        method: 'POST',
+        path: '/v1/human-proposals',
+        requestBody: {
+          title: 'Deny unrestricted production egress',
+          statement: 'Production firewalls must deny 0.0.0.0/0 egress.',
+          owner: 'team:security',
+          criticality: 'blocking',
+          scope_refs: [scopeRef],
+          approve_now: true,
+        },
+        status: 201,
+        body: {
+          proposal_id: uuid(),
+          status: 'approved',
+          decision_id: uuid(),
+          slug: like('deny-unrestricted-production-egress'),
+        },
+      },
+      async (calls) => {
+        const res = await calls.createHumanProposal({
+          title: 'Deny unrestricted production egress',
+          statement: 'Production firewalls must deny 0.0.0.0/0 egress.',
+          owner: 'team:security',
+          criticality: 'blocking',
+          scope_refs: [SCOPE],
+          approve_now: true,
+        });
+        expect(res.status).toBe('approved');
       },
     );
   });

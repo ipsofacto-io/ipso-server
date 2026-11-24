@@ -37,9 +37,10 @@ type guard struct {
 	db         *sql.DB
 	verifier   authn.Verifier
 	callers    CallerFunc
-	sessions   *Sessions
-	uploads    *Uploads
-	origin     *http.CrossOriginProtection
+	sessions    *Sessions
+	uploads     *Uploads
+	liveUploads *LiveUploads
+	origin      *http.CrossOriginProtection
 	limiter    *ratelimit.Limiter
 	policy     *authz.Policy
 	principals func(ctx context.Context, tenant, id uuid.UUID) (identity.Principal, error)
@@ -53,33 +54,40 @@ type guard struct {
 	log            *slog.Logger
 }
 
-// mounted is a route on the mux, and whether a CI job calls it instead of a person.
+type routeKind int
+
+const (
+	kindPerson routeKind = iota
+	kindCI
+	kindLive
+)
+
 type mounted struct {
 	route
-	ci bool
+	kind routeKind
 }
 
-// mount puts every route on one mux and keeps each route's entry by its pattern, with the catch-all
-// that answers 404. The mux holds the handlers bare: serve is the only way in, so no handler runs
-// without the guard.
-func mount(routes, ciRoutes []route) (*http.ServeMux, map[string]mounted) {
+func mount(routes, ciRoutes, liveRoutes []route) (*http.ServeMux, map[string]mounted) {
 	mux := http.NewServeMux()
-	table := make(map[string]mounted, len(routes)+len(ciRoutes)+1)
-	add := func(rt route, ci bool) {
+	table := make(map[string]mounted, len(routes)+len(ciRoutes)+len(liveRoutes)+1)
+	add := func(rt route, kind routeKind) {
 		mux.Handle(rt.pattern, rt.handler)
-		table[rt.pattern] = mounted{route: rt, ci: ci}
+		table[rt.pattern] = mounted{route: rt, kind: kind}
 	}
 	for _, rt := range routes {
-		add(rt, false)
+		add(rt, kindPerson)
 	}
 	for _, rt := range ciRoutes {
-		add(rt, true)
+		add(rt, kindCI)
+	}
+	for _, rt := range liveRoutes {
+		add(rt, kindLive)
 	}
 	// Anything else is 404, and only to a caller who holds a role, so the routes cannot be listed
 	// without one.
 	add(route{"/", "", authz.Member, nil, nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, errNotFound)
-	})}, false)
+	})}, kindPerson)
 	return mux, table
 }
 
@@ -99,11 +107,14 @@ func (g *guard) serve(mux *http.ServeMux, table map[string]mounted) http.Handler
 		if rt.op != "" {
 			telemetry.SetRoute(r.Context(), pattern)
 		}
-		if rt.ci {
+		switch rt.kind {
+		case kindCI:
 			g.guardUpload(w, r, rt.keys, mux)
-			return
+		case kindLive:
+			g.guardLiveUpload(w, r, rt.keys, mux)
+		default:
+			g.guardPerson(w, r, rt.route, mux)
 		}
-		g.guardPerson(w, r, rt.route, mux)
 	})
 }
 
@@ -400,6 +411,69 @@ func (g *guard) guardUpload(w http.ResponseWriter, r *http.Request, keys []strin
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
+func (g *guard) guardLiveUpload(w http.ResponseWriter, r *http.Request, keys []string, next http.Handler) {
+	if g.liveUploads == nil || g.liveUploads.LookupPin == nil {
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return
+	}
+	pinHex := strings.TrimSpace(r.Header.Get("X-Ipso-Agent-Pin"))
+	tsHeader := strings.TrimSpace(r.Header.Get("X-Ipso-Timestamp"))
+	sigHeader := strings.TrimSpace(r.Header.Get("X-Ipso-Signature"))
+	if len(pinHex) != 64 || tsHeader == "" || sigHeader == "" {
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return
+	}
+	pin, status := g.liveUploads.LookupPin(r.Context(), pinHex)
+	switch status {
+	case SessionFound:
+	case SessionBusy:
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusTooManyRequests, errRateLimited)
+		return
+	case SessionFailed:
+		writeError(w, http.StatusServiceUnavailable, errUnavailable)
+		return
+	default:
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return
+	}
+	if pin.Tenant == uuid.Nil {
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return
+	}
+	if wait, ok := g.limiter.Allow(pin.Tenant, g.now()); !ok {
+		w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
+		writeError(w, http.StatusTooManyRequests, errRateLimited)
+		return
+	}
+	if !plainQuery(r.URL.RawQuery, keys) {
+		writeError(w, http.StatusBadRequest, errInvalidQuery)
+		return
+	}
+	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, errUnsupportedMedia)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, g.maxBody))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, errTooLarge)
+		} else {
+			writeError(w, http.StatusBadRequest, errInvalidQuery)
+		}
+		return
+	}
+	if err := verification.VerifyLivePayload(pin.PublicKeyDER, tsHeader, sigHeader, body, g.now()); err != nil {
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	ctx := context.WithValue(r.Context(), callerKey{}, Caller{Tenant: pin.Tenant})
+	ctx = context.WithValue(ctx, livePinKey{}, verifiedLiveAgent{Pin: pin, Timestamp: tsHeader})
+	next.ServeHTTP(w, r.WithContext(ctx))
+}
+
 // authenticate answers who is calling, or writes the refusal and returns false. A request that carries
 // an Authorization header is a bearer call, whatever else it carries. Without one, and only when
 // sign-in is configured, the session cookie is the credential (ADR-0099).
@@ -413,6 +487,9 @@ func (g *guard) authenticate(w http.ResponseWriter, r *http.Request) (Caller, bo
 		writeError(w, http.StatusUnauthorized, errUnauthorized)
 		return Caller{}, false
 	}
+	if strings.HasPrefix(token, identity.CLITokenPrefix) {
+		return g.authenticateCLIToken(w, r, token)
+	}
 	claims, err := g.verifier.Verify(r.Context(), token)
 	if err != nil {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="ipso", error="invalid_token"`)
@@ -421,6 +498,35 @@ func (g *guard) authenticate(w http.ResponseWriter, r *http.Request) (Caller, bo
 	}
 	caller, ok := g.callers(r.Context(), claims)
 	if !ok || caller.Tenant == uuid.Nil || caller.Principal == uuid.Nil {
+		writeError(w, http.StatusForbidden, errForbidden)
+		return Caller{}, false
+	}
+	return caller, true
+}
+
+func (g *guard) authenticateCLIToken(w http.ResponseWriter, r *http.Request, token string) (Caller, bool) {
+	if g.sessions == nil || g.sessions.LookupCLI == nil {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="ipso", error="invalid_token"`)
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return Caller{}, false
+	}
+	caller, status := g.sessions.LookupCLI(r.Context(), token)
+	switch status {
+	case SessionFound:
+	case SessionBusy:
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusTooManyRequests, errRateLimited)
+		return Caller{}, false
+	case SessionFailed:
+		g.log.Warn("a CLI session could not be looked up, so the call was refused")
+		writeError(w, http.StatusInternalServerError, errInternal)
+		return Caller{}, false
+	default:
+		w.Header().Set("WWW-Authenticate", `Bearer realm="ipso", error="invalid_token"`)
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return Caller{}, false
+	}
+	if caller.Tenant == uuid.Nil || caller.Principal == uuid.Nil {
 		writeError(w, http.StatusForbidden, errForbidden)
 		return Caller{}, false
 	}

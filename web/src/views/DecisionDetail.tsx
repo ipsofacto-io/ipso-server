@@ -2,12 +2,13 @@ import { Link, useParams } from 'react-router';
 
 import { calls } from '../api/calls';
 import { useResource } from '../api/hooks';
-import type { Decision } from '../api/types';
+import type { Decision, HealthVerdictRef, ScopeCompliance } from '../api/types';
 import { DecisionStatus } from '../components/DecisionStatus';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorNotice } from '../components/ErrorNotice';
 import { LinkButton } from '../components/LinkButton';
 import { Loading } from '../components/Loading';
+import { ModelLabel } from '../components/ModelLabel';
 import { Page } from '../components/Page';
 import { ExternalLink } from '../components/Safe';
 import { TableWrap } from '../components/TableWrap';
@@ -30,13 +31,15 @@ export function DecisionDetailView() {
         <EmptyState title="No decision matches this reference.">It may not exist, or it may not have been in force at that time.</EmptyState>
       ) : null}
       {decisions.status === 'ready'
-        ? decisions.data.decisions.map((decision) => <DecisionCard key={`${decision.id}@${decision.version}`} decision={decision} />)
+        ? decisions.data.decisions.map((decision) => (
+            <DecisionCard key={`${decision.id}@${decision.version}`} decision={decision} valid={valid} known={known} />
+          ))
         : null}
     </Page>
   );
 }
 
-function DecisionCard({ decision }: { decision: Decision }) {
+function DecisionCard({ decision, valid, known }: { decision: Decision; valid?: string; known?: string }) {
   const d = summarize(decision);
   const scopes = scopeLines(decision);
   const checks = checkLines(decision);
@@ -172,6 +175,8 @@ function DecisionCard({ decision }: { decision: Decision }) {
         </section>
       ) : null}
 
+      <ValidityAndCompliance id={d.id} valid={valid} known={known} />
+
       {d.edrId ?? d.slug ? <Verdicts decision={(d.edrId ?? d.slug) as string} /> : null}
       <p>
         <Link to={`/audit/supersessions?decision=${encodeURIComponent(d.id)}&known=${encodeURIComponent(nowAsTime())}`}>
@@ -207,6 +212,90 @@ function Successor({ id }: { id: string }) {
 }
 
 const SHOWN = 20;
+
+function VerdictCell({ summary }: { summary?: HealthVerdictRef }) {
+  if (!summary) return <span className="muted">none</span>;
+  return (
+    <div>
+      <span className={summary.result === 'fail' || summary.result === 'error' ? 'result result-bad' : 'result'}>
+        {summary.result}
+      </span>
+      <span className="muted mono">{` (${summary.command}, ${formatTime(summary.evaluated_at)})`}</span>
+      {summary.stale ? <span className="result result-bad">{` stale > ${summary.max_age_days}d`}</span> : null}
+      {summary.model_id ? (
+        <dl className="meta">
+          <ModelLabel modelID={summary.model_id} promptVersion={summary.prompt_version} />
+        </dl>
+      ) : null}
+    </div>
+  );
+}
+
+function ValidityAndCompliance({ id, valid, known }: { id: string; valid?: string; known?: string }) {
+  const health = useResource((signal) => calls.getDecisionHealth(id, { valid, known }, signal), [id, valid, known]);
+  if (health.status === 'loading') return <Loading what="decision health" />;
+  if (health.status === 'error') return null;
+  const { validity, compliance } = health.data;
+  return (
+    <section aria-label="Validity and compliance">
+      <h3 className="ip-label">Validity and compliance</h3>
+      <dl className="meta">
+        <div>
+          <dt>Validity</dt>
+          <dd className="mono">{validity.state}</dd>
+        </div>
+        <div>
+          <dt>Compliance</dt>
+          <dd className="mono">{compliance.state}</dd>
+        </div>
+      </dl>
+      {validity.open_premise_reasons.length > 0 ? (
+        <ul className="plain">
+          {validity.open_premise_reasons.map((alert) => (
+            <li key={`${alert.premise_id}-${alert.reason_code}`}>
+              <span className="mono">{alert.premise_id}</span>
+              {`: ${alert.reason_code}`}
+              {alert.detail ? ` (${alert.detail})` : ''}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {compliance.scopes.length > 0 ? (
+        <TableWrap>
+          <table className="table">
+            <caption className="sr-only">Compliance health by scope</caption>
+            <thead>
+              <tr>
+                <th scope="col">Scope</th>
+                <th scope="col">Compliance</th>
+                <th scope="col">Latest CI (change)</th>
+                <th scope="col">Latest live (drift)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {compliance.scopes.map((scope: ScopeCompliance, index: number) => (
+                <tr key={`${scope.repo ?? '*'}-${scope.env ?? '*'}-${index}`}>
+                  <td className="mono">{[scope.repo || 'all repos', scope.env || 'all envs'].join(' / ')}</td>
+                  <td className="mono">
+                    {scope.state}
+                    {scope.waived ? ' (waived)' : ''}
+                    {scope.baselined ? ' (baseline)' : ''}
+                  </td>
+                  <td>
+                    <VerdictCell summary={scope.latest_change} />
+                  </td>
+                  <td>
+                    <VerdictCell summary={scope.latest_live} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableWrap>
+      ) : null}
+    </section>
+  );
+}
 
 function Verdicts({ decision }: { decision: string }) {
   const verdicts = useResource((signal) => calls.listVerdicts({ decision, limit: SHOWN }, signal), [decision]);

@@ -67,6 +67,10 @@ type store interface {
 	check(ctx context.Context, invitation []byte) error
 	principal(ctx context.Context, hash []byte) (uuid.UUID, time.Time, error)
 	end(ctx context.Context, hash []byte) error
+	cliCheck(ctx context.Context, issuer, subject string) error
+	cliStart(ctx context.Context, issuer, subject string, hash []byte) (time.Time, error)
+	cliPrincipal(ctx context.Context, hash []byte) (uuid.UUID, time.Time, error)
+	cliEnd(ctx context.Context, hash []byte) error
 }
 
 type dbStore struct {
@@ -93,6 +97,22 @@ func (s dbStore) end(ctx context.Context, hash []byte) error {
 	return identity.EndSession(ctx, s.db, s.tenant, hash)
 }
 
+func (s dbStore) cliCheck(ctx context.Context, issuer, subject string) error {
+	return identity.CheckHumanLogin(ctx, s.db, s.tenant, issuer, subject)
+}
+
+func (s dbStore) cliStart(ctx context.Context, issuer, subject string, hash []byte) (time.Time, error) {
+	return identity.StartCLISession(ctx, s.db, s.tenant, issuer, subject, hash)
+}
+
+func (s dbStore) cliPrincipal(ctx context.Context, hash []byte) (uuid.UUID, time.Time, error) {
+	return identity.CLISessionPrincipal(ctx, s.db, s.tenant, hash)
+}
+
+func (s dbStore) cliEnd(ctx context.Context, hash []byte) error {
+	return identity.EndCLISession(ctx, s.db, s.tenant, hash)
+}
+
 // Service signs people in and answers whether a session cookie is one.
 type Service struct {
 	tenant    uuid.UUID
@@ -105,7 +125,9 @@ type Service struct {
 	log    *slog.Logger
 	now    func() time.Time
 
-	known *sessionCache
+	known    *sessionCache
+	cliKnown *sessionCache
+	cliCodes *cliCodeStore
 	// misses charges the lookups of a session this process has not kept, and callbacks charges each
 	// code exchange. Both are per process, like the API's own limit.
 	misses    *ratelimit.Limiter
@@ -209,8 +231,10 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 		store:     opts.store,
 		log:       opts.Log,
 		now:       opts.Now,
-		known:     newSessionCache(sessionTTL, maxKnownSessions),
-		misses:    ratelimit.New(opts.Rate, opts.Burst),
+		known:       newSessionCache(sessionTTL, maxKnownSessions),
+		cliKnown:    newSessionCache(sessionTTL, maxKnownSessions),
+		cliCodes:    newCLICodeStore(),
+		misses:      ratelimit.New(opts.Rate, opts.Burst),
 		callbacks: ratelimit.New(opts.Rate, opts.Burst),
 		lists:     ratelimit.New(opts.Rate, opts.Burst),
 

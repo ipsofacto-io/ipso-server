@@ -35,6 +35,8 @@ const (
 	VerdictsRead      Action = "verdicts.read"
 	AuditRead         Action = "audit.read"
 	ProposalCreate    Action = "proposal.create"
+	LLMEvaluate       Action = "llm.evaluate"
+	HumanPropose      Action = "human_proposal.create"
 	DecisionApprove   Action = "decision.approve"
 	WaiverRecord      Action = "waiver.record"
 	DecisionSupersede Action = "decision.supersede"
@@ -47,7 +49,7 @@ const (
 
 // Actions is every action the policy grants to some role.
 var Actions = []Action{
-	Member, RegistryRead, ProposalsRead, VerdictsRead, AuditRead, ProposalCreate,
+	Member, RegistryRead, ProposalsRead, VerdictsRead, AuditRead, ProposalCreate, LLMEvaluate, HumanPropose,
 	DecisionApprove, WaiverRecord, DecisionSupersede, PremiseWrite, ScopeWrite,
 	AllowlistWrite, PrincipalManage, TenantExport,
 }

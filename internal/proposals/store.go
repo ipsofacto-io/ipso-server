@@ -241,6 +241,18 @@ func Handler(db *sql.DB, tenantFrom TenantFunc) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"check_proposals": items})
 	})
+	mux.HandleFunc("GET /v1/human-proposals", func(w http.ResponseWriter, r *http.Request) {
+		tenant, before, limit, ok := readPage(w, r, tenantFrom)
+		if !ok {
+			return
+		}
+		items, err := humanInbox(r.Context(), db, tenant, before, limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"human_proposals": items})
+	})
 	return mux
 }
 
@@ -387,6 +399,7 @@ type checkInboxItem struct {
 	Repaired        bool            `json:"repaired"`
 	ModelID         string          `json:"model_id"`
 	PromptVersion   string          `json:"prompt_version"`
+	MaxAgeDays      *int            `json:"max_age_days,omitempty"`
 	CapturedAt      time.Time       `json:"captured_at"`
 }
 
@@ -395,7 +408,7 @@ func checkInbox(ctx context.Context, db *sql.DB, tenant uuid.UUID, before any, l
 	err := tenantTx(ctx, db, tenant, true, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, status, decision_id, decision_version, engine, target, spec, rego, fixtures, repaired,
-			       model_id, prompt_version, lower(sys_period)
+			       model_id, prompt_version, max_age_days, lower(sys_period)
 			FROM proposals.check_proposal c
 			WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id < $2::uuid)
 			  AND NOT EXISTS (SELECT 1 FROM proposals.check_approval a WHERE a.tenant_id = c.tenant_id AND a.proposal_id = c.id)
@@ -408,9 +421,14 @@ func checkInbox(ctx context.Context, db *sql.DB, tenant uuid.UUID, before any, l
 		for rows.Next() {
 			var item checkInboxItem
 			var spec, fixtures []byte
+			var maxAge sql.NullInt32
 			if err := rows.Scan(&item.ID, &item.Status, &item.DecisionID, &item.DecisionVersion, &item.Engine, &item.Target, &spec,
-				&item.Rego, &fixtures, &item.Repaired, &item.ModelID, &item.PromptVersion, &item.CapturedAt); err != nil {
+				&item.Rego, &fixtures, &item.Repaired, &item.ModelID, &item.PromptVersion, &maxAge, &item.CapturedAt); err != nil {
 				return err
+			}
+			if maxAge.Valid {
+				age := int(maxAge.Int32)
+				item.MaxAgeDays = &age
 			}
 			item.Spec, item.Fixtures = spec, fixtures
 			items = append(items, item)

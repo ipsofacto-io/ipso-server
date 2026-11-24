@@ -132,12 +132,54 @@ func (h *registryRoutes) decisions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errInvalidQuery)
 		return
 	}
-	decisions, err := registry.Decisions(r.Context(), h.db, tenant, validAt, knownAt, page)
+	decisions, err := registry.SearchDecisions(r.Context(), h.db, tenant, q.values.Get("q"), validAt, knownAt, page)
 	if err != nil {
 		writeRegistryError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"valid": validAt, "known": knownAt, "decisions": decisionList(decisions)})
+}
+
+func (h *registryRoutes) decisionsHealth(w http.ResponseWriter, r *http.Request) {
+	tenant, q, validAt, knownAt, ok := h.read(w, r, true)
+	if !ok {
+		return
+	}
+	page, ok := q.page()
+	if !ok {
+		writeError(w, http.StatusBadRequest, errInvalidQuery)
+		return
+	}
+	items, err := registry.ListDecisionHealth(r.Context(), h.db, tenant, registry.HealthFilter{
+		Query:   q.values.Get("q"),
+		Repo:    q.values.Get("repo"),
+		Env:     q.values.Get("env"),
+		ValidAt: validAt,
+		KnownAt: knownAt,
+		Page:    page,
+	})
+	if err != nil {
+		writeRegistryError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"decisions": items})
+}
+
+func (h *registryRoutes) decisionHealth(w http.ResponseWriter, r *http.Request) {
+	tenant, q, validAt, knownAt, ok := h.read(w, r, true)
+	if !ok {
+		return
+	}
+	item, err := registry.DecisionHealthByRef(r.Context(), h.db, tenant, r.PathValue("ref"), q.values.Get("repo"), q.values.Get("env"), validAt, knownAt)
+	if errors.Is(err, registry.ErrNotFound) {
+		writeError(w, http.StatusNotFound, errNotFound)
+		return
+	}
+	if err != nil {
+		writeRegistryError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 // decision reads the decisions an id or a slug names. Another tenant's id answers the same empty

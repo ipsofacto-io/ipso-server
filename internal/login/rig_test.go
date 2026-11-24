@@ -35,7 +35,8 @@ type fakeStore struct {
 	mu       sync.Mutex
 	now      func() time.Time
 	logins   map[[2]string]string
-	sessions map[string]time.Time
+	sessions    map[string]time.Time
+	cliSessions map[string]time.Time
 	// invitations are the hashes of the open invitations, as the database keeps them.
 	invitations map[string]bool
 
@@ -45,7 +46,13 @@ type fakeStore struct {
 }
 
 func newFakeStore(now func() time.Time) *fakeStore {
-	return &fakeStore{now: now, logins: map[[2]string]string{}, sessions: map[string]time.Time{}, invitations: map[string]bool{}}
+	return &fakeStore{
+		now:         now,
+		logins:      map[[2]string]string{},
+		sessions:    map[string]time.Time{},
+		cliSessions: map[string]time.Time{},
+		invitations: map[string]bool{},
+	}
 }
 
 // open makes an invitation with this token open.
@@ -136,6 +143,63 @@ func (f *fakeStore) end(_ context.Context, hash []byte) error {
 		return f.err
 	}
 	delete(f.sessions, string(hash))
+	return nil
+}
+
+func (f *fakeStore) cliCheck(_ context.Context, issuer, subject string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	switch f.logins[[2]string{issuer, subject}] {
+	case "":
+		return identity.ErrUnknownLogin
+	case identity.KindAgent:
+		return identity.ErrNotHuman
+	default:
+		return nil
+	}
+}
+
+func (f *fakeStore) cliStart(_ context.Context, issuer, subject string, hash []byte) (time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return time.Time{}, f.err
+	}
+	switch f.logins[[2]string{issuer, subject}] {
+	case "":
+		return time.Time{}, identity.ErrUnknownLogin
+	case identity.KindAgent:
+		return time.Time{}, identity.ErrNotHuman
+	}
+	expires := f.now().Add(30 * 24 * time.Hour)
+	f.cliSessions[string(hash)] = expires
+	return expires, nil
+}
+
+func (f *fakeStore) cliPrincipal(_ context.Context, hash []byte) (uuid.UUID, time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lookups++
+	if f.err != nil {
+		return uuid.Nil, time.Time{}, f.err
+	}
+	expires, ok := f.cliSessions[string(hash)]
+	if !ok || !f.now().Before(expires) {
+		return uuid.Nil, time.Time{}, identity.ErrUnknownCLISession
+	}
+	return personID, expires, nil
+}
+
+func (f *fakeStore) cliEnd(_ context.Context, hash []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	delete(f.cliSessions, string(hash))
 	return nil
 }
 

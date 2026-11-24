@@ -60,6 +60,21 @@ func (r *recordingBackend) Propose(context.Context, mcptools.ProposeInput) (mcpt
 	return mcptools.ProposeOutput{ProposalID: "p1", Status: "proposed"}, nil
 }
 
+func (r *recordingBackend) Health(_ context.Context, _ mcptools.HealthInput) (mcptools.HealthOutput, error) {
+	r.callers = append(r.callers, r.caller)
+	return mcptools.HealthOutput{Decisions: []mcptools.DecisionHealth{}}, nil
+}
+
+func (r *recordingBackend) Verifiability(_ context.Context, _ mcptools.VerifiabilityInput) (mcptools.VerifiabilityOutput, error) {
+	return mcptools.VerifiabilityOutput{
+		Classification:    "verifiable",
+		Summary:           "ok",
+		Suggestions:       []string{},
+		CandidateChecks:   []mcptools.CandidateCheck{},
+		CandidatePremises: []mcptools.CandidatePremise{},
+	}, nil
+}
+
 // testPolicy is the role policy the server runs, compiled once for the package's tests.
 var testPolicy = func() func(t testing.TB) *authz.Policy {
 	var once sync.Once
@@ -645,19 +660,21 @@ func TestEveryRoleOnEveryToolAndMethod(t *testing.T) {
 		{"server/discover", discover, map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "server/discover"}, authz.Member},
 		{"tools/list", list, map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list"}, authz.RegistryRead},
 	}
-	for _, tool := range []string{mcptools.ToolApplicable, mcptools.ToolGet, mcptools.ToolEvaluate} {
+	for _, tool := range []string{mcptools.ToolApplicable, mcptools.ToolGet, mcptools.ToolHealth, mcptools.ToolEvaluate} {
 		body, headers := toolCall(tool)
 		requests = append(requests, request{tool, body, headers, authz.RegistryRead})
 	}
-	body, headers := toolCall(mcptools.ToolPropose)
-	requests = append(requests, request{mcptools.ToolPropose, body, headers, authz.ProposalCreate})
+	for _, tool := range []string{mcptools.ToolPropose, mcptools.ToolVerifiability} {
+		body, headers := toolCall(tool)
+		requests = append(requests, request{tool, body, headers, authz.ProposalCreate})
+	}
 
-	// The roles that grant each action, as ADR-0108 states them.
+	// The roles that grant each action, as ADR-0108 and ADR-0161 state them.
 	everyRole := identity.Roles
 	grants := map[authz.Action][]string{
 		authz.Member:         everyRole,
 		authz.RegistryRead:   everyRole,
-		authz.ProposalCreate: {identity.RoleContributor, identity.RoleDecisionOwner, identity.RoleApprover, identity.RoleAgent},
+		authz.ProposalCreate: {identity.RoleContributor, identity.RoleDecisionOwner, identity.RoleApprover, identity.RoleAdmin, identity.RoleAgent},
 	}
 	for _, role := range append([]string{""}, identity.Roles...) {
 		kind := identity.KindHuman

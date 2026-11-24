@@ -721,6 +721,209 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/verifiability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Analyze decision prose for verifiability, candidate premises, and candidate checks (ADR-0161).
+         * @description Evaluates drafted decision prose for hedging or vagueness and returns candidate premises and candidate checks (deterministic templates, OPA Rego, or EDR 1.1 engine llm specs). When LLM authoring assist is enabled for the tenant, AI-generated outputs carry model_id and prompt_version; otherwise deterministic heuristic analysis runs. This route reads only.
+         */
+        post: operations["analyze_verifiability"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/llm/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Evaluate a redacted artifact excerpt against an EDR 1.1 engine llm rubric (ADR-0158).
+         * @description Evaluates a secret-redacted input excerpt against an engine llm rubric when the tenant explicitly opts in to LLM check evaluation. Every finding must quote a verbatim substring present in redacted_input; missing quotes fail closed. Raw input content is never persisted.
+         */
+        post: operations["evaluate_llm_check"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/decisions/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List decision validity and per-scope compliance health (ADR-0163). */
+        get: operations["list_decisions_health"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/decisions/{ref}/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read validity and per-scope compliance health for the decision an id or slug names (ADR-0163). */
+        get: operations["get_decision_health"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/human-proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List pending human-authored decision proposals (ADR-0161). */
+        get: operations["list_human_proposals"];
+        put?: never;
+        /**
+         * Submit a human-authored decision proposal with optional contextual approval (ADR-0161).
+         * @description Records a human proposal in proposals.human_proposal. When approve_now is true and the caller holds decision.approve on every scope in scope_refs, approves the proposal and inserts version 1 of the decision in the same transaction while preserving the registry invariant that every decision version originates from a recorded approval.
+         */
+        post: operations["create_human_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/human-proposals/{id}/approval": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve or reject a human-authored decision proposal (ADR-0161). */
+        post: operations["approve_human_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/llm-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the tenant opt-in policy for LLM authoring assist and engine llm evaluation. */
+        get: operations["get_llm_policy"];
+        /** Update the tenant opt-in policy for LLM authoring assist and engine llm evaluation. */
+        put: operations["set_llm_policy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/freshness-policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List default check freshness thresholds by environment (ADR-0163). */
+        get: operations["list_freshness_policies"];
+        /** Set the default max_age_days freshness threshold for an environment (ADR-0163). */
+        put: operations["set_freshness_policy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent-pins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List SPKI public key pins registered for ipso-agent live verdict uploads (ADR-0162). */
+        get: operations["list_agent_pins"];
+        put?: never;
+        /** Register an Ed25519 or ECDSA P-256 SPKI pin for ipso-agent live verdict uploads (ADR-0162). */
+        post: operations["register_agent_pin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent-pins/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke an ipso-agent SPKI pin (ADR-0162). */
+        delete: operations["revoke_agent_pin"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/verdicts/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload live infrastructure drift verdicts signed by a registered ipso-agent pin (ADR-0162).
+         * @description Authenticated exclusively via X-Ipso-Agent-Pin, X-Ipso-Timestamp, and X-Ipso-Signature over the canonical payload digest. The tenant, repository, and environment are bound to the registered SPKI pin so an agent cannot upload verdicts outside its pinned scope.
+         */
+        post: operations["upload_live_verdicts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -731,7 +934,7 @@ export interface components {
          * @description The ipso check command that wrote the report.
          * @enum {string}
          */
-        VerdictCheck: "plan" | "ci" | "checkov" | "snyk" | "wiz" | "sonarqube" | "dependabot" | "pulumi" | "cloudformation" | "arm" | "depcruise" | "semgrep" | "archunit" | "importlinter" | "kyverno" | "gatekeeper" | "eslint";
+        VerdictCheck: "plan" | "ci" | "checkov" | "snyk" | "wiz" | "sonarqube" | "dependabot" | "pulumi" | "cloudformation" | "arm" | "depcruise" | "semgrep" | "archunit" | "importlinter" | "kyverno" | "gatekeeper" | "eslint" | "llm";
         CheckVerdict: {
             /** @description The EDR id of the decision. */
             decision_id: string;
@@ -743,17 +946,23 @@ export interface components {
             result: "pass" | "fail" | "waived" | "error";
             /** @description The number of denials. 0 for pass and error, at least 1 for fail and waived. */
             violations: number;
+            model_id?: string;
+            prompt_version?: string;
             /** @description The digests of the violations of the check, sorted and distinct (ADR-0059). Version 2 reports have the key on every verdict and version 1 reports on none, and the server enforces both. A pass and an error have none. A waived verdict has none or one for each violation. A failed verdict has none or every digest of the check, covered by the baseline of the runner or not, so at least as many as its violations. It is empty when the runner sent none: no baseline, a waiver, an error, or a violation that has no identity. */
             fingerprints?: components["schemas"]["Sha256"][];
         };
         /** @description The report of ADR-0030, version 1 or 2, exactly as the command wrote it. Version 2 adds the digests of the violations to each verdict (ADR-0122). Beyond the six keys every report has, each check has its own keys, and the server refuses a report with any other set. plan has plan_sha256. ci has commit_sha and evidence_sha256. checkov, snyk, wiz, sonarqube and dependabot have evidence_sha256. pulumi, cloudformation and arm have adapter, equal to the check, and input_sha256. depcruise, semgrep, archunit, importlinter, kyverno, gatekeeper and eslint have paths and their engine's version key (depcruise_version, semgrep_version, archunit_version, importlinter_version, kyverno_version, gator_version, eslint_version), which is empty when the engine did not run. */
         VerdictReport: {
             /** @enum {integer} */
-            report_version: 1 | 2;
+            report_version: 1 | 2 | 3;
             ipso_version: string;
             /** Format: date-time */
             evaluated_at: string;
             env: string;
+            live?: boolean;
+            target?: string;
+            model_id?: string;
+            prompt_version?: string;
             build_sha256: components["schemas"]["Sha256"];
             verdicts: components["schemas"]["CheckVerdict"][];
             plan_sha256?: components["schemas"]["Sha256"];
@@ -810,6 +1019,10 @@ export interface components {
             /** Format: uri */
             run_url: string;
             check: components["schemas"]["VerdictCheck"];
+            /** @enum {string} */
+            source_kind: "change" | "live";
+            model_id?: string;
+            prompt_version?: string;
             env: string;
             ipso_version: string;
             /**
@@ -1303,9 +1516,10 @@ export interface components {
             decision_id: string;
             decision_version: number;
             /** @enum {string} */
-            engine: "opa";
+            engine: "opa" | "llm";
             /** @enum {string} */
-            target: "agent-edit";
+            target: "agent-edit" | "diff" | "terraform-plan" | "kubernetes-manifest" | "json-snapshot" | "text";
+            max_age_days?: number;
             spec: Record<string, never>;
             rego: string;
             fixtures: unknown[];
@@ -1318,7 +1532,7 @@ export interface components {
         AcceptedCheck: {
             /**
              * Format: uuid
-             * @description The id of the drafted check. ipso deliver names the Rego file after it.
+             * @description The id of the drafted check. ipso deliver names the check file after it.
              */
             id: string;
             /** Format: uuid */
@@ -1329,10 +1543,18 @@ export interface components {
             decision_version: number;
             /** @description The version of the decision in force now. */
             version_in_force: number;
-            /** @description The stored Rego, byte for byte. Null when decision_version is not version_in_force. */
+            /** @enum {string} */
+            engine: "opa" | "llm";
+            target: string;
+            max_age_days?: number;
+            /** @description The stored Rego, byte for byte. Null when decision_version is not version_in_force or engine is llm. */
             rego: string | null;
             /** @description The sha256 of the rego in lowercase hex. Null when the rego is. */
             rego_sha256: string | null;
+            /** @description The stored engine llm check artifact when engine is llm and decision_version equals version_in_force. */
+            llm_spec?: Record<string, never> | null;
+            /** @description The sha256 of canonical llm_spec JSON in lowercase hex. */
+            llm_spec_sha256?: string | null;
         };
         AuditDecisions: {
             decisions: components["schemas"]["Decision"][];
@@ -1385,6 +1607,186 @@ export interface components {
                 /** Format: date-time */
                 expires_at: string;
             }[];
+        };
+        VerifiabilityRequest: {
+            title: string;
+            statement: string;
+            context?: string;
+            repo?: string;
+            env?: string;
+        };
+        CandidatePremise: {
+            id: string;
+            statement: string;
+            every: number;
+        };
+        CandidateCheck: {
+            /** @enum {string} */
+            engine: "opa" | "semgrep" | "checkov" | "kyverno" | "llm" | "llm-advisory";
+            target?: string;
+            ref?: string;
+            /** @enum {string} */
+            mode?: "block" | "warn" | "advise";
+            max_age_days?: number;
+            rego?: string;
+            llm_spec?: string;
+            rationale?: string;
+        };
+        VerifiabilityDiagnosis: {
+            /** @enum {string} */
+            classification: "verifiable" | "ambiguous" | "human_attestation_only";
+            summary: string;
+            suggestions: string[];
+            candidate_premises: components["schemas"]["CandidatePremise"][];
+            candidate_checks: components["schemas"]["CandidateCheck"][];
+            ai_generated: boolean;
+            model_id?: string;
+            prompt_version?: string;
+        };
+        LLMEvaluateRequest: {
+            decision_id?: string;
+            slug?: string;
+            /** @enum {string} */
+            target: "diff" | "terraform-plan" | "kubernetes-manifest" | "json-snapshot" | "text";
+            rubric: string;
+            fixtures?: Record<string, never>[];
+            redacted_input: string;
+            input_sha256?: components["schemas"]["Sha256"];
+        };
+        LLMFinding: {
+            message: string;
+            quote: string;
+            location?: string;
+        };
+        LLMEvaluateAnswer: {
+            /** @enum {string} */
+            verdict: "allow" | "deny";
+            summary?: string;
+            findings: components["schemas"]["LLMFinding"][];
+            model_id: string;
+            prompt_version: string;
+        };
+        HumanProposal: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            principal_id: string;
+            /** @enum {string} */
+            status: "pending";
+            payload: Record<string, never>;
+            /** Format: date-time */
+            captured_at: string;
+        };
+        CreateHumanProposalRequest: {
+            title: string;
+            statement: string;
+            context?: string;
+            owner?: string;
+            /** @enum {string} */
+            criticality?: "blocking" | "warning" | "advisory";
+            review_by?: string;
+            premises?: Record<string, never>[];
+            checks?: Record<string, never>[];
+            scope_refs: string[];
+            approve_now?: boolean;
+        };
+        CreateHumanProposalAnswer: {
+            /** Format: uuid */
+            proposal_id: string;
+            /** @enum {string} */
+            status: "pending" | "approved";
+            /** Format: uuid */
+            decision_id?: string;
+            slug?: string;
+        };
+        LLMPolicy: {
+            allow_authoring_assist: boolean;
+            allow_check_eval: boolean;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        FreshnessPolicyRequest: {
+            env: string;
+            max_age_days: number;
+        };
+        FreshnessPolicy: {
+            env: string;
+            max_age_days: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AgentPinRequest: {
+            name: string;
+            repo: string;
+            env: string;
+            public_key: string;
+        };
+        AgentPin: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            repo: string;
+            env: string;
+            pin_sha256: components["schemas"]["Sha256"];
+            /** Format: date-time */
+            created_at: string;
+        };
+        PremiseAlert: {
+            premise_id: string;
+            statement?: string;
+            reason_code: string;
+            detail?: string;
+        };
+        HealthVerdictRef: {
+            /** @enum {string} */
+            source_kind: "change" | "live";
+            command: string;
+            /** @enum {string} */
+            result: "pass" | "fail" | "waived" | "error";
+            violations: number;
+            /** Format: date-time */
+            evaluated_at: string;
+            stale: boolean;
+            max_age_days: number;
+            model_id?: string;
+            prompt_version?: string;
+        };
+        DecisionValidity: {
+            /** @enum {string} */
+            state: "valid" | "needs_review" | "superseded" | "expired";
+            status: string;
+            valid_from?: string;
+            valid_to?: string;
+            review_by?: string;
+            superseded_by?: string;
+            open_premise_reasons: components["schemas"]["PremiseAlert"][];
+        };
+        ScopeCompliance: {
+            repo?: string;
+            env?: string;
+            /** @enum {string} */
+            state: "compliant" | "violated" | "waived" | "stale" | "unverified";
+            latest_change?: components["schemas"]["HealthVerdictRef"];
+            latest_live?: components["schemas"]["HealthVerdictRef"];
+            waived?: boolean;
+            baselined?: boolean;
+        };
+        DecisionCompliance: {
+            /** @enum {string} */
+            state: "compliant" | "violated" | "waived" | "stale" | "unverified";
+            scopes: components["schemas"]["ScopeCompliance"][];
+        };
+        DecisionHealth: {
+            id: string;
+            slug: string;
+            title?: string;
+            criticality: string;
+            sensitive?: boolean;
+            validity: components["schemas"]["DecisionValidity"];
+            compliance: components["schemas"]["DecisionCompliance"];
+        };
+        DecisionHealthPage: {
+            decisions: components["schemas"]["DecisionHealth"][];
         };
     };
     responses: {
@@ -1553,6 +1955,8 @@ export interface operations {
     list_decisions: {
         parameters: {
             query?: {
+                /** @description Full-text search query over title, slug, statement, and tags. */
+                q?: string;
                 /** @description The valid time. Absent means now, and the answer echoes the time used. */
                 valid?: components["parameters"]["Valid"];
                 /** @description The transaction time. Absent means now, and the answer echoes the time used. */
@@ -2927,6 +3331,503 @@ export interface operations {
             400: components["responses"]["InvalidQuery"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    analyze_verifiability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifiabilityRequest"];
+            };
+        };
+        responses: {
+            /** @description Verifiability diagnosis and candidate checks. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerifiabilityDiagnosis"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    evaluate_llm_check: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LLMEvaluateRequest"];
+            };
+        };
+        responses: {
+            /** @description Verified LLM evaluation answer with model_id and prompt_version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LLMEvaluateAnswer"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            /** @description Upstream LLM provider or quote verification failure. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["Timeout"];
+        };
+    };
+    list_decisions_health: {
+        parameters: {
+            query?: {
+                /** @description Full-text search query over title, slug, statement, and tags. */
+                q?: string;
+                /** @description An owner/name, compared in lowercase. Absent matches every repository. */
+                repo?: components["parameters"]["VerdictRepo"];
+                env?: string;
+                /** @description The valid time. Absent means now, and the answer echoes the time used. */
+                valid?: components["parameters"]["Valid"];
+                /** @description The transaction time. Absent means now, and the answer echoes the time used. */
+                known?: components["parameters"]["Known"];
+                limit?: components["parameters"]["Limit"];
+                /** @description The last id of the previous page. */
+                before?: components["parameters"]["Before"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of decision health summaries, separating validity and compliance. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionHealthPage"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    get_decision_health: {
+        parameters: {
+            query?: {
+                /** @description An owner/name, compared in lowercase. Absent matches every repository. */
+                repo?: components["parameters"]["VerdictRepo"];
+                env?: string;
+                /** @description The valid time. Absent means now, and the answer echoes the time used. */
+                valid?: components["parameters"]["Valid"];
+                /** @description The transaction time. Absent means now, and the answer echoes the time used. */
+                known?: components["parameters"]["Known"];
+            };
+            header?: never;
+            path: {
+                /** @description A decision id or slug. */
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Health summary for the decision the ref names. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionHealth"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    list_human_proposals: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                /** @description The last id of the previous page. */
+                before?: components["parameters"]["Before"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of pending human proposals, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        human_proposals: components["schemas"]["HumanProposal"][];
+                    };
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    create_human_proposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateHumanProposalRequest"];
+            };
+        };
+        responses: {
+            /** @description The created proposal and optional approval. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateHumanProposalAnswer"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    approve_human_proposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description The approval that was recorded. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Approval"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    get_llm_policy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The tenant LLM policy. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LLMPolicy"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    set_llm_policy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LLMPolicy"];
+            };
+        };
+        responses: {
+            /** @description The updated tenant LLM policy. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LLMPolicy"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    list_freshness_policies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The configured freshness thresholds of the tenant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        freshness_policies: components["schemas"]["FreshnessPolicy"][];
+                    };
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    set_freshness_policy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FreshnessPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated freshness threshold. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FreshnessPolicy"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    list_agent_pins: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered agent pins of the tenant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agent_pins: components["schemas"]["AgentPin"][];
+                    };
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    register_agent_pin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentPinRequest"];
+            };
+        };
+        responses: {
+            /** @description The registered agent pin. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentPin"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    revoke_agent_pin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pin was revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    upload_live_verdicts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerdictUpload"];
+            };
+        };
+        responses: {
+            /** @description This exact signed live upload was already stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadAnswer"];
+                };
+            };
+            /** @description Stored. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadAnswer"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Timeout"];

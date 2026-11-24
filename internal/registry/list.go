@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -106,6 +107,58 @@ func Decisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, validAt, known
 			var body []byte
 			if err := rows.Scan(&d.ID, &d.Version, &body); err != nil {
 				return fmt.Errorf("read decisions: %w", err)
+			}
+			d.Body = body
+			decisions = append(decisions, d)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return decisions, nil
+}
+
+// SearchDecisions returns one page of decisions in force matching an optional full-text query q (ADR-0163).
+func SearchDecisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, q string, validAt, knownAt time.Time, page Page) ([]Decision, error) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return Decisions(ctx, db, tenant, validAt, knownAt, page)
+	}
+	if len(q) > 256 {
+		return nil, fmt.Errorf("%w: query exceeds 256 bytes", ErrInvalidQuery)
+	}
+	if err := checkList(tenant, page, validAt, knownAt); err != nil {
+		return nil, err
+	}
+	decisions := []Decision{}
+	err := readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT DISTINCT ON (d.decision_id) d.decision_id, d.version, d.body
+			FROM registry.decision_version_all d
+			WHERE d.tenant_id = ipso.current_tenant()
+			  AND d.valid_period @> $1::timestamptz
+			  AND d.sys_period @> $2::timestamptz
+			  AND ($3::uuid IS NULL OR d.decision_id < $3::uuid)
+			  AND (
+			      to_tsvector('simple',
+			          coalesce(d.body->>'title', '') || ' ' ||
+			          coalesce(d.body->>'slug', '') || ' ' ||
+			          coalesce(d.body->>'statement', '')) @@ plainto_tsquery('simple', $5)
+			      OR coalesce(d.body->>'slug', '') ILIKE '%' || $5 || '%'
+			      OR coalesce(d.body->>'title', '') ILIKE '%' || $5 || '%'
+			  )
+			ORDER BY d.decision_id DESC, d.version DESC
+			LIMIT $4`, validAt, knownAt, page.before(), page.Limit, q)
+		if err != nil {
+			return fmt.Errorf("search decisions: %w", err)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var d Decision
+			var body []byte
+			if err := rows.Scan(&d.ID, &d.Version, &body); err != nil {
+				return fmt.Errorf("search decisions: %w", err)
 			}
 			d.Body = body
 			decisions = append(decisions, d)

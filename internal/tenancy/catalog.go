@@ -30,11 +30,13 @@ const (
 	tenantTable       = "tenancy.tenant"
 	tenantKeyTable    = "tenancy.tenant_key"
 	sessionTable      = "identity.session"
+	cliSessionTable   = "identity.cli_session"
 	invitationTable   = "identity.invitation"
 	scimUserTable     = "identity.scim_user"
 	scimTokenTable    = "identity.scim_token"
 	tombstoneTable    = "tenancy.offboarding"
 	installationTable = "tenancy.installation"
+	agentPinTable     = "verification.agent_pin"
 	// A tracker binding holds sealed vendor credentials and is unique per connector across tenants,
 	// so an export leaves it out (ADR-0133).
 	trackerBindingTable = "integrations.tracker_binding"
@@ -117,7 +119,7 @@ func exported(all []Table) []Table {
 	var out []Table
 	for _, t := range all {
 		switch t.String() {
-		case tenantKeyTable, sessionTable, invitationTable, scimUserTable, scimTokenTable, tombstoneTable, installationTable, trackerBindingTable, chatDestinationTable, exportTable, exportPartTable:
+		case tenantKeyTable, sessionTable, cliSessionTable, invitationTable, scimUserTable, scimTokenTable, tombstoneTable, installationTable, agentPinTable, trackerBindingTable, chatDestinationTable, exportTable, exportPartTable:
 			continue
 		}
 		out = append(out, t)

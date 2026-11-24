@@ -5,6 +5,8 @@ import type {
   AgentProposal,
   CheckProposal,
   Decision,
+  DecisionHealth,
+  HumanProposal,
   PremiseHost,
   PremiseReason,
   Proposal,
@@ -273,6 +275,7 @@ export function verdicts(now: Date): StoredVerdict[] {
     event: 'push',
     workflow_ref: 'acme/payments/.github/workflows/ipso.yml@refs/heads/main',
     check: 'checkov' as const,
+    source_kind: 'change' as const,
     env: 'prod',
     ipso_version: '0.5.0',
     build_sha256: 'a'.repeat(64),
@@ -297,3 +300,101 @@ export function verdicts(now: Date): StoredVerdict[] {
     { ...base, id: uuid(598), decision_id: ulid(1), slug: 'use-tls', check_index: 4, mode: 'block', result: 'fail', violations: 1, waiver: { result: 'waived', expires_at: iso(new Date(now.getTime() + 30 * day)) }, run_id: 9909000, run_attempt: 1, run_url: 'https://github.com/acme/payments/actions/runs/9909000', evaluated_at: iso(new Date(now.getTime() - 140 * 60 * 60 * 1000)), recorded_at: iso(new Date(now.getTime() - 140 * 60 * 60 * 1000 + 4000)) },
   ];
 }
+
+export function humanProposals(now: Date): HumanProposal[] {
+  return [
+    {
+      id: uuid(450),
+      principal_id: uuid(901),
+      status: 'pending',
+      payload: {
+        slug: 'deny-default-egress',
+        title: 'Deny unrestricted internet egress on production firewalls',
+        statement: 'Production security groups must not allow 0.0.0.0/0 egress.',
+        criticality: 'blocking',
+      },
+      captured_at: iso(new Date(now.getTime() - 20 * 60 * 1000)),
+    },
+  ];
+}
+
+export function decisionHealthOf(decision: Decision, now: Date): DecisionHealth {
+  const rec = decision.body as Record<string, unknown>;
+  const slug = typeof rec.slug === 'string' ? rec.slug : decision.id;
+  const title = typeof rec.title === 'string' ? rec.title : slug;
+  const status = typeof rec.status === 'string' ? rec.status : 'accepted';
+  const criticality = typeof rec.criticality === 'string' ? rec.criticality : 'warning';
+  const openReasons = premiseReasons(now)
+    .filter((r) => r.decision_id === decision.id)
+    .map((r) => ({ premise_id: r.premise_id, reason_code: 'probe_failed', detail: r.url }));
+
+  const validityState: DecisionHealth['validity']['state'] =
+    status === 'superseded'
+      ? 'superseded'
+      : status === 'needs-review' || openReasons.length > 0
+        ? 'needs_review'
+        : 'valid';
+
+  if (decision.id === ids.useTls) {
+    return {
+      id: decision.id,
+      slug,
+      title,
+      criticality,
+      validity: {
+        state: validityState,
+        status,
+        valid_from: '2026-01-01',
+        review_by: '2027-02-01',
+        open_premise_reasons: openReasons,
+      },
+      compliance: {
+        state: 'compliant',
+        scopes: [
+          {
+            repo: 'acme/payments',
+            env: 'prod',
+            state: 'compliant',
+            latest_change: {
+              source_kind: 'change',
+              command: 'checkov',
+              result: 'pass',
+              violations: 0,
+              evaluated_at: iso(new Date(now.getTime() - 2 * 60 * 60 * 1000)),
+              stale: false,
+              max_age_days: 7,
+            },
+            latest_live: {
+              source_kind: 'live',
+              command: 'llm',
+              result: 'pass',
+              violations: 0,
+              evaluated_at: iso(new Date(now.getTime() - 60 * 60 * 1000)),
+              stale: false,
+              max_age_days: 7,
+              model_id: 'mistral-large-latest',
+              prompt_version: 'llmcheck-v1',
+            },
+          },
+        ],
+      },
+    };
+  }
+
+  return {
+    id: decision.id,
+    slug,
+    title,
+    criticality,
+    validity: {
+      state: validityState,
+      status,
+      open_premise_reasons: openReasons,
+    },
+    compliance: {
+      state: 'unverified',
+      scopes: [],
+    },
+  };
+}
+
