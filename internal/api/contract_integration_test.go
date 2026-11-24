@@ -264,7 +264,7 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 			}
 		}},
 		{"list_decisions_health", http.MethodGet, "/v1/decisions/health?valid=" + valid + "&known=" + known + "&limit=10", nil, func(t *testing.T, a map[string]any) {
-			if len(list(a, "decisions")) != 2 {
+			if len(list(a, "decisions")) != 3 {
 				t.Errorf("%v", a)
 			}
 		}},
