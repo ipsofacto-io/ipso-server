@@ -14,12 +14,15 @@ const (
 	// githubIssuer is the issuer identity.login stores for a GitHub sign-in. GitHub has no ID token and
 	// so no issuer claim, and this is the one place the string is made. A GitHub Enterprise Server
 	// would need an issuer of its own, because its numeric ids repeat those of github.com.
-	githubIssuer       = "https://github.com"
-	githubAuthorizeURL = githubIssuer + "/login/oauth/authorize"
-	githubTokenURL     = githubIssuer + "/login/oauth/access_token"
-	githubUserURL      = "https://api.github.com/user"
-	githubAPIVersion   = "2022-11-28"
-	maxGitHubAnswer    = 1 << 20
+	githubIssuer = "https://github.com"
+	// githubAuthorizationIssuer is the issuer GitHub puts in the RFC 9207 iss parameter. It is not the
+	// issuer stored on the login: the metadata at /.well-known/oauth-authorization-server names this one.
+	githubAuthorizationIssuer = "https://github.com/login/oauth"
+	githubAuthorizeURL        = githubIssuer + "/login/oauth/authorize"
+	githubTokenURL            = githubIssuer + "/login/oauth/access_token"
+	githubUserURL             = "https://api.github.com/user"
+	githubAPIVersion          = "2022-11-28"
+	maxGitHubAnswer           = 1 << 20
 )
 
 // githubProvider is GitHub's OAuth 2.0 sign-in. It returns no ID token, so the subject is the numeric
@@ -93,4 +96,4 @@ func (p *githubProvider) userID(ctx context.Context, accessToken string) (int64,
 	return user.ID, nil
 }
 
-func (p *githubProvider) issuerParameter() (string, bool) { return githubIssuer, false }
+func (p *githubProvider) issuerParameter() (string, bool) { return githubAuthorizationIssuer, true }
