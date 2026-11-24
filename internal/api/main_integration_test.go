@@ -4,9 +4,16 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/x509"
 	"database/sql"
+	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -16,6 +23,7 @@ import (
 
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/authn/authntest"
+	"github.com/ipsofacto-io/ipso-server/internal/llmgw"
 	"github.com/ipsofacto-io/ipso-server/internal/migrate"
 	"github.com/ipsofacto-io/ipso-server/internal/pgtest"
 )
@@ -75,12 +83,14 @@ type fixture struct {
 	org, repo, docs, prod uuid.UUID
 	tls, api, old, other  uuid.UUID
 	waiver                uuid.UUID
-	// proposal and agentProposal are the pending proposals of tenant A.
-	proposal, agentProposal uuid.UUID
+	// proposal, agentProposal and humanProposal are the pending proposals of tenant A.
+	proposal, agentProposal, humanProposal uuid.UUID
 	// checkProposal is the check drafted for the decision f.tls in tenant A.
 	checkProposal uuid.UUID
 	// uploads is the one verdict upload seeded for each tenant.
 	uploads map[uuid.UUID]uuid.UUID
+	// gateway is optional and enabled by tests that exercise LLM check evaluation.
+	gateway *llmgw.Gateway
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -187,6 +197,14 @@ func newFixture(t *testing.T) *fixture {
 		if tenant == tenantA {
 			f.checkProposal = check
 		}
+		human := f.insert(t, `
+			INSERT INTO proposals.human_proposal (tenant_id, principal_id, payload)
+			VALUES ($1, $2, '{"title":"Deny default egress","statement":"Deny 0.0.0.0/0 egress"}')
+			RETURNING id`,
+			tenant, people[tenant])
+		if tenant == tenantA {
+			f.humanProposal = human
+		}
 	}
 	f.agentProposal = f.insert(t, `INSERT INTO proposals.agent_proposal (tenant_id, principal_id, payload) VALUES ($1, $2, '{"title":"Pin API versions"}') RETURNING id`, tenantA, agent)
 	f.uploads = map[uuid.UUID]uuid.UUID{}
@@ -243,6 +261,51 @@ func clock(t *testing.T, db *sql.DB) time.Time {
 	return now
 }
 
+// enableLLM wires a loopback LLM provider and enables check evaluation for tenant A without enabling
+// LLM authoring assist unless requested, so deterministic Pact fixtures stay unaffected.
+func (f *fixture) enableLLM(t *testing.T) {
+	t.Helper()
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model":   "served-model",
+			"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": `{"verdict":"pass","findings":[]}`}}},
+			"usage":   map[string]int{"prompt_tokens": 20, "completion_tokens": 5},
+		})
+	}))
+	t.Cleanup(provider.Close)
+	t.Setenv("IPSO_LLM_MISTRAL", "unused-default-key")
+	t.Setenv("IPSO_LLM_LOCAL", "test-key")
+	gw, err := llmgw.New(llmgw.Config{
+		Routes:        []llmgw.Route{{Name: "mistral", Provider: llmgw.Mistral, Model: "mistral-medium-latest", KeyEnv: "IPSO_LLM_MISTRAL"}},
+		Default:       []string{"mistral"},
+		MonthlyTokens: 1_000_000,
+		Tenants: map[string]llmgw.Tenant{tenantA.String(): {BYOK: []llmgw.Route{
+			{Name: "local", Provider: llmgw.OpenAI, Endpoint: provider.URL, Model: "served-model", KeyEnv: "IPSO_LLM_LOCAL", AllowNonEU: true},
+		}}},
+	}, llmgw.PGLedger{DB: f.db}, nil, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("build llm gateway: %v", err)
+	}
+	f.gateway = gw
+	f.exec(t, `INSERT INTO llm.tenant_policy (tenant_id, allow_authoring_assist, allow_check_eval) VALUES ($1, false, true)
+		ON CONFLICT (tenant_id) DO UPDATE SET allow_check_eval = true`, tenantA)
+}
+
+func testAgentPublicKey(t *testing.T) ([]byte, string) {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return der, string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
+}
+
 // handler is the API as the binary will build it: the issuer's metadata and keys discovered over
 // TLS, and tokens mapped to callers by subject.
 func (f *fixture) handler(t *testing.T, limits Limits) http.Handler {
@@ -265,6 +328,7 @@ func (f *fixture) handlerWith(t *testing.T, limits Limits, sessions *Sessions) h
 			return caller, ok
 		},
 		Policy:   testPolicy(t),
+		Gateway:  f.gateway,
 		Sessions: sessions,
 		Limits:   limits,
 		// A read that names no transaction time is read at the time of the database that stamps the rows, so a row

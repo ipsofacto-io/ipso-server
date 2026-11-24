@@ -1660,7 +1660,7 @@ export interface components {
         };
         LLMEvaluateAnswer: {
             /** @enum {string} */
-            verdict: "allow" | "deny";
+            verdict: "pass" | "fail" | "error";
             summary?: string;
             findings: components["schemas"]["LLMFinding"][];
             model_id: string;
@@ -1774,6 +1774,7 @@ export interface components {
         DecisionCompliance: {
             /** @enum {string} */
             state: "compliant" | "violated" | "waived" | "stale" | "unverified";
+            note?: string;
             scopes: components["schemas"]["ScopeCompliance"][];
         };
         DecisionHealth: {

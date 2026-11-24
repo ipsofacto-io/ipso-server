@@ -327,15 +327,11 @@ CREATE POLICY migrate_delete ON verification.freshness_policy FOR DELETE TO ipso
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON verification.freshness_policy TO ipso_app;
 
--- 8. Full-text GIN indexes on decision versions and history for topic queries (ADR-0163).
+-- 8. Full-text GIN index on current decision versions for topic queries (ADR-0163).
+-- fastupdate is off so bulk writes do not defer GIN pending-list cleanup onto concurrent reads.
 CREATE INDEX decision_version_fts ON registry.decision_version
     USING gin (to_tsvector('simple',
         coalesce(body->>'title', '') || ' ' ||
         coalesce(body->>'slug', '') || ' ' ||
-        coalesce(body->>'statement', '')));
-
-CREATE INDEX decision_version_history_fts ON registry.decision_version_history
-    USING gin (to_tsvector('simple',
-        coalesce(body->>'title', '') || ' ' ||
-        coalesce(body->>'slug', '') || ' ' ||
-        coalesce(body->>'statement', '')));
+        coalesce(body->>'statement', '')))
+    WITH (fastupdate = off);

@@ -16,7 +16,7 @@ var ErrOptInRequired = errors.New("llm: tenant opt-in is required")
 type TenantPolicy struct {
 	AllowAuthoringAssist bool      `json:"allow_authoring_assist"`
 	AllowCheckEval       bool      `json:"allow_check_eval"`
-	UpdatedAt            time.Time `json:"updated_at,omitempty"`
+	UpdatedAt            time.Time `json:"updated_at,omitzero"`
 }
 
 // GetTenantPolicy reads the tenant's LLM opt-in settings, defaulting to false/false when unset.

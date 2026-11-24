@@ -3913,7 +3913,7 @@ components:
       properties:
         verdict:
           type: string
-          enum: [allow, deny]
+          enum: [pass, fail, error]
         summary:
           type: string
         findings:
@@ -4172,6 +4172,8 @@ components:
         state:
           type: string
           enum: [compliant, violated, waived, stale, unverified]
+        note:
+          type: string
         scopes:
           type: array
           items:

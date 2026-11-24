@@ -129,13 +129,13 @@ func TestAcceptedChecksOfARepository(t *testing.T) {
 			t.Fatalf("ids %v, want %v", got, want)
 		}
 		want := map[uuid.UUID]map[string]any{
-			ownerA:   {"decision_id": owner.String(), "edr_id": edrOwner, "decision_version": 1.0, "version_in_force": 1.0, "rego": rule("a"), "rego_sha256": digestOf(rule("a"))},
-			ownerB:   {"decision_id": owner.String(), "edr_id": edrOwner, "decision_version": 1.0, "version_in_force": 1.0, "rego": rule("b"), "rego_sha256": digestOf(rule("b"))},
-			plainA:   {"decision_id": plain.String(), "edr_id": nil, "decision_version": 1.0, "version_in_force": 1.0, "rego": rule("plain"), "rego_sha256": digestOf(rule("plain"))},
-			oddA:     {"decision_id": notULID.String(), "edr_id": nil, "decision_version": 1.0, "version_in_force": 1.0, "rego": rule("odd"), "rego_sha256": digestOf(rule("odd"))},
-			docsA:    {"decision_id": docs.String(), "edr_id": edrDocs, "decision_version": 1.0, "version_in_force": 1.0, "rego": rule("docs"), "rego_sha256": digestOf(rule("docs"))},
-			heldA:    {"decision_id": moved.String(), "edr_id": edrVersions, "decision_version": 1.0, "version_in_force": 2.0, "rego": nil, "rego_sha256": nil},
-			currentA: {"decision_id": moved.String(), "edr_id": edrVersions, "decision_version": 2.0, "version_in_force": 2.0, "rego": rule("current"), "rego_sha256": digestOf(rule("current"))},
+			ownerA:   {"decision_id": owner.String(), "edr_id": edrOwner, "decision_version": 1.0, "version_in_force": 1.0, "engine": "opa", "target": "agent-edit", "rego": rule("a"), "rego_sha256": digestOf(rule("a"))},
+			ownerB:   {"decision_id": owner.String(), "edr_id": edrOwner, "decision_version": 1.0, "version_in_force": 1.0, "engine": "opa", "target": "agent-edit", "rego": rule("b"), "rego_sha256": digestOf(rule("b"))},
+			plainA:   {"decision_id": plain.String(), "edr_id": nil, "decision_version": 1.0, "version_in_force": 1.0, "engine": "opa", "target": "agent-edit", "rego": rule("plain"), "rego_sha256": digestOf(rule("plain"))},
+			oddA:     {"decision_id": notULID.String(), "edr_id": nil, "decision_version": 1.0, "version_in_force": 1.0, "engine": "opa", "target": "agent-edit", "rego": rule("odd"), "rego_sha256": digestOf(rule("odd"))},
+			docsA:    {"decision_id": docs.String(), "edr_id": edrDocs, "decision_version": 1.0, "version_in_force": 1.0, "engine": "opa", "target": "agent-edit", "rego": rule("docs"), "rego_sha256": digestOf(rule("docs"))},
+			heldA:    {"decision_id": moved.String(), "edr_id": edrVersions, "decision_version": 1.0, "version_in_force": 2.0, "engine": "opa", "target": "agent-edit", "rego": nil, "rego_sha256": nil},
+			currentA: {"decision_id": moved.String(), "edr_id": edrVersions, "decision_version": 2.0, "version_in_force": 2.0, "engine": "opa", "target": "agent-edit", "rego": rule("current"), "rego_sha256": digestOf(rule("current"))},
 		}
 		for _, raw := range items {
 			item := raw.(map[string]any)

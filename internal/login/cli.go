@@ -7,15 +7,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"html"
+	"html/template"
 	"io"
 	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -123,13 +121,16 @@ func validLoopbackCallback(raw string) bool {
 	return err == nil && port >= 1 && port <= 65535
 }
 
+func isBase64URLByte(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_'
+}
+
 func validBase64URLToken(s string, minLen, maxLen int) bool {
 	if len(s) < minLen || len(s) > maxLen {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+		if !isBase64URLByte(s[i]) {
 			return false
 		}
 	}
@@ -228,9 +229,18 @@ func (s *Service) cliStart(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusSeeOther)
 }
 
+type cliProviderLink struct {
+	Href string
+	ID   string
+	Kind string
+}
+
+var cliProviderPickerTmpl = template.Must(template.New("cli_picker").Parse(
+	`<!doctype html><html><head><meta charset="utf-8"><title>Sign in to ipso CLI</title></head><body><h1>Sign in to ipso CLI</h1><ul>{{range .}}<li><a href="{{.Href}}">{{.ID}} ({{.Kind}})</a></li>{{end}}</ul></body></html>`,
+))
+
 func (s *Service) writeCLIProviderPicker(w http.ResponseWriter, redirectURI, state, challenge string) {
-	var b strings.Builder
-	b.WriteString("<!doctype html><html><head><meta charset=\"utf-8\"><title>Sign in to ipso CLI</title></head><body><h1>Sign in to ipso CLI</h1><ul>")
+	items := make([]cliProviderLink, 0, len(s.listed))
 	for _, p := range s.listed {
 		v := url.Values{}
 		v.Set("redirect_uri", redirectURI)
@@ -238,13 +248,15 @@ func (s *Service) writeCLIProviderPicker(w http.ResponseWriter, redirectURI, sta
 		v.Set("code_challenge", challenge)
 		v.Set("code_challenge_method", "S256")
 		v.Set("provider", p.ID)
-		href := "/auth/cli/start?" + v.Encode()
-		fmt.Fprintf(&b, `<li><a href="%s">%s (%s)</a></li>`, html.EscapeString(href), html.EscapeString(p.ID), html.EscapeString(p.Kind))
+		items = append(items, cliProviderLink{
+			Href: "/auth/cli/start?" + v.Encode(),
+			ID:   p.ID,
+			Kind: p.Kind,
+		})
 	}
-	b.WriteString("</ul></body></html>")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, b.String())
+	_ = cliProviderPickerTmpl.Execute(w, items)
 }
 
 func (s *Service) finishCLISignIn(w http.ResponseWriter, r *http.Request, ctx context.Context, id string, who subject, a attempt, now time.Time) {

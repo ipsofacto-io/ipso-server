@@ -36,9 +36,10 @@ const (
 
 // The tables the application never exports or restores, whatever the schema holds.
 var notRestored = map[string]bool{
-	"tenancy.tenant":     true,
-	"tenancy.tenant_key": true,
-	"identity.session":   true,
+	"tenancy.tenant":       true,
+	"tenancy.tenant_key":   true,
+	"identity.session":     true,
+	"identity.cli_session": true,
 	// An invitation holds a credential hash and is used once, so it is never in an archive (ADR-0127).
 	"identity.invitation": true,
 	// A SCIM user holds the filter key, and a SCIM token holds a credential hash (ADR-0131).
@@ -46,6 +47,8 @@ var notRestored = map[string]bool{
 	"identity.scim_token": true,
 	// A binding is unique across tenants, so a restore into a fresh tenant would find it taken (ADR-0101).
 	"tenancy.installation": true,
+	// Agent public-key pins bind live runners to a live installation and are re-pinned by operators (ADR-0162).
+	"verification.agent_pin": true,
 	// A tracker binding holds sealed credentials and is unique across tenants (ADR-0133).
 	"integrations.tracker_binding": true,
 	// A chat destination holds a sealed webhook URL (ADR-0138).
