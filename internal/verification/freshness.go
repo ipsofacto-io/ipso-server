@@ -52,7 +52,7 @@ func ListFreshnessPolicies(ctx context.Context, db *sql.DB, tenant uuid.UUID) ([
 
 // SetFreshnessPolicy upserts a freshness threshold inside caller's READ COMMITTED tenant transaction.
 func SetFreshnessPolicy(ctx context.Context, tx *sql.Tx, tenant uuid.UUID, env string, maxAgeDays int) (FreshnessPolicy, error) {
-	env = strings.TrimSpace(env)
+	env = strings.ToLower(strings.TrimSpace(env))
 	if tenant == uuid.Nil || !plain(env, 0, maxEnvBytes) || maxAgeDays < 1 || maxAgeDays > 365 {
 		return FreshnessPolicy{}, invalid("env must be short text and max_age_days between 1 and 365")
 	}
