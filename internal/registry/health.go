@@ -95,9 +95,9 @@ func ComputeValidityAndCompliance(
 	}
 	_ = json.Unmarshal(body, &parsed)
 
-	edrID := parsed.ID
-	if edrID == "" {
-		edrID = id.String()
+	recordID := id.String()
+	if id == uuid.Nil && parsed.ID != "" {
+		recordID = parsed.ID
 	}
 	status := parsed.Status
 	if status == "" {
@@ -319,7 +319,7 @@ func ComputeValidityAndCompliance(
 	}
 
 	return mcptools.DecisionHealth{
-		ID:          edrID,
+		ID:          recordID,
 		Slug:        parsed.Slug,
 		Title:       title,
 		Criticality: crit,

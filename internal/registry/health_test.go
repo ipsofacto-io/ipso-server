@@ -40,6 +40,9 @@ func TestComputeValidityAndComplianceSeparatesValidityComplianceAndStaleness(t *
 			}},
 			false, nil, "prod", now,
 		)
+		if h.ID != did.String() {
+			t.Fatalf("expected registry UUID id %s for keyset pagination, got %s", did, h.ID)
+		}
 		if h.Validity.State != "valid" || h.Compliance.State != "compliant" {
 			t.Fatalf("unexpected health: %+v", h)
 		}
