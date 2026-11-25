@@ -3587,18 +3587,25 @@ components:
           minimum: 1
         engine:
           type: string
-          enum: [opa, llm]
+          enum: [opa, llm, semgrep]
         target:
+          type: [string, 'null']
+          enum: [agent-edit, diff, terraform-plan, kubernetes-manifest, json-snapshot, text, null]
+          description: Null for a Semgrep template check.
+        ref:
           type: string
-          enum: [agent-edit, diff, terraform-plan, kubernetes-manifest, json-snapshot, text]
+          pattern: '^ipso:[a-z0-9-]+/[a-z0-9-]+$'
+          description: The built-in template a template check names (ADR-0165). Absent for a Rego or llm check.
         max_age_days:
           type: integer
           minimum: 1
           maximum: 365
         spec:
           type: object
+          description: The rule of a Rego check, the llm specification of an llm check, or the catalog entry of a template check with its ref, title, and resources or languages.
         rego:
-          type: string
+          type: [string, 'null']
+          description: Null for a template check.
         fixtures:
           type: array
         repaired:
@@ -3636,16 +3643,21 @@ components:
           description: The version of the decision in force now.
         engine:
           type: string
-          enum: [opa, llm]
+          enum: [opa, llm, semgrep]
         target:
+          type: [string, 'null']
+          description: Null for a Semgrep template check.
+        ref:
           type: string
+          pattern: '^ipso:[a-z0-9-]+/[a-z0-9-]+$'
+          description: The built-in template of a template check, which ipso deliver writes as the ref of the entry with no file (ADR-0165). Absent for a Rego or llm check, and when decision_version is not version_in_force.
         max_age_days:
           type: integer
           minimum: 1
           maximum: 365
         rego:
           type: [string, 'null']
-          description: The stored Rego, byte for byte. Null when decision_version is not version_in_force or engine is llm.
+          description: The stored Rego, byte for byte. Null when decision_version is not version_in_force, engine is llm, or the check is a template check.
         rego_sha256:
           type: [string, 'null']
           pattern: '^[0-9a-f]{64}$'

@@ -230,6 +230,22 @@ export function checkProposals(now: Date): CheckProposal[] {
       prompt_version: 'check-draft-v2',
       captured_at: iso(new Date(now.getTime() - 50 * 60 * 1000)),
     },
+    {
+      id: uuid(502),
+      status: 'pending',
+      decision_id: ids.noEval,
+      decision_version: 1,
+      engine: 'semgrep',
+      target: null,
+      ref: 'ipso:javascript/no-eval',
+      spec: { ref: 'ipso:javascript/no-eval', title: 'JavaScript and TypeScript do not evaluate strings', languages: ['javascript', 'typescript'] },
+      rego: null,
+      fixtures: [],
+      repaired: false,
+      model_id: 'mistral-large-latest',
+      prompt_version: 'check-template-v1',
+      captured_at: iso(new Date(now.getTime() - 55 * 60 * 1000)),
+    },
   ];
 }
 

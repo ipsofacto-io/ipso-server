@@ -87,6 +87,18 @@ func TestEvals(t *testing.T) {
 	for name, metric := range checks {
 		metrics[name] = metric
 	}
+	templateCases, err := LoadTemplateCases("testdata/template-decisions.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chosen, err := TemplateSuite(t, t.Context(), cassette.Complete, templateCases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("templates scores:\n%s", Table(chosen))
+	for name, metric := range chosen {
+		metrics[name] = metric
+	}
 	t.Logf("scores:\n%s", Table(metrics))
 
 	scores := metrics.Scores()

@@ -231,17 +231,29 @@ describe('the inbox', () => {
     expect(await screen.findByText('Services read secrets from the vault, not from environment files')).toBeInTheDocument();
     expect(await screen.findByText('Public endpoints need rate limits')).toBeInTheDocument();
     expect(await screen.findByText('Check for decision 0194f2a0, version 2')).toBeInTheDocument();
-    expect(screen.getAllByText('Pending approval')).toHaveLength(4);
-    expect(screen.getAllByText('AI-generated')).toHaveLength(3);
-    expect(screen.getAllByText('A person approves it, and it does not block a merge.')).toHaveLength(3);
+    expect(screen.getAllByText('Pending approval')).toHaveLength(5);
+    expect(screen.getAllByText('AI-generated')).toHaveLength(4);
+    expect(screen.getAllByText('A person approves it, and it does not block a merge.')).toHaveLength(4);
     const queue = (name: string) => screen.getByRole('heading', { name }).closest('section') as HTMLElement;
     expect(within(queue('Pull requests')).getAllByText('AI-generated')).toHaveLength(2);
-    expect(within(queue('Drafted checks')).getByText('AI-generated')).toBeInTheDocument();
+    expect(within(queue('Drafted checks')).getAllByText('AI-generated')).toHaveLength(2);
     expect(within(queue('Coding agents')).queryByText('AI-generated')).not.toBeInTheDocument();
     expect(screen.getAllByText('mistral-large-latest, prompt pr-decision-v3')).toHaveLength(2);
     expect(screen.getByText('mistral-large-latest, prompt check-draft-v2')).toBeInTheDocument();
     expect(screen.getByText(/Approving a drafted check records the answer only/)).toBeInTheDocument();
     expect(stub.requests.every((request) => request.startsWith('GET '))).toBe(true);
+  });
+
+  it('shows a template check as the template the model chose, with no policy and no fixtures', async () => {
+    renderAndStub('/inbox');
+    const card = (await screen.findByText('Check for decision 0194f2a0, version 1')).closest('li') as HTMLElement;
+    expect(within(card).getByText('JavaScript and TypeScript do not evaluate strings')).toBeInTheDocument();
+    expect(within(card).getByText('ipso:javascript/no-eval')).toBeInTheDocument();
+    expect(within(card).getByText('javascript, typescript')).toBeInTheDocument();
+    expect(within(card).getByText('mistral-large-latest, prompt check-template-v1')).toBeInTheDocument();
+    expect(within(card).getByText(/The model chose this built-in template of ipso/)).toBeInTheDocument();
+    expect(within(card).queryByText('Policy')).not.toBeInTheDocument();
+    expect(within(card).queryByText('Fixtures')).not.toBeInTheDocument();
   });
 
   it('treats a draft as text: no script runs, no link to a scheme that is not https, no author', async () => {

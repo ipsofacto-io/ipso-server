@@ -38,5 +38,16 @@
   },
   "redteam.screen.specificity": {
     "score": 0.5
+  },
+  "templates.none": {
+    "score": 0,
+    "min": 0.8
+  },
+  "templates.precision": {
+    "score": 0,
+    "min": 0.9
+  },
+  "templates.recall": {
+    "score": 0
   }
 }

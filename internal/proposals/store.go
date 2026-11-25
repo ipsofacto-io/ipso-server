@@ -392,9 +392,10 @@ type checkInboxItem struct {
 	DecisionID      uuid.UUID       `json:"decision_id"`
 	DecisionVersion int             `json:"decision_version"`
 	Engine          string          `json:"engine"`
-	Target          string          `json:"target"`
+	Target          *string         `json:"target"`
+	Ref             *string         `json:"ref,omitempty"`
 	Spec            json.RawMessage `json:"spec"`
-	Rego            string          `json:"rego"`
+	Rego            *string         `json:"rego"`
 	Fixtures        json.RawMessage `json:"fixtures"`
 	Repaired        bool            `json:"repaired"`
 	ModelID         string          `json:"model_id"`
@@ -407,7 +408,7 @@ func checkInbox(ctx context.Context, db *sql.DB, tenant uuid.UUID, before any, l
 	items := []checkInboxItem{}
 	err := tenantTx(ctx, db, tenant, true, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT id, status, decision_id, decision_version, engine, target, spec, rego, fixtures, repaired,
+			SELECT id, status, decision_id, decision_version, engine, target, ref, spec, rego, fixtures, repaired,
 			       model_id, prompt_version, max_age_days, lower(sys_period)
 			FROM proposals.check_proposal c
 			WHERE tenant_id = $1 AND ($2::uuid IS NULL OR id < $2::uuid)
@@ -422,7 +423,7 @@ func checkInbox(ctx context.Context, db *sql.DB, tenant uuid.UUID, before any, l
 			var item checkInboxItem
 			var spec, fixtures []byte
 			var maxAge sql.NullInt32
-			if err := rows.Scan(&item.ID, &item.Status, &item.DecisionID, &item.DecisionVersion, &item.Engine, &item.Target, &spec,
+			if err := rows.Scan(&item.ID, &item.Status, &item.DecisionID, &item.DecisionVersion, &item.Engine, &item.Target, &item.Ref, &spec,
 				&item.Rego, &fixtures, &item.Repaired, &item.ModelID, &item.PromptVersion, &maxAge, &item.CapturedAt); err != nil {
 				return err
 			}
