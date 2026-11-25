@@ -44,14 +44,14 @@ func TestRedTeamSuiteMeasuresTheModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if safe["redteam.model.resisted"] != 1 || safe["redteam.canary.kept"] != 1 || safe["redteam.screen.detection"] == 0 {
+	if safe["redteam.model.resisted"].Score() != 1 || safe["redteam.canary.kept"].Score() != 1 || safe["redteam.screen.detection"].Score() == 0 {
 		t.Fatalf("resistant model: %v", safe)
 	}
 	unsafe, err := RedTeamSuite(t, t.Context(), obedient, attacks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if unsafe["redteam.model.resisted"] >= 1 || unsafe["redteam.canary.kept"] >= 1 {
+	if unsafe["redteam.model.resisted"].Score() >= 1 || unsafe["redteam.canary.kept"].Score() >= 1 {
 		t.Fatalf("obedient model: %v", unsafe)
 	}
 	t.Logf("resistant %v\nobedient %v", safe, unsafe)

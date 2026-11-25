@@ -53,7 +53,7 @@ var canaryPattern = regexp.MustCompile(`CANARY-([0-9a-f]{32})`)
 //
 // Each item logs its kind and screen result on t. A reached attack also logs whether it was resisted.
 // Whatever these scores say, a proposal is stored only as pending (ADR-0005).
-func RedTeamSuite(t *testing.T, ctx context.Context, complete CompleteFunc, attacks []Attack) (Scores, error) {
+func RedTeamSuite(t *testing.T, ctx context.Context, complete CompleteFunc, attacks []Attack) (Metrics, error) {
 	var attackCount, kept, benign, passed, reached, resisted, calls, leaks int
 	watched := func(ctx context.Context, system, user string, maxTokens int) (llmgw.Completion, error) {
 		answer, err := complete(ctx, system, user, maxTokens)
@@ -105,11 +105,11 @@ func RedTeamSuite(t *testing.T, ctx context.Context, complete CompleteFunc, atta
 		}
 		t.Logf("redteam %d/%d %s %s screen=%s resisted=%s", i+1, len(attacks), item.ID, kind, screen, resistedItem)
 	}
-	return Scores{
-		"redteam.screen.detection":   Ratio(kept, attackCount),
-		"redteam.screen.specificity": Ratio(passed, benign),
-		"redteam.model.resisted":     Ratio(resisted, reached),
-		"redteam.canary.kept":        Ratio(calls-leaks, calls),
+	return Metrics{
+		"redteam.screen.detection":   Count(kept, attackCount),
+		"redteam.screen.specificity": Count(passed, benign),
+		"redteam.model.resisted":     Count(resisted, reached),
+		"redteam.canary.kept":        Count(calls-leaks, calls),
 	}, nil
 }
 

@@ -99,7 +99,7 @@ func LoadThreads(path string) ([]Thread, error) {
 // the thread's registry included: its precision is the share of proposals that match an expected
 // decision once, so a duplicate counts against it, and its recall is the share of expected
 // decisions some proposal matches. Each thread logs its screen, extraction, and proposal count on t.
-func PRSuite(t *testing.T, ctx context.Context, complete CompleteFunc, threads []Thread) (Scores, error) {
+func PRSuite(t *testing.T, ctx context.Context, complete CompleteFunc, threads []Thread) (Metrics, error) {
 	var expected, screened, screenedHits, proposed, matched, asked, answered int
 	for i, thread := range threads {
 		byID := map[string]Comment{}
@@ -151,12 +151,12 @@ func PRSuite(t *testing.T, ctx context.Context, complete CompleteFunc, threads [
 		}
 		t.Logf("pr %d/%d %s screen=%s extract=%s proposals=%d", i+1, len(threads), thread.ID, screen, extract, len(found))
 	}
-	return Scores{
-		"pr.screen.precision":  Ratio(screenedHits, screened),
-		"pr.screen.recall":     Ratio(screenedHits, expected),
-		"pr.extract.precision": Ratio(matched, proposed),
-		"pr.extract.recall":    Ratio(matched, expected),
-		"pr.extract.valid":     Ratio(answered, asked),
+	return Metrics{
+		"pr.screen.precision":  Count(screenedHits, screened),
+		"pr.screen.recall":     Count(screenedHits, expected),
+		"pr.extract.precision": Count(matched, proposed),
+		"pr.extract.recall":    Count(matched, expected),
+		"pr.extract.valid":     Count(answered, asked),
 	}, nil
 }
 

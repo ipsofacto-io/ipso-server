@@ -1,7 +1,8 @@
-// Package evals scores the LLM pipelines on golden datasets (ADR-0082). A run replays recorded
-// model answers, so it is deterministic and needs no key, and `go test ./...` fails when a score
-// drops more than three points below the committed baseline. A live run records fresh answers
-// through the LLM gateway. Every dataset is synthetic: no customer text and no real secret.
+// Package evals scores the LLM pipelines on golden datasets (ADR-0082, ADR-0164). A run replays
+// recorded model answers, so it is deterministic and needs no key, and `go test ./...` fails when
+// a score drops by more than one case below the committed baseline or under its floor. A live run
+// records fresh answers through the LLM gateway. Every dataset is synthetic: no customer text and
+// no real secret.
 package evals
 
 import (
@@ -16,8 +17,36 @@ import (
 	"time"
 )
 
-// Tolerance is the largest drop below the baseline that passes: three points on a scale of 100.
-const Tolerance = 0.03
+// ToleranceCases is the largest drop below the baseline that passes: one case of the metric's denominator.
+const ToleranceCases = 1
+
+// Metric is one ratio scored on a dataset: Passed of Total cases.
+type Metric struct {
+	Passed int
+	Total  int
+}
+
+// Count builds a Metric for passed of total cases.
+func Count(passed, total int) Metric {
+	return Metric{Passed: passed, Total: total}
+}
+
+// Score returns Passed over Total, rounded to four decimal places, and 0 for an empty Total.
+func (m Metric) Score() float64 {
+	return Ratio(m.Passed, m.Total)
+}
+
+// Metrics holds each metric of a run with its case counts.
+type Metrics map[string]Metric
+
+// Scores returns the rounded ratio of each metric, for baseline updates, reports, and history.
+func (m Metrics) Scores() Scores {
+	out := make(Scores, len(m))
+	for name, metric := range m {
+		out[name] = metric.Score()
+	}
+	return out
+}
 
 // Scores holds each metric of a run, from 0 to 1.
 type Scores map[string]float64
@@ -33,30 +62,40 @@ type Entry struct {
 type Baseline map[string]Entry
 
 // Gate returns one line for each metric that fails: missing from the run or the baseline, more
-// than Tolerance below the baseline, or below its floor. None means the run passes.
-func Gate(baseline Baseline, scores Scores) []string {
+// than ToleranceCases below the baseline, or below its floor. None means the run passes.
+func Gate(baseline Baseline, metrics Metrics) []string {
 	var failures []string
 	for _, name := range sortedKeys(baseline) {
 		entry := baseline[name]
-		score, ok := scores[name]
+		metric, ok := metrics[name]
 		if !ok {
 			failures = append(failures, fmt.Sprintf("%s: the run has no score", name))
 			continue
 		}
-		// Scores are rounded to four places, so an exact three-point drop still passes.
-		if round(entry.Score-score) > Tolerance {
-			failures = append(failures, fmt.Sprintf("%s: %.4f is more than %.0f points below the baseline %.4f", name, score, Tolerance*100, entry.Score))
+		if dropsMoreThanTolerance(entry.Score, metric) {
+			failures = append(failures, fmt.Sprintf("%s: %.4f (%d/%d) is more than %d case below the baseline %.4f", name, metric.Score(), metric.Passed, metric.Total, ToleranceCases, entry.Score))
 		}
+		score := metric.Score()
 		if entry.Min != nil && score < *entry.Min {
 			failures = append(failures, fmt.Sprintf("%s: %.4f is below the floor %.4f", name, score, *entry.Min))
 		}
 	}
-	for _, name := range sortedKeys(scores) {
+	for _, name := range sortedKeys(metrics) {
 		if _, ok := baseline[name]; !ok {
 			failures = append(failures, fmt.Sprintf("%s: not in the baseline; run with -update and review the diff", name))
 		}
 	}
 	return failures
+}
+
+func dropsMoreThanTolerance(baselineScore float64, m Metric) bool {
+	if m.Passed < 0 || m.Total < 0 || m.Passed > m.Total {
+		return true
+	}
+	if m.Total == 0 {
+		return baselineScore > 0
+	}
+	return Ratio(min(m.Passed+ToleranceCases, m.Total), m.Total) < baselineScore
 }
 
 // Ratio returns part over whole, rounded, and 0 for an empty whole.
@@ -122,11 +161,12 @@ func AppendHistory(path string, at time.Time, scores Scores) error {
 	return file.Close()
 }
 
-// Table renders the scores as aligned lines for a test log.
-func Table(scores Scores) string {
+// Table renders the metrics as aligned lines for a test log.
+func Table(metrics Metrics) string {
 	var b strings.Builder
-	for _, name := range sortedKeys(scores) {
-		fmt.Fprintf(&b, "%-36s %.4f\n", name, scores[name])
+	for _, name := range sortedKeys(metrics) {
+		m := metrics[name]
+		fmt.Fprintf(&b, "%-36s %.4f (%d/%d)\n", name, m.Score(), m.Passed, m.Total)
 	}
 	return b.String()
 }

@@ -48,7 +48,7 @@ func LoadCheckCases(path string) ([]CheckCase, error) {
 // or more. first is the share proposed without the repair round. holdout is the share whose
 // proposed rule also passes every held-out edit. Each case logs drafted or failed on t, and logs
 // repair and holdout when the pipeline produced them.
-func CheckSuite(t *testing.T, ctx context.Context, complete CompleteFunc, cases []CheckCase) (Scores, error) {
+func CheckSuite(t *testing.T, ctx context.Context, complete CompleteFunc, cases []CheckCase) (Metrics, error) {
 	var drafted, first, general int
 	for i, c := range cases {
 		check, stats, err := proposals.DraftCheck(ctx, proposals.CompleteFunc(complete), proposals.CheckRequest{
@@ -81,10 +81,10 @@ func CheckSuite(t *testing.T, ctx context.Context, complete CompleteFunc, cases 
 		}
 		t.Logf("checks %d/%d %s drafted repair=%s holdout=%s", i+1, len(cases), c.ID, repair, holdout)
 	}
-	return Scores{
-		"checks.drafted": Ratio(drafted, len(cases)),
-		"checks.first":   Ratio(first, len(cases)),
-		"checks.holdout": Ratio(general, len(cases)),
+	return Metrics{
+		"checks.drafted": Count(drafted, len(cases)),
+		"checks.first":   Count(first, len(cases)),
+		"checks.holdout": Count(general, len(cases)),
 	}, nil
 }
 
