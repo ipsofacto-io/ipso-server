@@ -36,7 +36,7 @@ func reservedHost(host string) bool {
 var notDatasets = []string{"cassette.json", "baseline.json", "local-model.json"}
 
 // Every dataset is sent to the provider of a route, and a route may be outside the platform, so a
-// dataset may name only addresses that cannot be real (ADR-0165). A new dataset is read on its own.
+// dataset may name only addresses that cannot be real (ADR-0166). A new dataset is read on its own.
 func TestDatasetsAreSynthetic(t *testing.T) {
 	files, err := filepath.Glob("testdata/*.json")
 	if err != nil {

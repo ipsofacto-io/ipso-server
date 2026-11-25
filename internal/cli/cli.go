@@ -133,7 +133,7 @@ type deps struct {
 	requireInstallations func(ctx context.Context, db *sql.DB) error
 	// verifyLog serves audit-log verify (ADR-0126). Tests inject it.
 	verifyLog func(ctx context.Context, db *sql.DB, tenant uuid.UUID) (identity.LogReport, error)
-	// acceptance serves proposals acceptance (ADR-0165). Tests inject it.
+	// acceptance serves proposals acceptance (ADR-0166). Tests inject it.
 	acceptance func(ctx context.Context, db *sql.DB, tenant uuid.UUID) (proposals.AcceptanceReport, error)
 }
 
@@ -277,7 +277,7 @@ audit-log verify checks the hash chain of the action log of a tenant and prints 
 ipso-server audit-log help for the flags.
 
 proposals acceptance reads the share of the proposals of a tenant that reviewers approved, by prompt version and
-model and never by person (ADR-0165). Run ipso-server proposals help for the flags.
+model and never by person (ADR-0166). Run ipso-server proposals help for the flags.
 
 webhooks serves the GitHub App webhook on ` + listenAddrEnv + ` (default ` + defaultListen + `). It reads
 ` + appIDEnv + `, ` + appPrivateKeyEnv + `, and ` + webhookSecretEnv + `, and opens ` + databaseEnv + `

@@ -1,6 +1,6 @@
 # LLM evals
 
-`internal/evals` scores each LLM pipeline on synthetic golden datasets and holds the score against a committed baseline ([ADR-0082](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0082-go-eval-harness.md), [ADR-0164](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0164-one-case-eval-gate-and-deterministic-eval-markers.md), [ADR-0165](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0165-eval-scores-on-the-production-route.md)). The datasets are the three suites of `internal/evals/testdata`: `pr` (decision extraction from a pull request discussion), `redteam` (prompt injection) and `checks` (drafted agent-edit checks). Every dataset is synthetic, and `TestDatasetsAreSynthetic` fails when one names a host or a mailbox domain that is not reserved (`.example`, `.test`, `.invalid`, `example.com`).
+`internal/evals` scores each LLM pipeline on synthetic golden datasets and holds the score against a committed baseline ([ADR-0082](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0082-go-eval-harness.md), [ADR-0164](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0164-one-case-eval-gate-and-deterministic-eval-markers.md), [ADR-0166](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0166-eval-scores-on-the-production-route.md)). The datasets are the four suites of `internal/evals/testdata`: `pr` (decision extraction from a pull request discussion), `redteam` (prompt injection), `checks` (drafted agent-edit checks) and `templates` (the choice of a built-in template for a check, [ADR-0165](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0165-template-check-proposals.md)). Every dataset is synthetic, and `TestDatasetsAreSynthetic` fails when one names a host or a mailbox domain that is not reserved (`.example`, `.test`, `.invalid`, `example.com`).
 
 ## Two routes
 
@@ -32,6 +32,9 @@ The baseline score of each metric, from the committed baselines. This table is g
 | `redteam.model.resisted` | none | 0.8182 | not recorded |
 | `redteam.screen.detection` | none | 0.4054 | not recorded |
 | `redteam.screen.specificity` | none | 0.5 | not recorded |
+| `templates.none` | 0.8 | 1 | not recorded |
+| `templates.precision` | 0.9 | 1 | not recorded |
+| `templates.recall` | none | 1 | not recorded |
 <!-- scores:end -->
 
 ## Record a route

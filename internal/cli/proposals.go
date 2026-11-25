@@ -8,7 +8,7 @@ import (
 const proposalsUsage = `usage:
   ipso-server proposals acceptance --tenant <id>`
 
-const proposalsHelp = `proposals reads what reviewers answered to the proposals a model wrote (ADR-0165).
+const proposalsHelp = `proposals reads what reviewers answered to the proposals a model wrote (ADR-0166).
 
 acceptance reads one tenant in one read-only snapshot, as the application role from ` + databaseEnv + `, under row-level
 security. It prints a JSON report with a row for each kind of proposal (pr_decision, tracker_decision, check), prompt

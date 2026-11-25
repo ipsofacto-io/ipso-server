@@ -4,7 +4,7 @@ name: evals
 # (ADR-0082). `ci / test` replays the committed answers on every pull request; this workflow is
 # the live side of the local route. It runs a pinned open-weight model on the runner with llama.cpp
 # and reaches it through the gateway as a tenant's own loopback route, so no prompt leaves the
-# runner. The route tenants use is recorded by evals-provider.yml, on main only (ADR-0165).
+# runner. The route tenants use is recorded by evals-provider.yml, on main only (ADR-0166).
 
 on:
   workflow_dispatch:

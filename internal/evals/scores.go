@@ -14,7 +14,7 @@ var EvalTenant = uuid.MustParse("00000000-0000-4000-8000-000000000e09")
 
 // RouteFiles are the files of one route: the gateway file, the recorded answers, the baseline, and
 // the history of its scores. A cassette key does not name the model, so each route keeps its own
-// (ADR-0165).
+// (ADR-0166).
 type RouteFiles struct {
 	Name     string
 	Gateway  string

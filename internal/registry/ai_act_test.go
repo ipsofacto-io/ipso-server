@@ -189,7 +189,7 @@ func functionSource(t *testing.T, src, name string) string {
 }
 
 // A read of proposals may group by kind, prompt version and model, and never by who answered (ADR-0012,
-// ADR-0165): the guard names the approver beside the principal and the author.
+// ADR-0166): the guard names the approver beside the principal and the author.
 func TestGuardrailNamesWhoAnswered(t *testing.T) {
 	for query, want := range map[string]bool{
 		"SELECT count(*) FROM proposals.approval GROUP BY approver_id":                   true,

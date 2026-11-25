@@ -26,7 +26,7 @@ var (
 	routeName = flag.String("route", "local", "the route whose recorded answers and baseline this run uses: local or mistral")
 )
 
-// TestEvals runs every suite on one route (-route, ADR-0165). By default it replays the answers
+// TestEvals runs every suite on one route (-route, ADR-0166). By default it replays the answers
 // recorded for that route and fails on a drop of more than one case below its baseline or under a
 // metric's floor. -record calls the gateway that the route's gateway file configures, as the eval
 // tenant. The datasets are synthetic, so a route the gateway cannot place in the EU may record them.

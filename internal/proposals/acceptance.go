@@ -11,7 +11,7 @@ import (
 )
 
 // The acceptance rate is the share of the proposals a model wrote that a person approved, the measure
-// of section 1.6 of the spec (ADR-0165). It is read for one tenant under row-level security, grouped by
+// of section 1.6 of the spec (ADR-0166). It is read for one tenant under row-level security, grouped by
 // kind, prompt version and model, and never by person: no query here selects who answered, and the
 // report has no field that could name them (ADR-0012, ADR-0152).
 

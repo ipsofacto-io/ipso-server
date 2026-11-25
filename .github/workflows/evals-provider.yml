@@ -1,7 +1,7 @@
 name: evals-provider
 
 # Records fresh model answers of the route tenants use, the operator default route of the gateway,
-# and gates them against the baseline of that route (ADR-0082, ADR-0165). The datasets are
+# and gates them against the baseline of that route (ADR-0082, ADR-0166). The datasets are
 # synthetic, and a pull request never reaches this workflow: it runs on a schedule and by hand, on
 # main only. The provider key is the secret IPSO_LLM_MISTRAL of the environment evals-provider,
 # whose deployment branches are limited to main, and only the step that records reads it. A person
