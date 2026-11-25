@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/ipsofacto-io/ipso-server/internal/llmgw"
@@ -64,13 +65,21 @@ func (c *Cassette) Record(live CompleteFunc) {
 	c.live = live
 }
 
-// Complete answers one prompt.
+// Complete answers one prompt. During live recording, random CANARY and outer DATA markers are
+// replaced with deterministic per-prompt hex digests so BPE tokenization stays stable across runs,
+// while any leaked canary in the answer is mapped back to the caller's canary in both modes.
 func (c *Cassette) Complete(ctx context.Context, system, user string, maxTokens int) (llmgw.Completion, error) {
 	key := Key(system, user)
+	var callerCanary string
+	if m := promptCanary.FindStringSubmatch(system); m != nil {
+		callerCanary = m[1]
+	}
+	fixedCanary := evalMarker("canary", key)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if r, ok := c.used[key]; ok {
-		return llmgw.Completion{Text: r.Text, Model: r.Model}, nil
+		return llmgw.Completion{Text: restoreCanary(r.Text, fixedCanary, callerCanary), Model: r.Model}, nil
 	}
 	if c.live == nil {
 		r, ok := c.recorded[key]
@@ -78,14 +87,19 @@ func (c *Cassette) Complete(ctx context.Context, system, user string, maxTokens 
 			return llmgw.Completion{}, fmt.Errorf("%w (key %s)", ErrNotRecorded, key[:12])
 		}
 		c.used[key] = r
-		return llmgw.Completion{Text: r.Text, Model: r.Model}, nil
+		return llmgw.Completion{Text: restoreCanary(r.Text, fixedCanary, callerCanary), Model: r.Model}, nil
 	}
-	answer, err := c.live(ctx, system, user, maxTokens)
+	liveSystem := system
+	if callerCanary != "" {
+		liveSystem = strings.ReplaceAll(system, "CANARY-"+callerCanary, "CANARY-"+fixedCanary)
+	}
+	liveUser := normalizeUser(user, key)
+	answer, err := c.live(ctx, liveSystem, liveUser, maxTokens)
 	if err != nil {
 		return llmgw.Completion{}, err
 	}
 	c.used[key] = Recording{Prompt: key, Model: answer.Model, Text: answer.Text}
-	return answer, nil
+	return llmgw.Completion{Text: restoreCanary(answer.Text, fixedCanary, callerCanary), Model: answer.Model}, nil
 }
 
 // Save writes the answers this run used, sorted by prompt.
@@ -110,10 +124,42 @@ func (c *Cassette) Save(path string) error {
 
 // nonce is the random part of the data markers a pipeline puts around untrusted text and of the
 // canary in its system prompt. It differs on each call, so it is not part of the key.
-var nonce = regexp.MustCompile(`(DATA|CANARY)-[0-9a-f]{32}`)
+var (
+	nonce        = regexp.MustCompile(`(DATA|CANARY)-[0-9a-f]{32}`)
+	promptCanary = regexp.MustCompile(`CANARY-([0-9a-f]{32})`)
+	outerData    = regexp.MustCompile(`^DATA-([0-9a-f]{32})\n`)
+)
 
 // Key names a prompt. The system prompt is part of it, so a new prompt version needs new answers.
 func Key(system, user string) string {
 	sum := sha256.Sum256([]byte(nonce.ReplaceAllString(system, "${1}-nonce") + "\x00" + nonce.ReplaceAllString(user, "${1}-nonce")))
 	return hex.EncodeToString(sum[:])
+}
+
+func evalMarker(kind, key string) string {
+	sum := sha256.Sum256([]byte("ipso-evals-" + kind + ":" + key))
+	return hex.EncodeToString(sum[:16])
+}
+
+func normalizeUser(user, key string) string {
+	m := outerData.FindStringSubmatch(user)
+	if m == nil || !strings.HasSuffix(user, "\nDATA-"+m[1]) {
+		return user
+	}
+	fixed := "DATA-" + evalMarker("data", key)
+	markerLen := len("DATA-") + len(m[1])
+	return fixed + user[markerLen:len(user)-markerLen] + fixed
+}
+
+func restoreCanary(text, fixedCanary, callerCanary string) string {
+	if callerCanary == "" || callerCanary == fixedCanary || !strings.Contains(strings.ToLower(text), fixedCanary[:16]) {
+		return text
+	}
+	re := regexp.MustCompile("(?i)" + fixedCanary[:16] + "(?:" + fixedCanary[16:] + ")?")
+	return re.ReplaceAllStringFunc(text, func(matched string) string {
+		if len(matched) == len(fixedCanary) {
+			return callerCanary
+		}
+		return callerCanary[:16]
+	})
 }
