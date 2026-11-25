@@ -2,8 +2,9 @@ name: evals
 
 # Records fresh model answers for the golden datasets and gates them against the baseline
 # (ADR-0082). `ci / test` replays the committed answers on every pull request; this workflow is
-# the live side. It runs a pinned open-weight model on the runner with llama.cpp and reaches it
-# through the gateway as a tenant's own loopback route, so no prompt leaves the runner.
+# the live side of the local route. It runs a pinned open-weight model on the runner with llama.cpp
+# and reaches it through the gateway as a tenant's own loopback route, so no prompt leaves the
+# runner. The route tenants use is recorded by evals-provider.yml, on main only (ADR-0166).
 
 on:
   workflow_dispatch:
@@ -64,11 +65,9 @@ jobs:
           exit 1
       - name: Record answers and gate them
         env:
-          IPSO_EVALS_GATEWAY: ${{ github.workspace }}/internal/evals/testdata/local-model.json
-          IPSO_EVALS_TENANT: 00000000-0000-4000-8000-000000000e09
           # The gateway needs an EU default route to start. The eval tenant never uses it.
           IPSO_LLM_MISTRAL: not-used-by-the-eval-tenant
-        run: go test ./internal/evals -run '^TestEvals$' -count=1 -timeout 110m -v -record -report "${RUNNER_TEMP}/scores.json"
+        run: go test ./internal/evals -run '^TestEvals$' -count=1 -timeout 110m -v -route local -record -report "${RUNNER_TEMP}/scores.json"
       - name: Keep the answers and scores
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -108,7 +108,7 @@ func aiActSQLFile(rel string) bool {
 var (
 	analyticsClient = regexp.MustCompile(`(?i)(\bposthog\b|\bplausible\b|\bmixpanel\b|\bamplitude\b|segmentio/analytics|@segment/|\bumami\b)`)
 	orderBy         = regexp.MustCompile("(?is)\\b(?:group|order)\\s+by\\s+([^;`]{0,300})")
-	personKey       = regexp.MustCompile(`(?i)\b(?:principal(?:_id)?|author(?:_[a-z]+)?|person(?:_[a-z]+)?)\b`)
+	personKey       = regexp.MustCompile(`(?i)\b(?:principal(?:_id)?|approver(?:_id)?|author(?:_[a-z]+)?|person(?:_[a-z]+)?)\b`)
 )
 
 func orderClauses(src []byte) [][]byte {
@@ -186,4 +186,26 @@ func functionSource(t *testing.T, src, name string) string {
 		return src[start:]
 	}
 	return src[start : start+1+next]
+}
+
+// A read of proposals may group by kind, prompt version and model, and never by who answered (ADR-0012,
+// ADR-0166): the guard names the approver beside the principal and the author.
+func TestGuardrailNamesWhoAnswered(t *testing.T) {
+	for query, want := range map[string]bool{
+		"SELECT count(*) FROM proposals.approval GROUP BY approver_id":                   true,
+		"SELECT count(*) FROM proposals.approval a GROUP BY a.outcome, approver":         true,
+		"SELECT * FROM proposals.approval ORDER BY approver_id DESC":                     true,
+		"SELECT count(*) FROM answered GROUP BY kind, prompt_version, model_id":          false,
+		"SELECT count(*) FROM answered GROUP BY kind ORDER BY kind, prompt_version":      false,
+		"SELECT count(*) FILTER (WHERE outcome = 'approved') FROM proposals.approval a":  false,
+		"SELECT * FROM proposals.approval GROUP BY outcome, approver_id, prompt_version": true,
+	} {
+		caught := false
+		for _, clause := range orderClauses([]byte(query)) {
+			caught = caught || personKey.Match(clause)
+		}
+		if caught != want {
+			t.Errorf("%q: caught = %v, want %v", query, caught, want)
+		}
+	}
 }

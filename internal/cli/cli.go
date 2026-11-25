@@ -133,6 +133,8 @@ type deps struct {
 	requireInstallations func(ctx context.Context, db *sql.DB) error
 	// verifyLog serves audit-log verify (ADR-0126). Tests inject it.
 	verifyLog func(ctx context.Context, db *sql.DB, tenant uuid.UUID) (identity.LogReport, error)
+	// acceptance serves proposals acceptance (ADR-0166). Tests inject it.
+	acceptance func(ctx context.Context, db *sql.DB, tenant uuid.UUID) (proposals.AcceptanceReport, error)
 }
 
 // Run executes one CLI invocation. args excludes the program name.
@@ -170,6 +172,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		unbindInstallation:   tenancy.UnbindInstallation,
 		requireInstallations: tenancy.RequireInstallationLookup,
 		verifyLog:            identity.VerifyLog,
+		acceptance:           proposals.Acceptance,
 		loadBundle: func(layout, digest, publicKey string) (runtask.PlanEvaluator, error) {
 			return plancheck.Load(layout, digest, publicKey)
 		},
@@ -195,6 +198,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 		return tenantCmd(ctx, args[1:], stdout, stderr, d)
 	case "audit-log":
 		return auditLogCmd(ctx, args[1:], stdout, stderr, d)
+	case "proposals":
+		return proposalsCmd(ctx, args[1:], stdout, stderr, d)
 	case "webhooks":
 		if len(args) != 1 {
 			fprintln(stderr, "usage: ipso-server webhooks")
@@ -239,6 +244,7 @@ usage:
   ipso-server migrate
   ipso-server tenant create|export|restore|offboard|bind-installation
   ipso-server audit-log verify
+  ipso-server proposals acceptance
   ipso-server webhooks
   ipso-server runtasks
   ipso-server probe
@@ -269,6 +275,9 @@ ipso-server tenant help for the commands, their flags and the credential each on
 
 audit-log verify checks the hash chain of the action log of a tenant and prints its head (ADR-0126). Run
 ipso-server audit-log help for the flags.
+
+proposals acceptance reads the share of the proposals of a tenant that reviewers approved, by prompt version and
+model and never by person (ADR-0166). Run ipso-server proposals help for the flags.
 
 webhooks serves the GitHub App webhook on ` + listenAddrEnv + ` (default ` + defaultListen + `). It reads
 ` + appIDEnv + `, ` + appPrivateKeyEnv + `, and ` + webhookSecretEnv + `, and opens ` + databaseEnv + `

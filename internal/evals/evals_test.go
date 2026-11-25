@@ -20,31 +20,27 @@ import (
 )
 
 var (
-	record = flag.Bool("record", false, "send every prompt through the LLM gateway and rewrite the recorded answers")
-	update = flag.Bool("update", false, "write this run's scores as the baseline and add a history line")
-	report = flag.String("report", "", "write this run's scores to this JSON file")
+	record    = flag.Bool("record", false, "send every prompt through the LLM gateway and rewrite the recorded answers")
+	update    = flag.Bool("update", false, "write this run's scores as the baseline and add a history line")
+	report    = flag.String("report", "", "write this run's scores to this JSON file")
+	routeName = flag.String("route", "local", "the route whose recorded answers and baseline this run uses: local or mistral")
 )
 
-const (
-	cassettePath = "testdata/cassette.json"
-	baselinePath = "testdata/baseline.json"
-	historyPath  = "testdata/history.jsonl"
-)
-
-// TestEvals runs every suite. By default it replays the recorded answers and fails on a drop of
-// more than one case below the baseline or under a metric's floor. -record calls the gateway that
-// IPSO_EVALS_GATEWAY configures, as the tenant IPSO_EVALS_TENANT. The datasets are synthetic, so
-// a route the gateway cannot place in the EU may record them.
+// TestEvals runs every suite on one route (-route, ADR-0166). By default it replays the answers
+// recorded for that route and fails on a drop of more than one case below its baseline or under a
+// metric's floor. -record calls the gateway that the route's gateway file configures, as the eval
+// tenant. The datasets are synthetic, so a route the gateway cannot place in the EU may record them.
 func TestEvals(t *testing.T) {
-	cassette, err := LoadCassette(cassettePath)
+	files := routeOf(t, *routeName)
+	cassette, err := LoadCassette(files.Cassette)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if *record {
-		cassette.Record(liveGateway(t))
+		cassette.Record(liveGateway(t, files))
 		// A run that stops early still keeps what it recorded, so its answers can be read.
 		defer func() {
-			if err := cassette.Save(cassettePath); err != nil {
+			if err := cassette.Save(files.Cassette); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -107,15 +103,29 @@ func TestEvals(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	baseline, err := LoadBaseline(baselinePath)
+	baseline, err := LoadBaseline(files.Baseline)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if *update {
-		if err := SaveBaseline(baselinePath, Update(baseline, scores)); err != nil {
+		var others []Baseline
+		for _, other := range Routes {
+			if other.Name == files.Name {
+				continue
+			}
+			recorded, err := LoadBaseline(other.Baseline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			others = append(others, recorded)
+		}
+		if err := SaveBaseline(files.Baseline, InheritFloors(Update(baseline, scores), others...)); err != nil {
 			t.Fatal(err)
 		}
-		if err := AppendHistory(historyPath, time.Now(), scores); err != nil {
+		if err := AppendHistory(files.History, time.Now(), scores); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeScoresDoc(); err != nil {
 			t.Fatal(err)
 		}
 		return
@@ -125,15 +135,18 @@ func TestEvals(t *testing.T) {
 	}
 }
 
-// liveGateway builds the LLM gateway from the environment, with a budget held in memory.
-// The text handler prints the gateway's own call lines. Replay does not build a gateway.
-func liveGateway(t *testing.T) SchemaCompleteFunc {
+// liveGateway builds the LLM gateway from the gateway file of the route, with a budget held in
+// memory. The text handler prints the gateway's own call lines. Replay does not build a gateway.
+func liveGateway(t *testing.T, files RouteFiles) SchemaCompleteFunc {
 	t.Helper()
-	path, tenantID := os.Getenv("IPSO_EVALS_GATEWAY"), os.Getenv("IPSO_EVALS_TENANT")
-	if path == "" || tenantID == "" {
-		t.Fatal("-record needs IPSO_EVALS_GATEWAY and IPSO_EVALS_TENANT")
-	}
-	file, err := os.Open(path)
+	gateway := newGateway(t, files)
+	return gateway.ForSchema(EvalTenant)
+}
+
+// newGateway reads the gateway file of a route. It fails when a key variable the file names is unset.
+func newGateway(t *testing.T, files RouteFiles) *llmgw.Gateway {
+	t.Helper()
+	file, err := os.Open(files.Gateway)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,15 +155,11 @@ func liveGateway(t *testing.T) SchemaCompleteFunc {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tenant, err := uuid.Parse(tenantID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	gateway, err := llmgw.New(cfg, &memoryLedger{}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return gateway.ForSchema(tenant)
+	return gateway
 }
 
 // memoryLedger never refuses: the eval run is bounded by its datasets.

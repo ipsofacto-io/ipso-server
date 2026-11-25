@@ -1,0 +1,7 @@
+{
+  "routes": [
+    {"name": "mistral", "provider": "mistral", "model": "mistral-medium-latest", "key_env": "IPSO_LLM_MISTRAL"}
+  ],
+  "default": ["mistral"],
+  "monthly_tokens": 2000000
+}

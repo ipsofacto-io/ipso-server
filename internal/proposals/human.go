@@ -124,7 +124,7 @@ func InsertLLMCheckProposal(ctx context.Context, tx *sql.Tx, tenant uuid.UUID, p
 	}
 	modelID := strings.TrimSpace(p.ModelID)
 	if modelID == "" {
-		modelID = "human-authored"
+		modelID = HumanAuthoredModel
 	}
 	promptVer := strings.TrimSpace(p.PromptVersion)
 	if promptVer == "" {
