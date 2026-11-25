@@ -76,3 +76,23 @@ export interface ProviderInfo {
 export interface InvitationStart {
   location: string;
 }
+
+// Verifiability analysis, human proposals, and Decision Health (ADR-0161, ADR-0163).
+export type VerifiabilityRequest = Schemas['VerifiabilityRequest'];
+export type CandidatePremise = Schemas['CandidatePremise'];
+export type CandidateCheck = Schemas['CandidateCheck'];
+export type VerifiabilityDiagnosis = Schemas['VerifiabilityDiagnosis'];
+export type HumanProposal = Omit<Schemas['HumanProposal'], 'payload'> & { payload: Json };
+export type CreateHumanProposalRequest = Omit<Schemas['CreateHumanProposalRequest'], 'premises' | 'checks'> & {
+  premises?: Json[];
+  checks?: Json[];
+};
+export type CreateHumanProposalAnswer = Schemas['CreateHumanProposalAnswer'];
+export type PremiseAlert = Schemas['PremiseAlert'];
+export type HealthVerdictRef = Schemas['HealthVerdictRef'];
+export type DecisionValidity = Schemas['DecisionValidity'];
+export type ScopeCompliance = Schemas['ScopeCompliance'];
+export type DecisionCompliance = Schemas['DecisionCompliance'];
+export type DecisionHealth = Schemas['DecisionHealth'];
+export type DecisionHealthPage = Schemas['DecisionHealthPage'];
+

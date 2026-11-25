@@ -27,18 +27,34 @@ func (f *fixture) operations(t *testing.T) []operation {
 	if err != nil {
 		t.Fatal(err)
 	}
+	verifiability, err := json.Marshal(map[string]any{"title": "Require TLS 1.3", "statement": "All services must require TLS 1.3 on ingress"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmEval, err := json.Marshal(map[string]any{"target": "diff", "rubric": "Must require TLS 1.3", "redacted_input": "MinVersion: tls.VersionTLS13"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return []operation{
 		{"resolve", http.MethodPost, "/v1/resolve", resolve},
+		{"analyze_verifiability", http.MethodPost, "/v1/verifiability", verifiability},
+		{"evaluate_llm_check", http.MethodPost, "/v1/llm/evaluate", llmEval},
 		{"list_decisions", http.MethodGet, "/v1/decisions?valid=" + valid + "&known=" + known, nil},
+		{"list_decisions_health", http.MethodGet, "/v1/decisions/health?valid=" + valid + "&known=" + known, nil},
 		{"get_decision", http.MethodGet, "/v1/decisions/use-tls?valid=" + valid + "&known=" + known, nil},
+		{"get_decision_health", http.MethodGet, "/v1/decisions/use-tls/health?valid=" + valid + "&known=" + known, nil},
 		{"list_scopes", http.MethodGet, "/v1/scopes?known=" + known, nil},
 		{"list_waivers", http.MethodGet, "/v1/waivers?valid=" + valid + "&known=" + known, nil},
 		{"list_premise_reasons", http.MethodGet, "/v1/premise-reasons", nil},
 		{"list_premise_hosts", http.MethodGet, "/v1/premise-hosts", nil},
 		{"list_proposals", http.MethodGet, "/v1/proposals", nil},
 		{"list_agent_proposals", http.MethodGet, "/v1/agent-proposals", nil},
+		{"list_human_proposals", http.MethodGet, "/v1/human-proposals", nil},
 		{"list_check_proposals", http.MethodGet, "/v1/check-proposals", nil},
 		{"list_accepted_checks", http.MethodGet, "/v1/accepted-checks?repo=acme%2Fapi", nil},
+		{"get_llm_policy", http.MethodGet, "/v1/llm-policy", nil},
+		{"list_freshness_policies", http.MethodGet, "/v1/freshness-policies", nil},
+		{"list_agent_pins", http.MethodGet, "/v1/agent-pins", nil},
 		{"audit_decisions", http.MethodGet, "/v1/audit/decisions?" + subject + "&valid=" + valid + "&known=" + known, nil},
 		{"audit_beliefs", http.MethodGet, "/v1/audit/beliefs?" + subject + "&valid=" + valid + "&then=" + at(f.before) + "&now=" + known, nil},
 		{"audit_merges", http.MethodGet, "/v1/audit/merges?" + subject + "&at=" + valid + "&known=" + known + "&sha=" + seededSHA, nil},
@@ -53,8 +69,9 @@ func (f *fixture) operations(t *testing.T) []operation {
 // a viewer is refused the audit routes and served the rest, and an auditor is served all of them.
 func TestEveryOperationAsksTheRoleOfTheCaller(t *testing.T) {
 	f := newFixture(t)
+	f.enableLLM(t)
 	c := newContract(t)
-	// Three subjects make 17 calls each for one tenant, past the default burst of 20.
+	// Five subjects make 26 calls each for one tenant, past the default burst of 20.
 	handler := f.handler(t, Limits{Rate: 1000, Burst: 1000})
 	operations := f.operations(t)
 	// The writes are called in writes_integration_test.go, each as every role.
@@ -70,9 +87,16 @@ func TestEveryOperationAsksTheRoleOfTheCaller(t *testing.T) {
 		}
 		return ""
 	}
+	roleOf := map[string]string{
+		nobodyA:      "",
+		viewerA:      identity.RoleViewer,
+		auditorA:     identity.RoleAuditor,
+		contributorA: identity.RoleContributor,
+		personA:      identity.RoleAdmin,
+	}
 	for _, o := range operations {
-		audit := slices.Contains(auditOps, o.op)
-		for subject, served := range map[string]bool{nobodyA: false, viewerA: !audit, auditorA: true} {
+		for subject, role := range roleOf {
+			served := slices.Contains(mayCall[o.op], role)
 			w := c.exchange(t, handler, o.method, o.target, f.token(t, subject), contentType(o), o.body)
 			switch {
 			case served && w.Code != http.StatusOK:
@@ -89,7 +113,7 @@ func TestARefusedAgentCallIsNotLogged(t *testing.T) {
 	f := newFixture(t)
 	handler := f.handler(t, Limits{})
 	for _, o := range f.operations(t) {
-		if !slices.Contains(auditOps, o.op) {
+		if slices.Contains(mayCall[o.op], identity.RoleAgent) {
 			continue
 		}
 		if w := call(t, handler, o.method, o.target, f.token(t, agentA)); !refusedPlainly(t, w) {

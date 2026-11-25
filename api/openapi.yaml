@@ -87,6 +87,14 @@ paths:
       tags: [registry]
       summary: List the decisions in force, each at its highest version.
       parameters:
+        - name: q
+          in: query
+          required: false
+          description: Full-text search query over title, slug, statement, and tags.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
         - $ref: '#/components/parameters/Valid'
         - $ref: '#/components/parameters/Known'
         - $ref: '#/components/parameters/Limit'
@@ -1734,6 +1742,559 @@ paths:
           $ref: '#/components/responses/Internal'
         '503':
           $ref: '#/components/responses/Timeout'
+  /v1/verifiability:
+    post:
+      operationId: analyze_verifiability
+      tags: [review]
+      summary: Analyze decision prose for verifiability, candidate premises, and candidate checks (ADR-0161).
+      description: >-
+        Evaluates drafted decision prose for hedging or vagueness and returns candidate premises and candidate checks
+        (deterministic templates, OPA Rego, or EDR 1.1 engine llm specs). When LLM authoring assist is enabled for the
+        tenant, AI-generated outputs carry model_id and prompt_version; otherwise deterministic heuristic analysis runs.
+        This route reads only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifiabilityRequest'
+      responses:
+        '200':
+          description: Verifiability diagnosis and candidate checks.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifiabilityDiagnosis'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/llm/evaluate:
+    post:
+      operationId: evaluate_llm_check
+      tags: [verification]
+      summary: Evaluate a redacted artifact excerpt against an EDR 1.1 engine llm rubric (ADR-0158).
+      description: >-
+        Evaluates a secret-redacted input excerpt against an engine llm rubric when the tenant explicitly opts in to
+        LLM check evaluation. Every finding must quote a verbatim substring present in redacted_input; missing quotes
+        fail closed. Raw input content is never persisted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LLMEvaluateRequest'
+      responses:
+        '200':
+          description: Verified LLM evaluation answer with model_id and prompt_version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LLMEvaluateAnswer'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '502':
+          description: Upstream LLM provider or quote verification failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/decisions/health:
+    get:
+      operationId: list_decisions_health
+      tags: [registry]
+      summary: List decision validity and per-scope compliance health (ADR-0163).
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: Full-text search query over title, slug, statement, and tags.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+        - $ref: '#/components/parameters/VerdictRepo'
+        - name: env
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+        - $ref: '#/components/parameters/Valid'
+        - $ref: '#/components/parameters/Known'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of decision health summaries, separating validity and compliance.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionHealthPage'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/decisions/{ref}/health:
+    get:
+      operationId: get_decision_health
+      tags: [registry]
+      summary: Read validity and per-scope compliance health for the decision an id or slug names (ADR-0163).
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          description: A decision id or slug.
+          schema:
+            type: string
+            minLength: 1
+        - $ref: '#/components/parameters/VerdictRepo'
+        - name: env
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+        - $ref: '#/components/parameters/Valid'
+        - $ref: '#/components/parameters/Known'
+      responses:
+        '200':
+          description: Health summary for the decision the ref names.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionHealth'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/human-proposals:
+    get:
+      operationId: list_human_proposals
+      tags: [review]
+      summary: List pending human-authored decision proposals (ADR-0161).
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of pending human proposals, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [human_proposals]
+                properties:
+                  human_proposals:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/HumanProposal'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+    post:
+      operationId: create_human_proposal
+      tags: [review]
+      summary: Submit a human-authored decision proposal with optional contextual approval (ADR-0161).
+      description: >-
+        Records a human proposal in proposals.human_proposal. When approve_now is true and the caller holds
+        decision.approve on every scope in scope_refs, approves the proposal and inserts version 1 of the decision
+        in the same transaction while preserving the registry invariant that every decision version originates from
+        a recorded approval.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateHumanProposalRequest'
+      responses:
+        '201':
+          description: The created proposal and optional approval.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateHumanProposalAnswer'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/human-proposals/{id}/approval:
+    post:
+      operationId: approve_human_proposal
+      tags: [review]
+      summary: Approve or reject a human-authored decision proposal (ADR-0161).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalRequest'
+      responses:
+        '201':
+          description: The approval that was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Approval'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/llm-policy:
+    get:
+      operationId: get_llm_policy
+      tags: [verification]
+      summary: Read the tenant opt-in policy for LLM authoring assist and engine llm evaluation.
+      responses:
+        '200':
+          description: The tenant LLM policy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LLMPolicy'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+    put:
+      operationId: set_llm_policy
+      tags: [verification]
+      summary: Update the tenant opt-in policy for LLM authoring assist and engine llm evaluation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LLMPolicy'
+      responses:
+        '200':
+          description: The updated tenant LLM policy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LLMPolicy'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/freshness-policies:
+    get:
+      operationId: list_freshness_policies
+      tags: [verification]
+      summary: List default check freshness thresholds by environment (ADR-0163).
+      responses:
+        '200':
+          description: The configured freshness thresholds of the tenant.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [freshness_policies]
+                properties:
+                  freshness_policies:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FreshnessPolicy'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+    put:
+      operationId: set_freshness_policy
+      tags: [verification]
+      summary: Set the default max_age_days freshness threshold for an environment (ADR-0163).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreshnessPolicyRequest'
+      responses:
+        '200':
+          description: The updated freshness threshold.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreshnessPolicy'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/agent-pins:
+    get:
+      operationId: list_agent_pins
+      tags: [verification]
+      summary: List SPKI public key pins registered for ipso-agent live verdict uploads (ADR-0162).
+      responses:
+        '200':
+          description: Registered agent pins of the tenant.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [agent_pins]
+                properties:
+                  agent_pins:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AgentPin'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+    post:
+      operationId: register_agent_pin
+      tags: [verification]
+      summary: Register an Ed25519 or ECDSA P-256 SPKI pin for ipso-agent live verdict uploads (ADR-0162).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentPinRequest'
+      responses:
+        '201':
+          description: The registered agent pin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentPin'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/agent-pins/{id}:
+    delete:
+      operationId: revoke_agent_pin
+      tags: [verification]
+      summary: Revoke an ipso-agent SPKI pin (ADR-0162).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: The pin was revoked.
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
+  /v1/verdicts/live:
+    post:
+      operationId: upload_live_verdicts
+      tags: [verification]
+      security:
+        - agentPinSignature: []
+      summary: Upload live infrastructure drift verdicts signed by a registered ipso-agent pin (ADR-0162).
+      description: >-
+        Authenticated exclusively via X-Ipso-Agent-Pin, X-Ipso-Timestamp, and X-Ipso-Signature over the canonical
+        payload digest. The tenant, repository, and environment are bound to the registered SPKI pin so an agent
+        cannot upload verdicts outside its pinned scope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerdictUpload'
+      responses:
+        '200':
+          description: This exact signed live upload was already stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadAnswer'
+        '201':
+          description: Stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadAnswer'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
 components:
   securitySchemes:
     bearerAuth:
@@ -1763,6 +2324,13 @@ components:
         honoured only when sign-in is configured and no Authorization header is sent. A request that could
         change state and comes from another site is 403, and a cookie that is repeated, malformed, unknown,
         or expired is 401.
+    agentPinSignature:
+      type: apiKey
+      in: header
+      name: X-Ipso-Signature
+      description: >-
+        Detached Ed25519 or ECDSA P-256 signature over ipso-live-verdict-v1, X-Ipso-Timestamp, and the SHA-256
+        of the request body, paired with X-Ipso-Agent-Pin (ADR-0162). Accepted only by POST /v1/verdicts/live.
   parameters:
     Valid:
       name: valid
@@ -1935,7 +2503,7 @@ components:
       description: A lowercase hex SHA-256.
     VerdictCheck:
       type: string
-      enum: [plan, ci, checkov, snyk, wiz, sonarqube, dependabot, pulumi, cloudformation, arm, depcruise, semgrep, archunit, importlinter, kyverno, gatekeeper, eslint]
+      enum: [plan, ci, checkov, snyk, wiz, sonarqube, dependabot, pulumi, cloudformation, arm, depcruise, semgrep, archunit, importlinter, kyverno, gatekeeper, eslint, llm]
       description: The ipso check command that wrote the report.
     CheckVerdict:
       type: object
@@ -1965,6 +2533,12 @@ components:
           minimum: 0
           maximum: 2147483647
           description: The number of denials. 0 for pass and error, at least 1 for fail and waived.
+        model_id:
+          type: string
+          maxLength: 200
+        prompt_version:
+          type: string
+          maxLength: 64
         fingerprints:
           type: array
           maxItems: 100000
@@ -1993,7 +2567,7 @@ components:
       properties:
         report_version:
           type: integer
-          enum: [1, 2]
+          enum: [1, 2, 3]
         ipso_version:
           type: string
           minLength: 1
@@ -2004,6 +2578,17 @@ components:
         env:
           type: string
           maxLength: 256
+        live:
+          type: boolean
+        target:
+          type: string
+          maxLength: 64
+        model_id:
+          type: string
+          maxLength: 200
+        prompt_version:
+          type: string
+          maxLength: 64
         build_sha256:
           $ref: '#/components/schemas/Sha256'
         verdicts:
@@ -2095,6 +2680,7 @@ components:
         - run_attempt
         - run_url
         - check
+        - source_kind
         - env
         - ipso_version
         - evaluated_at
@@ -2147,6 +2733,13 @@ components:
           format: uri
         check:
           $ref: '#/components/schemas/VerdictCheck'
+        source_kind:
+          type: string
+          enum: [change, live]
+        model_id:
+          type: string
+        prompt_version:
+          type: string
         env:
           type: string
         ipso_version:
@@ -2994,10 +3587,14 @@ components:
           minimum: 1
         engine:
           type: string
-          enum: [opa]
+          enum: [opa, llm]
         target:
           type: string
-          enum: [agent-edit]
+          enum: [agent-edit, diff, terraform-plan, kubernetes-manifest, json-snapshot, text]
+        max_age_days:
+          type: integer
+          minimum: 1
+          maximum: 365
         spec:
           type: object
         rego:
@@ -3016,12 +3613,12 @@ components:
     AcceptedCheck:
       type: object
       additionalProperties: false
-      required: [id, decision_id, edr_id, decision_version, version_in_force, rego, rego_sha256]
+      required: [id, decision_id, edr_id, decision_version, version_in_force, engine, target, rego, rego_sha256]
       properties:
         id:
           type: string
           format: uuid
-          description: The id of the drafted check. ipso deliver names the Rego file after it.
+          description: The id of the drafted check. ipso deliver names the check file after it.
         decision_id:
           type: string
           format: uuid
@@ -3037,13 +3634,29 @@ components:
           type: integer
           minimum: 1
           description: The version of the decision in force now.
+        engine:
+          type: string
+          enum: [opa, llm]
+        target:
+          type: string
+        max_age_days:
+          type: integer
+          minimum: 1
+          maximum: 365
         rego:
           type: [string, 'null']
-          description: The stored Rego, byte for byte. Null when decision_version is not version_in_force.
+          description: The stored Rego, byte for byte. Null when decision_version is not version_in_force or engine is llm.
         rego_sha256:
           type: [string, 'null']
           pattern: '^[0-9a-f]{64}$'
           description: The sha256 of the rego in lowercase hex. Null when the rego is.
+        llm_spec:
+          type: [object, 'null']
+          description: The stored engine llm check artifact when engine is llm and decision_version equals version_in_force.
+        llm_spec_sha256:
+          type: [string, 'null']
+          pattern: '^[0-9a-f]{64}$'
+          description: The sha256 of canonical llm_spec JSON in lowercase hex.
     AuditDecisions:
       type: object
       additionalProperties: false
@@ -3169,3 +3782,427 @@ components:
               expires_at:
                 type: string
                 format: date-time
+    VerifiabilityRequest:
+      type: object
+      additionalProperties: false
+      required: [title, statement]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+        statement:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        context:
+          type: string
+          maxLength: 8000
+        repo:
+          type: string
+          maxLength: 256
+        env:
+          type: string
+          maxLength: 256
+    CandidatePremise:
+      type: object
+      additionalProperties: false
+      required: [id, statement, every]
+      properties:
+        id:
+          type: string
+        statement:
+          type: string
+        every:
+          type: integer
+          minimum: 0
+    CandidateCheck:
+      type: object
+      additionalProperties: false
+      required: [engine]
+      properties:
+        engine:
+          type: string
+          enum: [opa, semgrep, checkov, kyverno, llm, llm-advisory]
+        target:
+          type: string
+        ref:
+          type: string
+        mode:
+          type: string
+          enum: [block, warn, advise]
+        max_age_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+        rego:
+          type: string
+        llm_spec:
+          type: string
+        rationale:
+          type: string
+    VerifiabilityDiagnosis:
+      type: object
+      additionalProperties: false
+      required: [classification, summary, suggestions, candidate_checks, candidate_premises, ai_generated]
+      properties:
+        classification:
+          type: string
+          enum: [verifiable, ambiguous, human_attestation_only]
+        summary:
+          type: string
+        suggestions:
+          type: array
+          items:
+            type: string
+        candidate_premises:
+          type: array
+          items:
+            $ref: '#/components/schemas/CandidatePremise'
+        candidate_checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/CandidateCheck'
+        ai_generated:
+          type: boolean
+        model_id:
+          type: string
+        prompt_version:
+          type: string
+    LLMEvaluateRequest:
+      type: object
+      additionalProperties: false
+      required: [target, rubric, redacted_input]
+      properties:
+        decision_id:
+          type: string
+        slug:
+          type: string
+        target:
+          type: string
+          enum: [diff, terraform-plan, kubernetes-manifest, json-snapshot, text]
+        rubric:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        fixtures:
+          type: array
+          items:
+            type: object
+        redacted_input:
+          type: string
+          minLength: 1
+          maxLength: 262144
+        input_sha256:
+          $ref: '#/components/schemas/Sha256'
+    LLMFinding:
+      type: object
+      additionalProperties: false
+      required: [message, quote]
+      properties:
+        message:
+          type: string
+        quote:
+          type: string
+        location:
+          type: string
+    LLMEvaluateAnswer:
+      type: object
+      additionalProperties: false
+      required: [verdict, findings, model_id, prompt_version]
+      properties:
+        verdict:
+          type: string
+          enum: [pass, fail, error]
+        summary:
+          type: string
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/LLMFinding'
+        model_id:
+          type: string
+        prompt_version:
+          type: string
+    HumanProposal:
+      type: object
+      additionalProperties: false
+      required: [id, principal_id, status, payload, captured_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        principal_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending]
+        payload:
+          type: object
+        captured_at:
+          type: string
+          format: date-time
+    CreateHumanProposalRequest:
+      type: object
+      additionalProperties: false
+      required: [title, statement, scope_refs]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+        statement:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        context:
+          type: string
+          maxLength: 8000
+        owner:
+          type: string
+          maxLength: 200
+        criticality:
+          type: string
+          enum: [blocking, warning, advisory]
+        review_by:
+          type: string
+          maxLength: 64
+        premises:
+          type: array
+          items:
+            type: object
+        checks:
+          type: array
+          items:
+            type: object
+        scope_refs:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 256
+        approve_now:
+          type: boolean
+    CreateHumanProposalAnswer:
+      type: object
+      additionalProperties: false
+      required: [proposal_id, status]
+      properties:
+        proposal_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, approved]
+        decision_id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+    LLMPolicy:
+      type: object
+      additionalProperties: false
+      required: [allow_authoring_assist, allow_check_eval]
+      properties:
+        allow_authoring_assist:
+          type: boolean
+        allow_check_eval:
+          type: boolean
+        updated_at:
+          type: string
+          format: date-time
+    FreshnessPolicyRequest:
+      type: object
+      additionalProperties: false
+      required: [env, max_age_days]
+      properties:
+        env:
+          type: string
+          minLength: 1
+          maxLength: 256
+        max_age_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+    FreshnessPolicy:
+      type: object
+      additionalProperties: false
+      required: [env, max_age_days, updated_at]
+      properties:
+        env:
+          type: string
+        max_age_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+        updated_at:
+          type: string
+          format: date-time
+    AgentPinRequest:
+      type: object
+      additionalProperties: false
+      required: [name, repo, env, public_key]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        repo:
+          type: string
+          minLength: 3
+          maxLength: 256
+        env:
+          type: string
+          minLength: 1
+          maxLength: 256
+        public_key:
+          type: string
+          minLength: 16
+          maxLength: 4096
+    AgentPin:
+      type: object
+      additionalProperties: false
+      required: [id, name, repo, env, pin_sha256, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        repo:
+          type: string
+        env:
+          type: string
+        pin_sha256:
+          $ref: '#/components/schemas/Sha256'
+        created_at:
+          type: string
+          format: date-time
+    PremiseAlert:
+      type: object
+      additionalProperties: false
+      required: [premise_id, reason_code]
+      properties:
+        premise_id:
+          type: string
+        statement:
+          type: string
+        reason_code:
+          type: string
+        detail:
+          type: string
+    HealthVerdictRef:
+      type: object
+      additionalProperties: false
+      required: [source_kind, command, result, violations, evaluated_at, stale, max_age_days]
+      properties:
+        source_kind:
+          type: string
+          enum: [change, live]
+        command:
+          type: string
+        result:
+          type: string
+          enum: [pass, fail, waived, error]
+        violations:
+          type: integer
+        evaluated_at:
+          type: string
+          format: date-time
+        stale:
+          type: boolean
+        max_age_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+        model_id:
+          type: string
+        prompt_version:
+          type: string
+    DecisionValidity:
+      type: object
+      additionalProperties: false
+      required: [state, status, open_premise_reasons]
+      properties:
+        state:
+          type: string
+          enum: [valid, needs_review, superseded, expired]
+        status:
+          type: string
+        valid_from:
+          type: string
+        valid_to:
+          type: string
+        review_by:
+          type: string
+        superseded_by:
+          type: string
+        open_premise_reasons:
+          type: array
+          items:
+            $ref: '#/components/schemas/PremiseAlert'
+    ScopeCompliance:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        repo:
+          type: string
+        env:
+          type: string
+        state:
+          type: string
+          enum: [compliant, violated, waived, stale, unverified]
+        latest_change:
+          $ref: '#/components/schemas/HealthVerdictRef'
+        latest_live:
+          $ref: '#/components/schemas/HealthVerdictRef'
+        waived:
+          type: boolean
+        baselined:
+          type: boolean
+    DecisionCompliance:
+      type: object
+      additionalProperties: false
+      required: [state, scopes]
+      properties:
+        state:
+          type: string
+          enum: [compliant, violated, waived, stale, unverified]
+        note:
+          type: string
+        scopes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScopeCompliance'
+    DecisionHealth:
+      type: object
+      additionalProperties: false
+      required: [id, slug, criticality, validity, compliance]
+      properties:
+        id:
+          type: string
+        slug:
+          type: string
+        title:
+          type: string
+        criticality:
+          type: string
+        sensitive:
+          type: boolean
+        validity:
+          $ref: '#/components/schemas/DecisionValidity'
+        compliance:
+          $ref: '#/components/schemas/DecisionCompliance'
+    DecisionHealthPage:
+      type: object
+      additionalProperties: false
+      required: [decisions]
+      properties:
+        decisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/DecisionHealth'

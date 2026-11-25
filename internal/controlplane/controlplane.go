@@ -28,12 +28,14 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/authz"
 	"github.com/ipsofacto-io/ipso-server/internal/httpserve"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
+	"github.com/ipsofacto-io/ipso-server/internal/llmgw"
 	"github.com/ipsofacto-io/ipso-server/internal/login"
 	"github.com/ipsofacto-io/ipso-server/internal/mcpremote"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
 	"github.com/ipsofacto-io/ipso-server/internal/telemetry"
 	"github.com/ipsofacto-io/ipso-server/internal/tenancy"
+	"github.com/ipsofacto-io/ipso-server/internal/verification"
 	"github.com/ipsofacto-io/ipso-server/internal/webapp"
 	"github.com/ipsofacto-io/ipso-server/trackers"
 )
@@ -81,6 +83,8 @@ type Config struct {
 	Log     *slog.Logger
 	// Telemetry observes every request except /healthz (ADR-0155). Nil observes nothing.
 	Telemetry *telemetry.Telemetry
+	// Gateway serves tenant-opted-in LLM calls for verifiability analysis and engine: llm evaluation.
+	Gateway *llmgw.Gateway
 }
 
 // New runs the start gates and returns the handler to serve. It fails before any request is answered.
@@ -139,9 +143,36 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		if err != nil {
 			return nil, fmt.Errorf("sign-in: %w", err)
 		}
-		sessions = &api.Sessions{Origin: signIn.Origin(), Lookup: sessionCaller(signIn, cfg.Tenant)}
+		sessions = &api.Sessions{
+			Origin:    signIn.Origin(),
+			Lookup:    sessionCaller(signIn, cfg.Tenant),
+			LookupCLI: cliSessionCaller(signIn, cfg.Tenant),
+		}
 	}
 	installDirectory(cfg, signIn)
+	livePinCache := newKnownPinCache(256, 15*time.Second)
+	livePinMisses := ratelimit.New(limits.Rate, limits.Burst)
+	liveUploads := &api.LiveUploads{
+		LookupPin: func(ctx context.Context, pinHex string) (verification.AgentPin, api.SessionStatus) {
+			now := time.Now()
+			if pin, ok := livePinCache.get(pinHex, now); ok {
+				return pin, api.SessionFound
+			}
+			if _, ok := livePinMisses.Allow(cfg.Tenant, now); !ok {
+				return verification.AgentPin{}, api.SessionBusy
+			}
+			pin, err := verification.LookupAgentPin(ctx, cfg.DB, cfg.Tenant, pinHex)
+			if errors.Is(err, verification.ErrUnknownPin) {
+				return verification.AgentPin{}, api.SessionUnknown
+			}
+			if err != nil {
+				return verification.AgentPin{}, api.SessionFailed
+			}
+			livePinCache.put(pinHex, pin, now)
+			return pin, api.SessionFound
+		},
+		EvictPin: livePinCache.evictByID,
+	}
 	var uploads *api.Uploads
 	if cfg.CIAudience != "" {
 		if cfg.CIIssuer == "" {
@@ -165,9 +196,11 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		}
 	}
 	apiHandler, err := api.New(api.Config{
-		DB:       cfg.DB,
-		Verifier: verifier,
-		Uploads:  uploads,
+		DB:          cfg.DB,
+		Verifier:    verifier,
+		Uploads:     uploads,
+		LiveUploads: liveUploads,
+		Gateway:     cfg.Gateway,
 		Callers: func(ctx context.Context, claims authn.Claims) (api.Caller, bool) {
 			principal, ok := svc.principal(ctx, claims)
 			return api.Caller{Tenant: cfg.Tenant, Principal: principal}, ok
@@ -228,7 +261,7 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 				return mcpremote.Caller{Tenant: cfg.Tenant, Principal: principal}, ok
 			},
 			func(caller mcpremote.Caller) mcptools.Backend {
-				return &mcpremote.Backend{DB: cfg.DB, Caller: caller, Now: time.Now}
+				return &mcpremote.Backend{DB: cfg.DB, Caller: caller, Now: time.Now, Gateway: cfg.Gateway}
 			},
 			func(ctx context.Context, caller mcpremote.Caller, action authz.Action) (bool, error) {
 				return authorize(ctx, cfg.DB, policy, caller.Tenant, caller.Principal, action)
@@ -276,6 +309,16 @@ func sessionCaller(signIn *login.Service, tenant uuid.UUID) func(context.Context
 	}
 }
 
+func cliSessionCaller(signIn *login.Service, tenant uuid.UUID) func(context.Context, string) (api.Caller, api.SessionStatus) {
+	return func(ctx context.Context, token string) (api.Caller, api.SessionStatus) {
+		principal, status := signIn.LookupCLI(ctx, token)
+		if status != login.Found {
+			return api.Caller{}, sessionStatus(status)
+		}
+		return api.Caller{Tenant: tenant, Principal: principal}, api.SessionFound
+	}
+}
+
 func sessionStatus(status login.Status) api.SessionStatus {
 	switch status {
 	case login.Found:
@@ -286,6 +329,70 @@ func sessionStatus(status login.Status) api.SessionStatus {
 		return api.SessionFailed
 	default:
 		return api.SessionUnknown
+	}
+}
+
+type cachedAgentPin struct {
+	pin       verification.AgentPin
+	expiresAt time.Time
+}
+
+type knownPinCache struct {
+	mu      sync.Mutex
+	max     int
+	ttl     time.Duration
+	entries map[string]cachedAgentPin
+}
+
+func newKnownPinCache(max int, ttl time.Duration) *knownPinCache {
+	return &knownPinCache{max: max, ttl: ttl, entries: make(map[string]cachedAgentPin)}
+}
+
+func (c *knownPinCache) get(pinHex string, now time.Time) (verification.AgentPin, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[pinHex]
+	if !ok {
+		return verification.AgentPin{}, false
+	}
+	if !now.Before(entry.expiresAt) {
+		delete(c.entries, pinHex)
+		return verification.AgentPin{}, false
+	}
+	return entry.pin, true
+}
+
+func (c *knownPinCache) put(pinHex string, pin verification.AgentPin, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.entries[pinHex]; !exists && len(c.entries) >= c.max {
+		for k, v := range c.entries {
+			if !now.Before(v.expiresAt) {
+				delete(c.entries, k)
+			}
+		}
+	}
+	for _, exists := c.entries[pinHex]; !exists && len(c.entries) >= c.max; _, exists = c.entries[pinHex] {
+		var oldestKey string
+		var oldestTime time.Time
+		for k, v := range c.entries {
+			if oldestKey == "" || v.expiresAt.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = v.expiresAt
+			}
+		}
+		delete(c.entries, oldestKey)
+	}
+	c.entries[pinHex] = cachedAgentPin{pin: pin, expiresAt: now.Add(c.ttl)}
+}
+
+func (c *knownPinCache) evictByID(id uuid.UUID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, v := range c.entries {
+		if v.pin.ID == id {
+			delete(c.entries, k)
+		}
 	}
 }
 

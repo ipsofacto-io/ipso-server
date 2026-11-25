@@ -103,8 +103,15 @@ func at(when time.Time) string { return url.QueryEscape(when.Format(time.RFC3339
 // items and not only empty lists.
 func TestEveryOperationMatchesTheDocument(t *testing.T) {
 	f := newFixture(t)
+	f.enableLLM(t)
+	f.exec(t, `INSERT INTO verification.freshness_policy (tenant_id, env, max_age_days) VALUES ($1, 'prod', 7)`, tenantA)
+	agentDER, _ := testAgentPublicKey(t)
+	f.exec(t, `INSERT INTO verification.agent_pin (tenant_id, name, repo, env, pin_sha256, public_key_der)
+		VALUES ($1, 'prod-agent', 'acme/api', 'prod', sha256('contract-agent-pin'), $2)`, tenantA, agentDER)
+	// Refresh known so temporal queries see rows seeded after newFixture.
+	f.known = clock(t, f.admin)
 	c := newContract(t)
-	handler := f.handler(t, Limits{})
+	handler := f.handler(t, Limits{Rate: 1000, Burst: 1000})
 	token := f.token(t, personA)
 	valid, known := at(f.valid), at(f.known)
 	premises := f.seedPremises(t)
@@ -112,6 +119,18 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 	subject := "repo=acme%2Fapi&path=docs%2Fa.md&env=prod"
 	resolve, err := json.Marshal(map[string]any{
 		"repo": "acme/api", "env": "prod", "paths": []string{"docs/a.md", "main.go"}, "valid": f.valid, "known": f.known,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifiability, err := json.Marshal(map[string]any{
+		"title": "Require TLS 1.3", "statement": "All services must require TLS 1.3 on ingress",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmEval, err := json.Marshal(map[string]any{
+		"target": "diff", "rubric": "Must require TLS 1.3", "redacted_input": "MinVersion: tls.VersionTLS13",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -234,6 +253,46 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 				t.Errorf("%v", a)
 			}
 		}},
+		{"analyze_verifiability", http.MethodPost, "/v1/verifiability", verifiability, func(t *testing.T, a map[string]any) {
+			if a["classification"] == "" {
+				t.Errorf("%v", a)
+			}
+		}},
+		{"evaluate_llm_check", http.MethodPost, "/v1/llm/evaluate", llmEval, func(t *testing.T, a map[string]any) {
+			if a["verdict"] != "pass" {
+				t.Errorf("%v", a)
+			}
+		}},
+		{"list_decisions_health", http.MethodGet, "/v1/decisions/health?valid=" + valid + "&known=" + known + "&limit=10", nil, func(t *testing.T, a map[string]any) {
+			if len(list(a, "decisions")) != 3 {
+				t.Errorf("%v", a)
+			}
+		}},
+		{"get_decision_health", http.MethodGet, "/v1/decisions/use-tls/health?valid=" + valid + "&known=" + known, nil, func(t *testing.T, a map[string]any) {
+			if a["id"] != f.tls.String() || a["slug"] != "use-tls" {
+				t.Errorf("%v", a)
+			}
+		}},
+		{"list_human_proposals", http.MethodGet, "/v1/human-proposals?limit=10", nil, func(t *testing.T, a map[string]any) {
+			if len(list(a, "human_proposals")) != 1 {
+				t.Errorf("%v", a)
+			}
+		}},
+		{"get_llm_policy", http.MethodGet, "/v1/llm-policy", nil, func(t *testing.T, a map[string]any) {
+			if a["allow_check_eval"] != true {
+				t.Errorf("%v", a)
+			}
+		}},
+		{"list_freshness_policies", http.MethodGet, "/v1/freshness-policies", nil, func(t *testing.T, a map[string]any) {
+			if len(list(a, "freshness_policies")) != 1 {
+				t.Errorf("%v", a)
+			}
+		}},
+		{"list_agent_pins", http.MethodGet, "/v1/agent-pins", nil, func(t *testing.T, a map[string]any) {
+			if len(list(a, "agent_pins")) != 1 {
+				t.Errorf("%v", a)
+			}
+		}},
 	} {
 		t.Run(tc.op, func(t *testing.T) {
 			contentType := ""
@@ -253,9 +312,9 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 		return
 	}
 	t.Run("every operation is covered", func(t *testing.T) {
-		// 18 are called above as a person, the writes in writes_integration_test.go, and the two reads of the export
-		// in exports_integration_test.go. upload_verdicts is called as a CI job in upload_integration_test.go.
-		if got, want := 18+len(writeOps)+len(exportOps)+len(invitationOps)+len(roleBindingOps)+1, len(operations(t, loadDocument(t))); got != want {
+		// 26 are called above as a person, the writes in writes_integration_test.go, the export/invitation/role-binding
+		// reads in their integration tests, and upload_verdicts + upload_live_verdicts as CI/agent runners.
+		if got, want := 26+len(writeOps)+len(exportOps)+len(invitationOps)+len(roleBindingOps)+2, len(operations(t, loadDocument(t))); got != want {
 			t.Fatalf("%d operations covered, the document has %d", got, want)
 		}
 	})

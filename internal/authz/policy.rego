@@ -15,7 +15,9 @@ roles := {
 	"proposals.read": {"viewer", "contributor", "decision-owner", "approver", "admin", "auditor", "agent"},
 	"verdicts.read": {"viewer", "contributor", "decision-owner", "approver", "admin", "auditor", "agent"},
 	"audit.read": {"auditor", "admin"},
-	"proposal.create": {"contributor", "decision-owner", "approver", "agent"},
+	"proposal.create": {"contributor", "decision-owner", "approver", "admin", "agent"},
+	"llm.evaluate": {"contributor", "decision-owner", "approver", "admin", "agent"},
+	"human_proposal.create": {"contributor", "decision-owner", "approver", "admin"},
 	"decision.approve": {"approver", "decision-owner"},
 	"waiver.record": {"approver", "decision-owner"},
 	"decision.supersede": {"decision-owner"},
@@ -31,7 +33,7 @@ scoped := {"decision.approve", "waiver.record", "decision.supersede", "premise.w
 
 # The actions only a person takes (ADR-0076). An agent is refused them whatever it holds.
 human_only := {
-	"decision.approve", "waiver.record", "decision.supersede", "premise.write", "scope.write",
+	"human_proposal.create", "decision.approve", "waiver.record", "decision.supersede", "premise.write", "scope.write",
 	"allowlist.write", "principal.manage", "tenant.export",
 }
 

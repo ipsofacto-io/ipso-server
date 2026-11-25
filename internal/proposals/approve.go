@@ -1,14 +1,18 @@
 package proposals
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
+	"github.com/ipsofacto-io/ipso/pkg/llmcheck"
 )
 
 // Queue is the review queue a proposal sits in.
@@ -21,6 +25,8 @@ const (
 	QueueAgentProposals
 	// QueueTrackerProposals holds the decisions read from a tracker ticket (ADR-0133).
 	QueueTrackerProposals
+	// QueueHumanProposals holds the decisions authored directly by people (ADR-0161).
+	QueueHumanProposals
 )
 
 // The outcomes of a review.
@@ -69,17 +75,32 @@ func Approve(ctx context.Context, tx *sql.Tx, tenant, approver uuid.UUID, queue 
 			INSERT INTO proposals.tracker_approval (tenant_id, proposal_id, approver_id, outcome, decision_id)
 			VALUES ($1, $2, $3, $4, $5)
 			RETURNING id`
+	case QueueHumanProposals:
+		exists = `SELECT true FROM proposals.human_proposal WHERE tenant_id = $1 AND id = $2`
+		insert = `
+			INSERT INTO proposals.human_approval (tenant_id, proposal_id, approver_id, outcome, decision_id)
+			VALUES ($1, $2, $3, $4, $5)
+			RETURNING id`
 	default:
 		return Approval{}, fmt.Errorf("%w: no such queue", registry.ErrInvalidQuery)
 	}
 	if (outcome == OutcomeApproved) != (decision != nil) || (outcome != OutcomeApproved && outcome != OutcomeRejected) {
 		return Approval{}, fmt.Errorf("%w: an approval carries the decision and a rejection carries none", registry.ErrInvalidQuery)
 	}
-	var found bool
-	if err := tx.QueryRowContext(ctx, exists, tenant, proposal).Scan(&found); errors.Is(err, sql.ErrNoRows) {
-		return Approval{}, registry.ErrNotFound
-	} else if err != nil {
-		return Approval{}, fmt.Errorf("read the proposal: %w", err)
+	var humanPayload []byte
+	if queue == QueueHumanProposals {
+		if err := tx.QueryRowContext(ctx, `SELECT payload FROM proposals.human_proposal WHERE tenant_id = $1 AND id = $2`, tenant, proposal).Scan(&humanPayload); errors.Is(err, sql.ErrNoRows) {
+			return Approval{}, registry.ErrNotFound
+		} else if err != nil {
+			return Approval{}, fmt.Errorf("read the proposal: %w", err)
+		}
+	} else {
+		var found bool
+		if err := tx.QueryRowContext(ctx, exists, tenant, proposal).Scan(&found); errors.Is(err, sql.ErrNoRows) {
+			return Approval{}, registry.ErrNotFound
+		} else if err != nil {
+			return Approval{}, fmt.Errorf("read the proposal: %w", err)
+		}
 	}
 	out := Approval{ProposalID: proposal, Outcome: outcome}
 	var decisionID any
@@ -94,7 +115,182 @@ func Approve(ctx context.Context, tx *sql.Tx, tenant, approver uuid.UUID, queue 
 	if err := tx.QueryRowContext(ctx, insert, tenant, proposal, approver, outcome, decisionID).Scan(&out.ID); err != nil {
 		return Approval{}, fmt.Errorf("record the approval: %w", err)
 	}
+	if queue == QueueHumanProposals && outcome == OutcomeApproved && decision != nil && len(humanPayload) > 0 {
+		if err := materializeApprovedHumanLLMChecks(ctx, tx, tenant, approver, out.DecisionID, decision.Body, humanPayload); err != nil {
+			return Approval{}, err
+		}
+	}
 	return out, nil
+}
+
+type humanLLMCheckEntry struct {
+	Engine     string         `json:"engine"`
+	Target     string         `json:"target"`
+	Mode       string         `json:"mode"`
+	MaxAgeDays *int           `json:"max_age_days"`
+	LLMSpec    *llmcheck.Spec `json:"llm_spec"`
+}
+
+func normalizeLLMCheckMode(mode string) string {
+	m := strings.TrimSpace(mode)
+	if m == "" {
+		return "block"
+	}
+	return m
+}
+
+func sameOptionalInt(a, b *int) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func matchApprovedHumanLLMChecks(decisionID uuid.UUID, decisionBody, humanPayload []byte) ([]LLMCheckProposal, error) {
+	var approvedBody struct {
+		Checks []humanLLMCheckEntry `json:"checks"`
+	}
+	if err := json.Unmarshal(decisionBody, &approvedBody); err != nil {
+		return nil, fmt.Errorf("%w: invalid approved decision body", registry.ErrInvalidQuery)
+	}
+	var approvedLLM []humanLLMCheckEntry
+	for _, c := range approvedBody.Checks {
+		if c.Engine == "llm" {
+			approvedLLM = append(approvedLLM, c)
+		}
+	}
+	var draft struct {
+		Checks []humanLLMCheckEntry `json:"checks"`
+	}
+	if err := json.Unmarshal(humanPayload, &draft); err != nil {
+		return nil, fmt.Errorf("%w: invalid human proposal payload", registry.ErrInvalidQuery)
+	}
+	var draftLLM []humanLLMCheckEntry
+	for _, ch := range draft.Checks {
+		if ch.Engine == "llm" && ch.LLMSpec != nil {
+			draftLLM = append(draftLLM, ch)
+		}
+	}
+	if len(draftLLM) != len(approvedLLM) {
+		return nil, fmt.Errorf("%w: approved decision declares %d llm checks but proposal holds %d llm_spec definitions", registry.ErrInvalidQuery, len(approvedLLM), len(draftLLM))
+	}
+	if len(approvedLLM) == 0 {
+		return nil, nil
+	}
+	type preparedDraft struct {
+		target     string
+		mode       string
+		maxAgeDays *int
+		spec       llmcheck.Spec
+		canonical  []byte
+		used       bool
+	}
+	prepared := make([]preparedDraft, len(draftLLM))
+	for i, ch := range draftLLM {
+		mode := normalizeLLMCheckMode(ch.Mode)
+		target := strings.TrimSpace(ch.Target)
+		if target == "" {
+			target = strings.TrimSpace(ch.LLMSpec.Target)
+		}
+		if target == "" {
+			return nil, fmt.Errorf("%w: proposed llm check requires a non-empty target", registry.ErrInvalidQuery)
+		}
+		raw, err := llmcheck.MarshalCanonical(*ch.LLMSpec)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
+		}
+		validated, err := llmcheck.ParseAndValidate(raw, target, mode == "block")
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
+		}
+		canonical, err := llmcheck.MarshalCanonical(validated)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
+		}
+		prepared[i] = preparedDraft{
+			target:     validated.Target,
+			mode:       mode,
+			maxAgeDays: ch.MaxAgeDays,
+			spec:       validated,
+			canonical:  canonical,
+		}
+	}
+	out := make([]LLMCheckProposal, 0, len(approvedLLM))
+	for _, approved := range approvedLLM {
+		mode := normalizeLLMCheckMode(approved.Mode)
+		switch mode {
+		case "block", "warn", "advise":
+		default:
+			return nil, fmt.Errorf("%w: invalid llm check mode %q", registry.ErrInvalidQuery, approved.Mode)
+		}
+		appTarget := strings.TrimSpace(approved.Target)
+		if appTarget == "" && approved.LLMSpec != nil {
+			appTarget = strings.TrimSpace(approved.LLMSpec.Target)
+		}
+		if appTarget == "" {
+			return nil, fmt.Errorf("%w: approved llm check requires a non-empty target", registry.ErrInvalidQuery)
+		}
+		var inlineCanonical []byte
+		if approved.LLMSpec != nil {
+			raw, err := llmcheck.MarshalCanonical(*approved.LLMSpec)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
+			}
+			validatedInline, err := llmcheck.ParseAndValidate(raw, appTarget, mode == "block")
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
+			}
+			inlineCanonical, err = llmcheck.MarshalCanonical(validatedInline)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", registry.ErrInvalidQuery, err)
+			}
+		}
+		matches := make([]int, 0, 1)
+		for i := range prepared {
+			if prepared[i].used {
+				continue
+			}
+			if prepared[i].target != appTarget || prepared[i].mode != mode || !sameOptionalInt(prepared[i].maxAgeDays, approved.MaxAgeDays) {
+				continue
+			}
+			if inlineCanonical != nil && !bytes.Equal(prepared[i].canonical, inlineCanonical) {
+				continue
+			}
+			matches = append(matches, i)
+		}
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("%w: approved llm check (%s, %s) has no matching proposed llm_spec", registry.ErrInvalidQuery, appTarget, mode)
+		}
+		if inlineCanonical == nil && len(matches) > 1 {
+			return nil, fmt.Errorf("%w: ambiguous duplicate llm checks (%s, %s) without inline llm_spec disambiguation", registry.ErrInvalidQuery, appTarget, mode)
+		}
+		chosen := matches[0]
+		prepared[chosen].used = true
+		out = append(out, LLMCheckProposal{
+			DecisionID: decisionID,
+			Version:    1,
+			Mode:       mode,
+			MaxAgeDays: approved.MaxAgeDays,
+			Spec:       prepared[chosen].spec,
+		})
+	}
+	return out, nil
+}
+
+func materializeApprovedHumanLLMChecks(ctx context.Context, tx *sql.Tx, tenant, approver, decisionID uuid.UUID, decisionBody, humanPayload []byte) error {
+	planned, err := matchApprovedHumanLLMChecks(decisionID, decisionBody, humanPayload)
+	if err != nil {
+		return err
+	}
+	for _, p := range planned {
+		if _, err := InsertLLMCheckProposal(ctx, tx, tenant, p, &approver); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CheckApproval is the outcome a person recorded for one drafted check.

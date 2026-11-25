@@ -390,7 +390,7 @@ func needsOf(req rpcRequest) (scope string, action authz.Action) {
 	case "tools/list":
 		return ScopeRead, authz.RegistryRead
 	case "tools/call":
-		if req.Params.Name == mcptools.ToolPropose {
+		if req.Params.Name == mcptools.ToolPropose || req.Params.Name == mcptools.ToolVerifiability {
 			return ScopePropose, authz.ProposalCreate
 		}
 		return ScopeRead, authz.RegistryRead

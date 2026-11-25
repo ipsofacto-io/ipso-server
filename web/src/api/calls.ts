@@ -15,11 +15,16 @@ import type {
   CheckProposal,
   Clearance,
   ClearanceRequest,
+  CreateHumanProposalAnswer,
+  CreateHumanProposalRequest,
+  DecisionHealth,
+  DecisionHealthPage,
   DecisionPage,
   Export,
   ExportRequest,
   GrandfatherPeriod,
   GrandfatherRequest,
+  HumanProposal,
   InvitationCreated,
   InvitationPage,
   InvitationRequest,
@@ -36,6 +41,8 @@ import type {
   StoredVerdict,
   Supersession,
   SupersessionRequest,
+  VerifiabilityDiagnosis,
+  VerifiabilityRequest,
   Waiver,
   WaiverPage,
   WaiverRequest,
@@ -60,9 +67,21 @@ export type Subject = {
 /** Every route the web app calls, and no other. The contract test (ADR-0091) calls them through the same code. */
 export function makeCalls(api: Api) {
   return {
-    listDecisions: (q: Times & Paging = {}, signal?: AbortSignal) => api.getJSON<DecisionPage>('/v1/decisions', q, signal),
+    listDecisions: (q: Times & Paging & { q?: string } = {}, signal?: AbortSignal) => api.getJSON<DecisionPage>('/v1/decisions', q, signal),
     getDecision: (ref: string, q: Times = {}, signal?: AbortSignal) =>
       api.getJSON<DecisionPage>(`/v1/decisions/${encodeURIComponent(ref)}`, q, signal),
+    listDecisionsHealth: (q: Times & Paging & { q?: string; repo?: string; env?: string } = {}, signal?: AbortSignal) =>
+      api.getJSON<DecisionHealthPage>('/v1/decisions/health', q, signal),
+    getDecisionHealth: (ref: string, q: Times & { repo?: string; env?: string } = {}, signal?: AbortSignal) =>
+      api.getJSON<DecisionHealth>(`/v1/decisions/${encodeURIComponent(ref)}/health`, q, signal),
+    analyzeVerifiability: (request: VerifiabilityRequest, signal?: AbortSignal) =>
+      api.postJSON<VerifiabilityDiagnosis>('/v1/verifiability', request, signal),
+    listHumanProposals: (q: Paging = {}, signal?: AbortSignal) =>
+      api.getJSON<{ human_proposals: HumanProposal[] }>('/v1/human-proposals', q, signal),
+    createHumanProposal: (request: CreateHumanProposalRequest, signal?: AbortSignal) =>
+      api.postJSON<CreateHumanProposalAnswer>('/v1/human-proposals', request, signal),
+    approveHumanProposal: (id: string, request: ApprovalRequest, signal?: AbortSignal) =>
+      api.postJSON<Approval>(`/v1/human-proposals/${encodeURIComponent(id)}/approval`, request, signal),
     listScopes: (q: { known?: string } & Paging = {}, signal?: AbortSignal) => api.getJSON<ScopePage>('/v1/scopes', q, signal),
     listWaivers: (q: Times & Paging = {}, signal?: AbortSignal) => api.getJSON<WaiverPage>('/v1/waivers', q, signal),
     listProposals: (q: Paging = {}, signal?: AbortSignal) => api.getJSON<{ proposals: Proposal[] }>('/v1/proposals', q, signal),

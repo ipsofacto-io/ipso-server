@@ -16,6 +16,7 @@ import (
 	"github.com/ipsofacto-io/ipso/pkg/mcptools"
 
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
+	"github.com/ipsofacto-io/ipso-server/internal/llmgw"
 	"github.com/ipsofacto-io/ipso-server/internal/registry"
 )
 
@@ -30,9 +31,10 @@ const (
 // Backend answers the tools from the registry, for one caller. Every call writes an action log entry
 // first, and a call that cannot be logged does not run, so the log names the sponsor of each one.
 type Backend struct {
-	DB     *sql.DB
-	Caller Caller
-	Now    func() time.Time
+	DB      *sql.DB
+	Caller  Caller
+	Now     func() time.Time
+	Gateway *llmgw.Gateway
 }
 
 var _ mcptools.Backend = (*Backend)(nil)
@@ -161,6 +163,64 @@ func (b *Backend) Propose(ctx context.Context, in mcptools.ProposeInput) (mcptoo
 		return mcptools.ProposeOutput{}, errors.New("the proposal could not be stored")
 	}
 	return mcptools.ProposeOutput{ProposalID: id.String(), Status: "proposed", Location: proposalsLocation}, nil
+}
+
+// Health answers decisions.health by separating decision Validity and per-scope Compliance (ADR-0163).
+func (b *Backend) Health(ctx context.Context, in mcptools.HealthInput) (mcptools.HealthOutput, error) {
+	if strings.TrimSpace(in.Ref) != "" && strings.TrimSpace(in.Query) != "" {
+		return mcptools.HealthOutput{}, errors.New("ref and query cannot be combined")
+	}
+	subject := strings.TrimSpace(in.Ref)
+	if subject == "" {
+		subject = strings.TrimSpace(in.Query)
+	}
+	if subject == "" {
+		subject = in.Repo
+	}
+	if err := b.log(ctx, mcptools.ToolHealth, subject); err != nil {
+		return mcptools.HealthOutput{}, err
+	}
+	now := b.Now()
+	if strings.TrimSpace(in.Ref) != "" {
+		h, err := registry.DecisionHealthByRef(ctx, b.DB, b.Caller.Tenant, in.Ref, in.Repo, in.Env, now, now)
+		if errors.Is(err, registry.ErrNotFound) {
+			return mcptools.HealthOutput{}, errors.New("no decision has that id or slug at those times")
+		}
+		if err != nil {
+			return mcptools.HealthOutput{}, publicError(err)
+		}
+		return mcptools.HealthOutput{Decisions: []mcptools.DecisionHealth{h}}, nil
+	}
+	items, err := registry.ListDecisionHealth(ctx, b.DB, b.Caller.Tenant, registry.HealthFilter{
+		Query:   in.Query,
+		Repo:    in.Repo,
+		Env:     in.Env,
+		ValidAt: now,
+		KnownAt: now,
+		Page:    registry.Page{Limit: 50},
+	})
+	if err != nil {
+		return mcptools.HealthOutput{}, publicError(err)
+	}
+	return mcptools.HealthOutput{Decisions: items}, nil
+}
+
+// Verifiability diagnoses whether a draft decision statement is verifiable and proposes candidate checks and premises (ADR-0161).
+func (b *Backend) Verifiability(ctx context.Context, in mcptools.VerifiabilityInput) (mcptools.VerifiabilityOutput, error) {
+	if err := b.log(ctx, mcptools.ToolVerifiability, in.Title); err != nil {
+		return mcptools.VerifiabilityOutput{}, err
+	}
+	var complete llmgw.CompleteFunc
+	if b.Gateway != nil && b.DB != nil {
+		if pol, err := llmgw.GetTenantPolicy(ctx, b.DB, b.Caller.Tenant); err == nil && pol.AllowAuthoringAssist {
+			complete = b.Gateway.For(b.Caller.Tenant)
+		}
+	}
+	out, err := llmgw.AnalyzeVerifiability(ctx, b.Caller.Tenant, complete, in)
+	if errors.Is(err, llmgw.ErrBudget) {
+		return mcptools.VerifiabilityOutput{}, errors.New("the tenant's monthly LLM budget is exhausted")
+	}
+	return out, err
 }
 
 func checkProposal(in mcptools.ProposeInput) error {

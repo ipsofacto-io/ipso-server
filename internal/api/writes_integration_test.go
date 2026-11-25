@@ -220,6 +220,32 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 	}
 	s.expect(http.StatusNoContent, personA, http.MethodDelete, "/v1/role-bindings/"+idOf(t, granted, "id").String(), nil)
 	s.expect(http.StatusNoContent, personA, http.MethodPost, "/v1/principals/"+f.callers[viewerA].Principal.String()+"/erasure", nil)
+	drafted := s.expect(http.StatusCreated, contributorA, http.MethodPost, "/v1/human-proposals", map[string]any{
+		"title": "Enforce egress allowlist", "statement": "Services must restrict outbound egress", "scope_refs": []string{"acme/api"},
+	})
+	draftedID := idOf(t, drafted, "proposal_id")
+	humanApproved := s.expect(http.StatusCreated, approverA, http.MethodPost, "/v1/human-proposals/"+draftedID.String()+"/approval",
+		approval("enforce-egress-allowlist", []uuid.UUID{f.repo}))
+	if humanApproved["decision_id"] == nil {
+		t.Fatalf("the human proposal wrote no decision: %v", humanApproved)
+	}
+	llmPol := s.expect(http.StatusOK, personA, http.MethodPut, "/v1/llm-policy", map[string]any{
+		"allow_authoring_assist": true, "allow_check_eval": false,
+	})
+	if llmPol["allow_authoring_assist"] != true {
+		t.Fatalf("the llm policy answered %v", llmPol)
+	}
+	freshnessPol := s.expect(http.StatusOK, personA, http.MethodPut, "/v1/freshness-policies", map[string]any{
+		"env": "prod", "max_age_days": 14,
+	})
+	if freshnessPol["max_age_days"] != float64(14) {
+		t.Fatalf("the freshness policy answered %v", freshnessPol)
+	}
+	_, agentPEM := testAgentPublicKey(t)
+	pinned := s.expect(http.StatusCreated, personA, http.MethodPost, "/v1/agent-pins", map[string]any{
+		"name": "prod-agent", "repo": "acme/api", "env": "prod", "public_key": agentPEM,
+	})
+	s.expect(http.StatusNoContent, personA, http.MethodDelete, "/v1/agent-pins/"+idOf(t, pinned, "id").String(), nil)
 
 	// The waiver names the person who recorded it, taken from the session and not from the body.
 	var approverID uuid.UUID
@@ -263,8 +289,8 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 		byAction["api.allow_premise_host"].Principal != f.callers[personA].Principal {
 		t.Errorf("the log names the wrong people: %+v", byAction)
 	}
-	if len(s.logged()) != before+10 {
-		t.Errorf("%d entries after the clearance, host, agent approval, check approval, export request, invitation and its revocation, role grant and its revocation, and the name erasure, from %d", len(s.logged()), before)
+	if len(s.logged()) != before+16 {
+		t.Errorf("%d entries after the clearance, host, approvals, export request, invitation, role binding, name erasure, human proposal+approval, policies and agent pin, from %d", len(s.logged()), before)
 	}
 }
 
@@ -273,6 +299,7 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 func TestAWriteTheRoleDoesNotAllowStoresAndLogsNothing(t *testing.T) {
 	s := newScribe(t)
 	f := s.f
+	_, deniedPEM := testAgentPublicKey(t)
 	probe := func(op string) (method, target string, body map[string]any) {
 		switch op {
 		case "create_scope":
@@ -306,6 +333,18 @@ func TestAWriteTheRoleDoesNotAllowStoresAndLogsNothing(t *testing.T) {
 			return http.MethodDelete, "/v1/role-bindings/" + f.prod.String(), nil
 		case "erase_principal_name":
 			return http.MethodPost, "/v1/principals/" + f.callers[viewerA].Principal.String() + "/erasure", nil
+		case "create_human_proposal":
+			return http.MethodPost, "/v1/human-proposals", map[string]any{"title": "Denied", "statement": "Denied", "scope_refs": []string{"acme/api"}}
+		case "approve_human_proposal":
+			return http.MethodPost, "/v1/human-proposals/" + f.humanProposal.String() + "/approval", approval("denied", []uuid.UUID{f.org})
+		case "set_llm_policy":
+			return http.MethodPut, "/v1/llm-policy", map[string]any{"allow_authoring_assist": true, "allow_check_eval": true}
+		case "set_freshness_policy":
+			return http.MethodPut, "/v1/freshness-policies", map[string]any{"env": "prod", "max_age_days": 7}
+		case "register_agent_pin":
+			return http.MethodPost, "/v1/agent-pins", map[string]any{"name": "denied", "repo": "acme/api", "env": "prod", "public_key": deniedPEM}
+		case "revoke_agent_pin":
+			return http.MethodDelete, "/v1/agent-pins/" + f.prod.String(), nil
 		case "approve_proposal":
 			return http.MethodPost, "/v1/proposals/" + f.proposal.String() + "/approval", approval("denied", []uuid.UUID{f.org})
 		case "approve_check_proposal":
@@ -319,13 +358,19 @@ func TestAWriteTheRoleDoesNotAllowStoresAndLogsNothing(t *testing.T) {
 		+ (SELECT count(*) FROM registry.waiver WHERE tenant_id = $1) + (SELECT count(*) FROM registry.premise_host_allow WHERE tenant_id = $1)
 		+ (SELECT count(*) FROM registry.decision_version WHERE tenant_id = $1) + (SELECT count(*) FROM proposals.approval WHERE tenant_id = $1)
 		+ (SELECT count(*) FROM proposals.agent_approval WHERE tenant_id = $1) + (SELECT count(*) FROM identity.action_log WHERE tenant_id = $1)
-		+ (SELECT count(*) FROM proposals.check_approval WHERE tenant_id = $1) 		+ (SELECT count(*) FROM tenancy.export WHERE tenant_id = $1)
+		+ (SELECT count(*) FROM proposals.check_approval WHERE tenant_id = $1) + (SELECT count(*) FROM tenancy.export WHERE tenant_id = $1)
 		+ (SELECT count(*) FROM identity.invitation WHERE tenant_id = $1)
-		+ (SELECT count(*) FROM identity.role_binding WHERE tenant_id = $1)`
+		+ (SELECT count(*) FROM identity.role_binding WHERE tenant_id = $1)
+		+ (SELECT count(*) FROM proposals.human_proposal WHERE tenant_id = $1) + (SELECT count(*) FROM proposals.human_approval WHERE tenant_id = $1)
+		+ (SELECT count(*) FROM llm.tenant_policy WHERE tenant_id = $1) + (SELECT count(*) FROM verification.freshness_policy WHERE tenant_id = $1)
+		+ (SELECT count(*) FROM verification.agent_pin WHERE tenant_id = $1)`
 	rows := s.count(tenantA, `SELECT `+tables)
 	roleOf := map[string]string{agentA: identity.RoleAgent, viewerA: identity.RoleViewer, auditorA: identity.RoleAuditor, contributorA: identity.RoleContributor, nobodyA: ""}
 	for subject, role := range roleOf {
 		for _, op := range writeOps {
+			if role == identity.RoleContributor && op == "create_human_proposal" {
+				continue
+			}
 			if slices.Contains(mayCall[op], role) {
 				t.Fatalf("the matrix lets %q %s", role, op)
 			}

@@ -54,6 +54,7 @@ func writeRoutes(db *sql.DB, log *slog.Logger) []route {
 		{"POST /v1/premise-hosts", "allow_premise_host", authz.AllowlistWrite, nil, nil, http.HandlerFunc(h.allowPremiseHost)},
 		{"POST /v1/proposals/{id}/approval", "approve_proposal", authz.DecisionApprove, nil, targetsApproval, http.HandlerFunc(h.approveProposal)},
 		{"POST /v1/agent-proposals/{id}/approval", "approve_agent_proposal", authz.DecisionApprove, nil, targetsApproval, http.HandlerFunc(h.approveAgentProposal)},
+		{"POST /v1/human-proposals/{id}/approval", "approve_human_proposal", authz.DecisionApprove, nil, targetsApproval, http.HandlerFunc(h.approveHumanProposal)},
 		{"POST /v1/decisions/{decisionID}/check-proposals/{id}/approval", "approve_check_proposal", authz.DecisionApprove, nil, targetsDecisionInPath, http.HandlerFunc(h.approveCheckProposal)},
 	}
 }
@@ -463,6 +464,10 @@ func (h *writeHandlers) approveProposal(w http.ResponseWriter, r *http.Request) 
 
 func (h *writeHandlers) approveAgentProposal(w http.ResponseWriter, r *http.Request) {
 	h.approve(w, r, "approve_agent_proposal", proposals.QueueAgentProposals)
+}
+
+func (h *writeHandlers) approveHumanProposal(w http.ResponseWriter, r *http.Request) {
+	h.approve(w, r, "approve_human_proposal", proposals.QueueHumanProposals)
 }
 
 func (h *writeHandlers) approveTrackerProposal(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,138 @@
   },
   "interactions": [
     {
+      "description": "a full-text search for decisions in force",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds decisions, scopes, a waiver, and proposals"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/decisions",
+        "query": {
+          "limit": [
+            "50"
+          ],
+          "q": [
+            "tls"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "decisions": [
+              {
+                "body": {
+                  "slug": "use-tls",
+                  "title": "use-tls"
+                },
+                "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "version": 1
+              }
+            ],
+            "known": "2026-11-01T00:00:00Z",
+            "valid": "2026-06-01T00:00:00Z"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.decisions[*].id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decisions": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.decisions[*].body": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decisions[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.decisions[*].version": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.known": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.valid": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
       "description": "a request for an audit answer from a viewer",
       "pending": false,
       "providerStates": [
@@ -61,6 +193,151 @@
           ]
         },
         "status": 403
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for decision health summaries",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds decisions, scopes, a waiver, and proposals"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/decisions/health",
+        "query": {
+          "limit": [
+            "50"
+          ],
+          "q": [
+            "tls"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "decisions": [
+              {
+                "compliance": {
+                  "scopes": [],
+                  "state": "unverified"
+                },
+                "criticality": "warning",
+                "id": "00000000-0000-7000-8000-000000000001",
+                "slug": "use-tls",
+                "title": "use-tls",
+                "validity": {
+                  "open_premise_reasons": [],
+                  "state": "valid",
+                  "status": "accepted"
+                }
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decisions": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.decisions[*].compliance.state": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^(compliant|violated|waived|stale|unverified)$"
+                }
+              ]
+            },
+            "$.decisions[*].criticality": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decisions[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decisions[*].slug": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decisions[*].title": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.decisions[*].validity.state": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^(valid|needs_review|superseded|expired)$"
+                }
+              ]
+            },
+            "$.decisions[*].validity.status": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
       },
       "type": "Synchronous/HTTP"
     },
@@ -291,6 +568,129 @@
           ]
         },
         "status": 403
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for pending human proposals",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds a pending human proposal and an org scope, and the session belongs to an approver"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/human-proposals",
+        "query": {
+          "limit": [
+            "25"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "human_proposals": [
+              {
+                "captured_at": "2026-11-01T00:00:00Z",
+                "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "payload": {
+                  "title": "Deny default egress"
+                },
+                "principal_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "status": "pending"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.human_proposals[*].id": {
+              "type": "Uuid"
+            },
+            "$.human_proposals[*].principal_id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.human_proposals": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.human_proposals[*].captured_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.human_proposals[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.human_proposals[*].payload": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.human_proposals[*].principal_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
       },
       "type": "Synchronous/HTTP"
     },
@@ -1358,6 +1758,7 @@
                 "sarif_sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
                 "sha": "abababababababababababababababababababab",
                 "slug": "use-tls",
+                "source_kind": "change",
                 "upload_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
                 "violations": 2,
                 "waiver": {
@@ -1610,6 +2011,14 @@
                           ]
                         },
                         "$.slug": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.source_kind": {
                           "combine": "AND",
                           "matchers": [
                             {
@@ -1945,6 +2354,130 @@
               ]
             },
             "$.check_proposals[*].spec": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the health of the decision use-tls",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds decisions, scopes, a waiver, and proposals"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/decisions/use-tls/health"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "compliance": {
+              "scopes": [],
+              "state": "unverified"
+            },
+            "criticality": "warning",
+            "id": "00000000-0000-7000-8000-000000000001",
+            "slug": "use-tls",
+            "title": "use-tls",
+            "validity": {
+              "open_premise_reasons": [],
+              "state": "valid",
+              "status": "accepted"
+            }
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.compliance.state": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^(compliant|violated|waived|stale|unverified)$"
+                }
+              ]
+            },
+            "$.criticality": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.slug": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.title": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.validity.state": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^(valid|needs_review|superseded|expired)$"
+                }
+              ]
+            },
+            "$.validity.status": {
               "combine": "AND",
               "matchers": [
                 {
@@ -2910,6 +3443,7 @@
                 "sarif_sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
                 "sha": "abababababababababababababababababababab",
                 "slug": "use-tls",
+                "source_kind": "change",
                 "upload_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
                 "violations": 2,
                 "waiver": {
@@ -3139,6 +3673,14 @@
                 }
               ]
             },
+            "$.verdicts[*].source_kind": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
             "$.verdicts[*].upload_id": {
               "combine": "AND",
               "matchers": [
@@ -3249,6 +3791,7 @@
                 "sarif_sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
                 "sha": "abababababababababababababababababababab",
                 "slug": "use-tls",
+                "source_kind": "change",
                 "upload_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
                 "violations": 2,
                 "waiver": {
@@ -3478,6 +4021,14 @@
                 }
               ]
             },
+            "$.verdicts[*].source_kind": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
             "$.verdicts[*].upload_id": {
               "combine": "AND",
               "matchers": [
@@ -3593,6 +4144,7 @@
                 "sarif_sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
                 "sha": "abababababababababababababababababababab",
                 "slug": "use-tls",
+                "source_kind": "change",
                 "upload_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
                 "violations": 2,
                 "waiver": {
@@ -3823,6 +4375,14 @@
               ]
             },
             "$.verdicts[*].slug": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.verdicts[*].source_kind": {
               "combine": "AND",
               "matchers": [
                 {
@@ -4496,6 +5056,162 @@
           }
         },
         "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to analyze decision verifiability",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds decisions, scopes, a waiver, and proposals"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "statement": "Services should use TLS where appropriate.",
+            "title": "Use TLS where appropriate"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/v1/verifiability"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "ai_generated": false,
+            "candidate_checks": [
+              {
+                "engine": "llm",
+                "mode": "warn",
+                "rationale": "Evaluate snapshot against rubric.",
+                "target": "json-snapshot"
+              }
+            ],
+            "candidate_premises": [],
+            "classification": "ambiguous",
+            "suggestions": [
+              "State explicit port and TLS version constraints."
+            ],
+            "summary": "Contains hedging words."
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.ai_generated": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.candidate_checks": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.candidate_checks[*].engine": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^(opa|semgrep|checkov|kyverno|llm|llm-advisory)$"
+                }
+              ]
+            },
+            "$.candidate_checks[*].mode": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^(block|warn|advise)$"
+                }
+              ]
+            },
+            "$.candidate_checks[*].rationale": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.candidate_checks[*].target": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.classification": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^(verifiable|ambiguous|human_attestation_only)$"
+                }
+              ]
+            },
+            "$.suggestions": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.summary": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
       },
       "type": "Synchronous/HTTP"
     },
@@ -5320,6 +6036,134 @@
           ]
         },
         "status": 404
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request to create and contextually approve a human proposal",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds a pending human proposal and an org scope, and the session belongs to an approver"
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "approve_now": true,
+            "criticality": "blocking",
+            "owner": "team:security",
+            "scope_refs": [
+              "5c9f3b1e-2a7d-4e84-8b6a-1f0d9c2e7a41"
+            ],
+            "statement": "Production firewalls must deny 0.0.0.0/0 egress.",
+            "title": "Deny unrestricted production egress"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.scope_refs[0]": {
+              "expression": "${scopeId}",
+              "type": "ProviderState"
+            }
+          }
+        },
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.scope_refs[0]": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/v1/human-proposals"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "decision_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "proposal_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+            "slug": "deny-unrestricted-production-egress",
+            "status": "approved"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.decision_id": {
+              "type": "Uuid"
+            },
+            "$.proposal_id": {
+              "type": "Uuid"
+            }
+          }
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.proposal_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.slug": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
       },
       "type": "Synchronous/HTTP"
     },

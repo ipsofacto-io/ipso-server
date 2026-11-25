@@ -51,16 +51,20 @@ func Store(ctx context.Context, db *sql.DB, tenant uuid.UUID, run Run, up Upload
 		return Stored{}, reduce("store: set the tenant", err)
 	}
 
+	sourceKind := up.SourceKind
+	if sourceKind != "live" {
+		sourceKind = "change"
+	}
 	var id uuid.UUID
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO verification.upload
 		  (tenant_id, installation_id, repository_id, repo, run_id, run_attempt, sha, ref, event_name, workflow_ref,
-		   check_name, env, ipso_version, evaluated_at, build_sha256, sarif_sha256, evidence, content_sha256)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18)
+		   check_name, env, source_kind, ipso_version, evaluated_at, build_sha256, sarif_sha256, evidence, content_sha256)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19)
 		ON CONFLICT ON CONSTRAINT upload_once DO NOTHING
 		RETURNING id`,
 		tenant, run.Installation, run.RepositoryID, run.Repo, run.RunID, run.RunAttempt, run.SHA, run.Ref, run.Event,
-		run.WorkflowRef, up.Check, up.Env, up.IpsoVersion, up.EvaluatedAt, up.BuildSHA256, up.SarifSHA256,
+		run.WorkflowRef, up.Check, up.Env, sourceKind, up.IpsoVersion, up.EvaluatedAt, up.BuildSHA256, up.SarifSHA256,
 		string(up.Evidence), up.Digest).Scan(&id)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -80,10 +84,12 @@ func Store(ctx context.Context, db *sql.DB, tenant uuid.UUID, run Run, up Upload
 		n := len(up.Verdicts)
 		decisions, slugs, indexes := make([]string, n), make([]string, n), make([]int32, n)
 		modes, results, violations := make([]string, n), make([]string, n), make([]int32, n)
+		models, promptVersions := make([]string, n), make([]string, n)
 		fingerprints := make([][]string, n)
 		for i, v := range up.Verdicts {
 			decisions[i], slugs[i], indexes[i] = v.DecisionID, v.Slug, int32(v.CheckIndex)
 			modes[i], results[i], violations[i] = v.Mode, v.Result, int32(v.Violations)
+			models[i], promptVersions[i] = v.ModelID, v.PromptVersion
 			// An empty list and not null, because the statement takes the elements of each entry.
 			fingerprints[i] = []string{}
 			if v.Fingerprints != nil {
@@ -97,14 +103,16 @@ func Store(ctx context.Context, db *sql.DB, tenant uuid.UUID, run Run, up Upload
 		// The digests of the verdicts are one JSON list of lists, in the order of the other arrays. A verdict
 		// with none gets null and not an empty array, as the table's constraint requires.
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO verification.verdict (tenant_id, upload_id, decision_id, slug, check_index, mode, result, violations, fingerprints)
+			INSERT INTO verification.verdict
+			  (tenant_id, upload_id, decision_id, slug, check_index, mode, result, violations, fingerprints, model_id, prompt_version)
 			SELECT $1::uuid, $2::uuid, t.decision_id, t.slug, t.check_index, t.mode, t.result, t.violations,
 			       (SELECT array_agg(decode(f.digest, 'hex') ORDER BY f.ord)
-			        FROM jsonb_array_elements_text($9::jsonb -> (t.ord - 1)::int) WITH ORDINALITY AS f(digest, ord))
-			FROM unnest($3::text[], $4::text[], $5::int4[], $6::text[], $7::text[], $8::int4[])
-			     WITH ORDINALITY AS t(decision_id, slug, check_index, mode, result, violations, ord)
+			        FROM jsonb_array_elements_text($9::jsonb -> (t.ord - 1)::int) WITH ORDINALITY AS f(digest, ord)),
+			       NULLIF(t.model_id, ''), NULLIF(t.prompt_version, '')
+			FROM unnest($3::text[], $4::text[], $5::int4[], $6::text[], $7::text[], $8::int4[], $10::text[], $11::text[])
+			     WITH ORDINALITY AS t(decision_id, slug, check_index, mode, result, violations, model_id, prompt_version, ord)
 			ORDER BY t.ord`,
-			tenant, id, decisions, slugs, indexes, modes, results, violations, string(digests)); err != nil {
+			tenant, id, decisions, slugs, indexes, modes, results, violations, string(digests), models, promptVersions); err != nil {
 			return Stored{}, reduce("store: insert the verdicts", err)
 		}
 	}

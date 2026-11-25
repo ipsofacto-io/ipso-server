@@ -6,7 +6,7 @@ require (
 	filippo.io/age v1.3.2
 	github.com/go-logr/logr v1.4.4
 	github.com/google/uuid v1.6.0
-	github.com/ipsofacto-io/ipso v0.4.1-0.20261112150915-16812ad6c0a1
+	github.com/ipsofacto-io/ipso v0.5.1-0.20261124191601-93afaf3809ad
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/lestrrat-go/jwx/v3 v3.3.0
 	github.com/open-policy-agent/opa v1.21.4

@@ -25,19 +25,28 @@ import (
 var mayCall = func() map[string][]string {
 	every := identity.Roles
 	auditors := []string{identity.RoleAuditor, identity.RoleAdmin}
+	proposers := []string{identity.RoleContributor, identity.RoleDecisionOwner, identity.RoleApprover, identity.RoleAdmin, identity.RoleAgent}
 	return map[string][]string{
-		"resolve":              every,
-		"list_decisions":       every,
-		"get_decision":         every,
-		"list_scopes":          every,
-		"list_waivers":         every,
-		"list_premise_reasons": every,
-		"list_premise_hosts":   every,
-		"list_proposals":       every,
-		"list_agent_proposals": every,
-		"list_check_proposals": every,
-		"list_accepted_checks": every,
-		"audit_decisions":      auditors,
+		"resolve":                 every,
+		"analyze_verifiability":   proposers,
+		"evaluate_llm_check":      proposers,
+		"list_decisions":          every,
+		"list_decisions_health":   every,
+		"get_decision":            every,
+		"get_decision_health":     every,
+		"list_scopes":             every,
+		"list_waivers":            every,
+		"list_premise_reasons":    every,
+		"list_premise_hosts":      every,
+		"list_proposals":          every,
+		"list_agent_proposals":    every,
+		"list_human_proposals":    every,
+		"list_check_proposals":    every,
+		"list_accepted_checks":    every,
+		"get_llm_policy":          every,
+		"list_freshness_policies": every,
+		"list_agent_pins":         {identity.RoleAdmin},
+		"audit_decisions":         auditors,
 		"audit_beliefs":        auditors,
 		"audit_merges":         auditors,
 		"audit_supersessions":  auditors,
@@ -57,7 +66,13 @@ var mayCall = func() map[string][]string {
 		"allow_premise_host":        {identity.RoleAdmin},
 		"approve_proposal":          {identity.RoleApprover, identity.RoleDecisionOwner},
 		"approve_agent_proposal":    {identity.RoleApprover, identity.RoleDecisionOwner},
+		"approve_human_proposal":    {identity.RoleApprover, identity.RoleDecisionOwner},
 		"approve_check_proposal":    {identity.RoleApprover, identity.RoleDecisionOwner},
+		"create_human_proposal":     {identity.RoleContributor, identity.RoleDecisionOwner, identity.RoleApprover, identity.RoleAdmin},
+		"set_llm_policy":            {identity.RoleAdmin},
+		"set_freshness_policy":      {identity.RoleAdmin},
+		"register_agent_pin":        {identity.RoleAdmin},
+		"revoke_agent_pin":          {identity.RoleAdmin},
 
 		// The export of the whole tenant (ADR-0111): only an admin who is a person holds tenant.export.
 		"start_export":    {identity.RoleAdmin},
@@ -84,7 +99,9 @@ var mayCall = func() map[string][]string {
 var writeOps = []string{
 	"create_scope", "reparent_scope", "retire_scope", "record_supersession", "record_grandfather_period",
 	"record_baseline", "record_waiver", "clear_premise_reason", "allow_premise_host", "approve_proposal",
-	"approve_agent_proposal", "approve_check_proposal", "start_export", "create_invitation", "revoke_invitation",
+	"approve_agent_proposal", "approve_human_proposal", "approve_check_proposal", "create_human_proposal",
+	"set_llm_policy", "set_freshness_policy", "register_agent_pin", "revoke_agent_pin",
+	"start_export", "create_invitation", "revoke_invitation",
 	"grant_role_binding", "revoke_role_binding", "erase_principal_name",
 }
 
@@ -192,7 +209,7 @@ func guardedStore(t *testing.T, p identity.Principal, stand http.Handler, extra 
 	for i := range stubbed {
 		stubbed[i].handler = stand
 	}
-	mux, table := mount(stubbed, nil)
+	mux, table := mount(stubbed, nil, nil)
 	if extra != nil {
 		extra(mux)
 	}
@@ -241,8 +258,22 @@ func bodyOf(op string) string {
 		return `{"recipient":"` + aRecipient + `"}`
 	case "approve_check_proposal":
 		return `{"outcome":"approved"}`
-	case "approve_proposal", "approve_agent_proposal":
+	case "approve_proposal", "approve_agent_proposal", "approve_human_proposal":
 		return `{"outcome":"approved","decision":{"body":{"slug":"use-tls","title":"Use TLS"},"scope_refs":["` + idScope + `"],"valid_from":"2026-01-01T00:00:00Z"}}`
+	case "create_human_proposal":
+		return `{"title":"Deny default egress","statement":"Deny 0.0.0.0/0 egress","scope_refs":["` + idScope + `"]}`
+	case "set_llm_policy":
+		return `{"allow_authoring_assist":true,"allow_check_eval":true}`
+	case "set_freshness_policy":
+		return `{"env":"prod","max_age_days":7}`
+	case "register_agent_pin":
+		return `{"name":"prod-agent","repo":"acme/api","env":"prod","public_key":"MCowBQYDK2VwAyEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`
+	case "analyze_verifiability":
+		return `{"title":"Deny default egress","statement":"Deny 0.0.0.0/0 egress"}`
+	case "evaluate_llm_check":
+		return `{"target":"json-snapshot","rubric":"Deny 0.0.0.0/0 egress","redacted_input":"{}"}`
+	case "resolve":
+		return `{"repo":"acme/api","env":"prod","paths":["main.tf"]}`
 	}
 	return ""
 }
@@ -277,7 +308,7 @@ func refusedPlainly(t *testing.T, w *httptest.ResponseRecorder) bool {
 
 func TestTheMatrixNamesEveryOperation(t *testing.T) {
 	for pattern, op := range operations(t, loadDocument(t)) {
-		if op == "upload_verdicts" {
+		if op == "upload_verdicts" || op == "upload_live_verdicts" {
 			continue
 		}
 		if _, ok := mayCall[op]; !ok {
@@ -296,7 +327,7 @@ func TestTheMatrixNamesEveryOperation(t *testing.T) {
 // the agent log after the policy, which this unreachable store refuses with 500.
 func TestEveryRoleOnEveryOperation(t *testing.T) {
 	for pattern, op := range operations(t, loadDocument(t)) {
-		if op == "upload_verdicts" {
+		if op == "upload_verdicts" || op == "upload_live_verdicts" {
 			continue
 		}
 		method, path, _ := strings.Cut(pattern, " ")
@@ -380,7 +411,7 @@ func TestARouteWithoutAKnownActionIsRefused(t *testing.T) {
 			return principalAs(identity.RoleAdmin), nil
 		}
 		stand := &reached{}
-		mux, table := mount([]route{{"GET /v1/thing", "get_thing", action, nil, nil, stand}}, nil)
+		mux, table := mount([]route{{"GET /v1/thing", "get_thing", action, nil, nil, stand}}, nil, nil)
 		if w := call(t, g.serve(mux, table), http.MethodGet, "/v1/thing", "Bearer good"); !refusedPlainly(t, w) || stand.calls != 0 {
 			t.Errorf("action %q: status %d, %d runs", action, w.Code, stand.calls)
 		}
@@ -399,6 +430,11 @@ func TestEveryRouteNamesAnActionThePolicyKnows(t *testing.T) {
 	for _, rt := range ciRoutes(nil, nil) {
 		if rt.action != "" {
 			t.Errorf("the CI route %s names %q", rt.pattern, rt.action)
+		}
+	}
+	for _, rt := range liveRoutes(nil, nil) {
+		if rt.action != "" {
+			t.Errorf("the live upload route %s names %q", rt.pattern, rt.action)
 		}
 	}
 }
@@ -631,7 +667,7 @@ func TestAScopedRouteWithNoTargetsIsRefused(t *testing.T) {
 	}
 	g.decisionScopes, g.chains = fakeStore{}.decisionScopes, fakeStore{}.chainsOf
 	stand := &reached{}
-	mux, table := mount([]route{{"POST /v1/thing", "thing", authz.ScopeWrite, nil, nil, stand}}, nil)
+	mux, table := mount([]route{{"POST /v1/thing", "thing", authz.ScopeWrite, nil, nil, stand}}, nil, nil)
 	if w := callBody(t, g.serve(mux, table), http.MethodPost, "/v1/thing", "Bearer good", `{}`); !refusedPlainly(t, w) || stand.calls != 0 {
 		t.Fatalf("status %d, %d runs", w.Code, stand.calls)
 	}

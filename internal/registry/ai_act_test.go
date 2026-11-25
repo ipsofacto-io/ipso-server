@@ -60,6 +60,9 @@ func TestAIActGuardrails(t *testing.T) {
 		t.Errorf("verdict or proposal read grouped or ordered by a person in %v", keyed)
 	}
 	checkInboxLabel(t, filepath.Join(root, "web", "src", "views", "Inbox.tsx"))
+	checkModelLabelComponent(t, filepath.Join(root, "web", "src", "components", "ModelLabel.tsx"))
+	checkViewUsesModelLabel(t, filepath.Join(root, "web", "src", "views", "DecisionDetail.tsx"), "model_id")
+	checkViewUsesModelLabel(t, filepath.Join(root, "web", "src", "views", "NewDecision.tsx"), "ai_generated")
 }
 
 func skipAIActDir(name string) bool {
@@ -144,6 +147,30 @@ func checkInboxLabel(t *testing.T, path string) {
 	agent := functionSource(t, src, "FromAgent")
 	if strings.Contains(agent, "ModelLabel") || strings.Contains(agent, "model_id") || strings.Contains(agent, "AI-generated") {
 		t.Errorf("a coding-agent proposal has no model id and must not carry the model label")
+	}
+}
+
+func checkModelLabelComponent(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(data)
+	if !strings.Contains(src, "AI-generated") || !strings.Contains(src, "modelID") || !strings.Contains(src, "promptVersion") {
+		t.Errorf("%s must render AI-generated with modelID and promptVersion", path)
+	}
+}
+
+func checkViewUsesModelLabel(t *testing.T, path, requiredToken string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(data)
+	if !strings.Contains(src, "<ModelLabel") || !strings.Contains(src, requiredToken) {
+		t.Errorf("%s must pair %s with <ModelLabel", path, requiredToken)
 	}
 }
 

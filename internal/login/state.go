@@ -14,8 +14,8 @@ const (
 	// the cookie needs no signature and ipso needs no key to sign it with.
 	attemptCookieName = "__Host-ipso-login"
 	attemptLife       = 10 * time.Minute
-	// maxAttemptCookie bounds what is parsed. A real one is about 280 bytes.
-	maxAttemptCookie = 1024
+	// maxAttemptCookie bounds what is parsed. A CLI PKCE attempt adds loopback callback metadata.
+	maxAttemptCookie = 2048
 )
 
 // attempt is what a sign-in needs to remember: which provider it went to, the state and nonce it
@@ -36,6 +36,10 @@ type attempt struct {
 	// Request is set for a posted callback. The cookie is then SameSite=None, because a cross-site
 	// POST does not send a Lax cookie (ADR-0131). OIDC and GitHub leave it empty and stay Lax.
 	Request string `json:"r,omitempty"`
+	// CLIRedirect, CLIState, and CLIChallenge carry a loopback PKCE CLI sign-in across the provider redirect (ADR-0160).
+	CLIRedirect  string `json:"cr,omitempty"`
+	CLIState     string `json:"cs,omitempty"`
+	CLIChallenge string `json:"cc,omitempty"`
 }
 
 func (a attempt) cookie() *http.Cookie {

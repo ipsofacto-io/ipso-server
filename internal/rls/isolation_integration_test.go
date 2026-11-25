@@ -350,6 +350,12 @@ func smuggleInserts() []smuggle {
 		// The stamp trigger reads the login as the caller's tenant, so it refuses this row (23514) before the
 		// policy is asked (42501). Either way the insert fails, and the policy stays as a second line.
 		{"identity.session", `INSERT INTO identity.session (tenant_id, login_id, token_sha256) VALUES ($1::uuid, $1::uuid, sha256(convert_to('smuggled', 'UTF8')))`, []any{tenantA}, false},
+		{"identity.cli_session", `INSERT INTO identity.cli_session (tenant_id, login_id, token_sha256) VALUES ($1::uuid, $1::uuid, sha256(convert_to('smuggled-cli', 'UTF8')))`, []any{tenantA}, false},
+		{"proposals.human_proposal", `INSERT INTO proposals.human_proposal (tenant_id, principal_id, payload) VALUES ($1::uuid, $1::uuid, '{"title":"Smuggled"}')`, []any{tenantA}, false},
+		{"proposals.human_approval", `INSERT INTO proposals.human_approval (tenant_id, proposal_id, approver_id, outcome) VALUES ($1::uuid, $1::uuid, $1::uuid, 'rejected')`, []any{tenantA}, false},
+		{"llm.tenant_policy", `INSERT INTO llm.tenant_policy (tenant_id) VALUES ($1::uuid)`, []any{tenantA}, true},
+		{"verification.agent_pin", `INSERT INTO verification.agent_pin (tenant_id, name, repo, env, pin_sha256, public_key_der) VALUES ($1::uuid, 'smuggled', 'acme/smuggled', 'prod', sha256('smuggled-pin'), decode(repeat('30', 32), 'hex'))`, []any{tenantA}, true},
+		{"verification.freshness_policy", `INSERT INTO verification.freshness_policy (tenant_id, env, max_age_days) VALUES ($1::uuid, 'prod', 7)`, []any{tenantA}, true},
 		// The stamp trigger reads the inviter as the caller's tenant, so it refuses this row (23514) before the
 		// policy is asked (42501), like the session stamp above.
 		{"identity.invitation", `INSERT INTO identity.invitation (tenant_id, token_sha256, name, role, created_by) VALUES ($1::uuid, sha256(convert_to('smuggled', 'UTF8')), 'Smuggled', 'viewer', $1::uuid)`, []any{tenantA}, false},
@@ -522,12 +528,16 @@ func policyTables() []string {
 		"identity.principal",
 		"identity.role_binding",
 		"identity.session",
+		"identity.cli_session",
+		"llm.tenant_policy",
 		"llm.usage",
 		"proposals.agent_approval",
 		"proposals.agent_proposal",
 		"proposals.approval",
 		"proposals.check_approval",
 		"proposals.check_proposal",
+		"proposals.human_approval",
+		"proposals.human_proposal",
 		"proposals.proposal",
 		"proposals.tracker_approval",
 		"proposals.tracker_proposal",
@@ -552,6 +562,8 @@ func policyTables() []string {
 		"tenancy.offboarding",
 		"tenancy.tenant",
 		"tenancy.tenant_key",
+		"verification.agent_pin",
+		"verification.freshness_policy",
 		"verification.upload",
 		"verification.verdict",
 	}
@@ -578,12 +590,16 @@ func expectedPolicies() []string {
 		"identity.principal":                "SELECT INSERT UPDATE",
 		"identity.role_binding":             "SELECT INSERT DELETE",
 		"identity.session":                  "SELECT INSERT DELETE",
+		"identity.cli_session":              "SELECT INSERT DELETE",
+		"llm.tenant_policy":                 "SELECT INSERT UPDATE",
 		"llm.usage":                         "SELECT INSERT UPDATE",
 		"proposals.agent_approval":          "SELECT INSERT",
 		"proposals.agent_proposal":          "SELECT INSERT",
 		"proposals.approval":                "SELECT INSERT",
 		"proposals.check_approval":          "SELECT INSERT",
 		"proposals.check_proposal":          "SELECT INSERT",
+		"proposals.human_approval":          "SELECT INSERT",
+		"proposals.human_proposal":          "SELECT INSERT",
 		"proposals.proposal":                "SELECT INSERT",
 		"proposals.tracker_approval":        "SELECT INSERT",
 		"proposals.tracker_proposal":        "SELECT INSERT",
@@ -608,6 +624,8 @@ func expectedPolicies() []string {
 		"tenancy.offboarding":               "SELECT",
 		"tenancy.tenant":                    "SELECT INSERT",
 		"tenancy.tenant_key":                "SELECT INSERT",
+		"verification.agent_pin":            "SELECT INSERT DELETE",
+		"verification.freshness_policy":     "SELECT INSERT UPDATE DELETE",
 		"verification.upload":               "SELECT INSERT",
 		"verification.verdict":              "SELECT INSERT",
 	}
@@ -620,6 +638,8 @@ func expectedPolicies() []string {
 		migrate[table] = "SELECT INSERT DELETE"
 	}
 	migrate["identity.session"] = "SELECT DELETE"
+	migrate["identity.cli_session"] = "SELECT DELETE"
+	migrate["verification.agent_pin"] = "SELECT DELETE"
 	// An invitation holds a credential hash, so an export leaves it out like a session (ADR-0127).
 	migrate["identity.invitation"] = "SELECT DELETE"
 	// A SCIM user holds a filter key and a token holds a credential hash, so an export leaves both out (ADR-0131).

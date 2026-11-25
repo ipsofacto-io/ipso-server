@@ -18,6 +18,7 @@ import { ExportView } from './views/Export';
 import { InboxView } from './views/Inbox';
 import { InvitationView } from './views/Invitation';
 import { InvitationsView } from './views/Invitations';
+import { NewDecisionView } from './views/NewDecision';
 import { PagesView } from './views/Pages';
 import { PremisesView } from './views/Premises';
 import { RecordBaselineView } from './views/RecordBaseline';
@@ -42,6 +43,7 @@ export function AppRoutes() {
       <Route element={<Layout />}>
         <Route index element={<Navigate to="/decisions" replace />} />
         <Route path="decisions" element={<DecisionsView />} />
+        <Route path="decisions/new" element={<NewDecisionView />} />
         <Route path="decisions/:ref" element={<DecisionDetailView />} />
         <Route path="scopes" element={<ScopesView />} />
         <Route path="inbox" element={<InboxView />} />

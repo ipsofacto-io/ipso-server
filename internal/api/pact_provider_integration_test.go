@@ -118,6 +118,7 @@ const (
 	statePremiseOpen    = "tenant A holds an open review reason, and the session belongs to a decision owner"
 	statePremiseCleared = "tenant A holds a review reason that was cleared, and the session belongs to a decision owner"
 	stateHostAllowed    = "tenant A holds an allowed host, and the session belongs to an admin"
+	stateHumanAuthoring = "tenant A holds a pending human proposal and an org scope, and the session belongs to an approver"
 )
 
 // pactPremise is the premise every reason state names, and pactHost the host the allowlist states hold. A reason state
@@ -563,6 +564,14 @@ func TestPactProviderIpsoServer(t *testing.T) {
 				return models.ProviderStateResponse{"bindingId": id.String()}, nil
 			}),
 			stateAdminSession: as(personA),
+			stateHumanAuthoring: seeds(approverA, func(ctx context.Context, _ int64) (models.ProviderStateResponse, error) {
+				if _, err := pgtest.Exec(ctx, f.db, tenantA.String(),
+					`INSERT INTO proposals.human_proposal (tenant_id, principal_id, payload) VALUES ($1, $2, '{"title":"Deny default egress"}')`,
+					tenantA, f.callers[approverA].Principal); err != nil {
+					return nil, fmt.Errorf("seed a human proposal: %w", err)
+				}
+				return models.ProviderStateResponse{"scopeId": f.org.String()}, nil
+			}),
 		},
 		RequestFilter: func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

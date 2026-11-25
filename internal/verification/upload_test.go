@@ -43,6 +43,10 @@ func reportOf(check string) map[string]any {
 			report[f.name] = "1.2.3"
 		case adapterField:
 			report[f.name] = check
+		case targetField:
+			report[f.name] = "json-snapshot"
+		case modelField:
+			report[f.name] = "mistral-large-eu"
 		}
 	}
 	return report
@@ -63,8 +67,8 @@ func bodyOf(t *testing.T, check string, mutate func(upload, report map[string]an
 }
 
 func TestParseAcceptsTheReportOfEveryCheck(t *testing.T) {
-	if len(kinds) != 17 {
-		t.Fatalf("%d checks write a report, want 17", len(kinds))
+	if len(kinds) != 18 {
+		t.Fatalf("%d checks write a report, want 18", len(kinds))
 	}
 	for check := range kinds {
 		t.Run(check, func(t *testing.T) {

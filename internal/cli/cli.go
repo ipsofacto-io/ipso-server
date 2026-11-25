@@ -341,11 +341,12 @@ func apiCmd(ctx context.Context, stderr io.Writer, d deps) int {
 		return 1
 	}
 	if path := d.getenv(gatewayConfigEnv); path != "" {
-		complete, err := trackerComplete(db, path, cfg.Log)
+		gateway, complete, err := buildAPIGateway(db, path, cfg.Log)
 		if err != nil {
 			fprintf(stderr, "api: %v\n", err)
 			return 1
 		}
+		cfg.Gateway = gateway
 		eehooks.SetComplete(complete)
 	}
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", address)
@@ -626,21 +627,21 @@ func installConnectorKey(getenv func(string) string) error {
 }
 
 // trackerComplete builds the model call the tracker webhook uses when a gateway file is set.
-func trackerComplete(db *sql.DB, path string, log *slog.Logger) (eehooks.CompleteFunc, error) {
+func buildAPIGateway(db *sql.DB, path string, log *slog.Logger) (*llmgw.Gateway, eehooks.CompleteFunc, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", gatewayConfigEnv, err)
+		return nil, nil, fmt.Errorf("%s: %w", gatewayConfigEnv, err)
 	}
 	defer func() { _ = file.Close() }()
 	cfg, err := llmgw.ParseConfig(file)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	gateway, err := llmgw.New(cfg, llmgw.PGLedger{DB: db}, nil, log)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return func(ctx context.Context, tenant uuid.UUID, system, user string, maxTokens int) (string, string, error) {
+	return gateway, func(ctx context.Context, tenant uuid.UUID, system, user string, maxTokens int) (string, string, error) {
 		answer, err := gateway.For(tenant)(ctx, system, user, maxTokens)
 		if err != nil {
 			return "", "", err
