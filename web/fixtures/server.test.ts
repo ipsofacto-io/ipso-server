@@ -134,6 +134,7 @@ describe('the baseline of a repository in the fixtures server', () => {
 
 describe('the answer to a drafted check in the fixtures server', () => {
   const CHECK = '0194f2a0-0000-7000-8000-000000000501';
+  const TEMPLATE = '0194f2a0-0000-7000-8000-000000000502';
   const path = (decision: string = ids.useTls, check: string = CHECK) => `/v1/decisions/${decision}/check-proposals/${check}/approval`;
   const queue = (state: ReturnType<typeof newFixtureState>) =>
     (respond({ method: 'GET', url: '/v1/check-proposals', cookie }, NOW, state).body as { check_proposals: { id: string }[] }).check_proposals;
@@ -153,10 +154,10 @@ describe('the answer to a drafted check in the fixtures server', () => {
 
   it('records one outcome, takes the check out of the queue, and answers a second time with 409', () => {
     const state = newFixtureState();
-    expect(queue(state).map((item) => item.id)).toEqual([CHECK]);
+    expect(queue(state).map((item) => item.id)).toEqual([TEMPLATE, CHECK]);
     const first = post(path(), { outcome: 'approved' }, state);
     expect(first.reply).toMatchObject({ status: 201, body: { proposal_id: CHECK, outcome: 'approved' } });
-    expect(queue(state)).toEqual([]);
+    expect(queue(state).map((item) => item.id)).toEqual([TEMPLATE]);
     expect(post(path(), { outcome: 'rejected' }, state).reply.status).toBe(409);
     expect(post(path(), { outcome: 'approved' }, state).reply.status).toBe(409);
   });

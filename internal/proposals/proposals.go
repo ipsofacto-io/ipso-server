@@ -53,6 +53,11 @@ var ErrAnswer = errors.New("the answer is not the expected JSON")
 // tokens the answer may hold. The gateway owns routing, budgets, and its own redaction (ADR-0081).
 type CompleteFunc func(ctx context.Context, system, user string, maxTokens int) (Completion, error)
 
+// SchemaCompleteFunc is CompleteFunc with the JSON schema the answer must follow, as
+// llmgw.Gateway.ForSchema returns it. A route may answer without the schema, so the caller still
+// checks the answer.
+type SchemaCompleteFunc func(ctx context.Context, system, user string, maxTokens int, schema json.RawMessage) (Completion, error)
+
 // Proposal is one candidate that passed every check. It has no status field, because the only
 // status a proposal can have here is pending.
 type Proposal struct {

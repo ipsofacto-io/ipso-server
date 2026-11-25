@@ -18,8 +18,9 @@ import (
 var ulidExpr = regexp.MustCompile(`^[0-7][0-9A-HJKMNP-TV-Z]{25}$`)
 
 // AcceptedCheck is one drafted check that a person approved, for a decision in force for a repository
-// (ADR-0120, ADR-0160). Rego/LLMSpec and their digests are nil when the check was approved for a version of
-// its decision that is not the version in force.
+// (ADR-0120, ADR-0160, ADR-0165). A template check carries Ref, ipso:<id>, and no Rego; a Semgrep template has
+// no Target. Rego/LLMSpec/Ref and the digests are nil when the check was approved for a version of its
+// decision that is not the version in force.
 type AcceptedCheck struct {
 	ID              uuid.UUID       `json:"id"`
 	DecisionID      uuid.UUID       `json:"decision_id"`
@@ -27,16 +28,17 @@ type AcceptedCheck struct {
 	DecisionVersion int             `json:"decision_version"`
 	VersionInForce  int             `json:"version_in_force"`
 	Engine          string          `json:"engine"`
-	Target          string          `json:"target"`
+	Target          *string         `json:"target"`
 	MaxAgeDays      *int            `json:"max_age_days,omitempty"`
 	Rego            *string         `json:"rego"`
 	RegoSHA256      *string         `json:"rego_sha256"`
 	LLMSpec         json.RawMessage `json:"llm_spec,omitempty"`
 	LLMSpecSHA256   *string         `json:"llm_spec_sha256,omitempty"`
+	Ref             *string         `json:"ref,omitempty"`
 }
 
 const acceptedChecks = `
-SELECT c.id, c.decision_id, c.decision_version, c.engine, c.target, c.max_age_days, c.rego, c.rego_sha256
+SELECT c.id, c.decision_id, c.decision_version, c.engine, c.target, c.max_age_days, c.rego, c.rego_sha256, c.ref
 FROM proposals.check_proposal c
 JOIN proposals.check_approval a ON a.tenant_id = c.tenant_id AND a.proposal_id = c.id
 WHERE c.tenant_id = $1 AND a.outcome = 'approved'
@@ -87,10 +89,10 @@ func AcceptedChecks(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo stri
 		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var item AcceptedCheck
-			var artifact string
+			var artifact, ref sql.NullString
 			var digest []byte
 			var maxAge sql.NullInt32
-			if err := rows.Scan(&item.ID, &item.DecisionID, &item.DecisionVersion, &item.Engine, &item.Target, &maxAge, &artifact, &digest); err != nil {
+			if err := rows.Scan(&item.ID, &item.DecisionID, &item.DecisionVersion, &item.Engine, &item.Target, &maxAge, &artifact, &digest, &ref); err != nil {
 				return err
 			}
 			if maxAge.Valid {
@@ -101,11 +103,14 @@ func AcceptedChecks(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo stri
 			item.EDRID, item.VersionInForce = current.edrID, current.version
 			if item.DecisionVersion == current.version {
 				sum := hex.EncodeToString(digest)
-				if item.Engine == "llm" {
-					item.LLMSpec = json.RawMessage(artifact)
+				switch {
+				case ref.Valid:
+					item.Ref = &ref.String
+				case item.Engine == "llm":
+					item.LLMSpec = json.RawMessage(artifact.String)
 					item.LLMSpecSHA256 = &sum
-				} else {
-					item.Rego, item.RegoSHA256 = &artifact, &sum
+				default:
+					item.Rego, item.RegoSHA256 = &artifact.String, &sum
 				}
 			}
 			out = append(out, item)

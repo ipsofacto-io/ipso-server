@@ -20,6 +20,9 @@ import (
 // CompleteFunc is the shape every pipeline takes for the LLM.
 type CompleteFunc func(ctx context.Context, system, user string, maxTokens int) (llmgw.Completion, error)
 
+// SchemaCompleteFunc is CompleteFunc with the JSON schema the answer must follow.
+type SchemaCompleteFunc func(ctx context.Context, system, user string, maxTokens int, schema json.RawMessage) (llmgw.Completion, error)
+
 // ErrNotRecorded means a prompt has no recorded answer. A prompt, a dataset, or the code that
 // builds the prompt changed, so the answers have to be recorded again.
 var ErrNotRecorded = errors.New("no recorded answer for this prompt; record again with -record")
@@ -37,7 +40,7 @@ type Cassette struct {
 	mu       sync.Mutex
 	recorded map[string]Recording
 	used     map[string]Recording
-	live     CompleteFunc
+	live     SchemaCompleteFunc
 }
 
 // LoadCassette reads recordings. A missing file is an empty cassette.
@@ -61,15 +64,25 @@ func LoadCassette(path string) (*Cassette, error) {
 }
 
 // Record makes the cassette call live for every prompt.
-func (c *Cassette) Record(live CompleteFunc) {
+func (c *Cassette) Record(live SchemaCompleteFunc) {
 	c.live = live
 }
 
-// Complete answers one prompt. During live recording, random CANARY and outer DATA markers are
-// replaced with deterministic per-prompt hex digests so BPE tokenization stays stable across runs,
-// while any leaked canary in the answer is mapped back to the caller's canary in both modes.
+// Complete answers one prompt with no schema.
 func (c *Cassette) Complete(ctx context.Context, system, user string, maxTokens int) (llmgw.Completion, error) {
+	return c.CompleteSchema(ctx, system, user, maxTokens, nil)
+}
+
+// CompleteSchema answers one prompt. A schema is part of the key, because it changes the answer.
+// During live recording, random CANARY and outer DATA markers are replaced with deterministic
+// per-prompt hex digests so BPE tokenization stays stable across runs, while any leaked canary in
+// the answer is mapped back to the caller's canary in both modes.
+func (c *Cassette) CompleteSchema(ctx context.Context, system, user string, maxTokens int, schema json.RawMessage) (llmgw.Completion, error) {
 	key := Key(system, user)
+	if schema != nil {
+		sum := sha256.Sum256([]byte(key + "\x00" + string(schema)))
+		key = hex.EncodeToString(sum[:])
+	}
 	var callerCanary string
 	if m := promptCanary.FindStringSubmatch(system); m != nil {
 		callerCanary = m[1]
@@ -94,7 +107,7 @@ func (c *Cassette) Complete(ctx context.Context, system, user string, maxTokens 
 		liveSystem = strings.ReplaceAll(system, "CANARY-"+callerCanary, "CANARY-"+fixedCanary)
 	}
 	liveUser := normalizeUser(user, key)
-	answer, err := c.live(ctx, liveSystem, liveUser, maxTokens)
+	answer, err := c.live(ctx, liveSystem, liveUser, maxTokens, schema)
 	if err != nil {
 		return llmgw.Completion{}, err
 	}

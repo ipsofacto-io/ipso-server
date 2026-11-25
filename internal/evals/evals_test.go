@@ -87,6 +87,18 @@ func TestEvals(t *testing.T) {
 	for name, metric := range checks {
 		metrics[name] = metric
 	}
+	templateCases, err := LoadTemplateCases("testdata/template-decisions.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chosen, err := TemplateSuite(t, t.Context(), cassette.CompleteSchema, templateCases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("templates scores:\n%s", Table(chosen))
+	for name, metric := range chosen {
+		metrics[name] = metric
+	}
 	t.Logf("scores:\n%s", Table(metrics))
 
 	scores := metrics.Scores()
@@ -115,7 +127,7 @@ func TestEvals(t *testing.T) {
 
 // liveGateway builds the LLM gateway from the environment, with a budget held in memory.
 // The text handler prints the gateway's own call lines. Replay does not build a gateway.
-func liveGateway(t *testing.T) CompleteFunc {
+func liveGateway(t *testing.T) SchemaCompleteFunc {
 	t.Helper()
 	path, tenantID := os.Getenv("IPSO_EVALS_GATEWAY"), os.Getenv("IPSO_EVALS_TENANT")
 	if path == "" || tenantID == "" {
@@ -138,7 +150,7 @@ func liveGateway(t *testing.T) CompleteFunc {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return gateway.For(tenant)
+	return gateway.ForSchema(tenant)
 }
 
 // memoryLedger never refuses: the eval run is bounded by its datasets.
@@ -233,7 +245,7 @@ func TestCassetteReplaysAndRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recorder.Record(func(context.Context, string, string, int) (llmgw.Completion, error) {
+	recorder.Record(func(context.Context, string, string, int, json.RawMessage) (llmgw.Completion, error) {
 		calls++
 		return llmgw.Completion{Text: "answer", Model: "m"}, nil
 	})
@@ -286,7 +298,7 @@ func TestCassetteNormalizesLiveMarkersAndRestoresCanary(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		c.Record(func(_ context.Context, sys, usr string, _ int) (llmgw.Completion, error) {
+		c.Record(func(_ context.Context, sys, usr string, _ int, _ json.RawMessage) (llmgw.Completion, error) {
 			seenSys[run], seenUser[run] = sys, usr
 			return llmgw.Completion{
 				Text:  `{"candidates":[{"source":0,"title":"Use PostgreSQL 18","statement":"The team decided to use PostgreSQL 18.","rationale":"","confidence":0.9}]}`,
@@ -311,7 +323,7 @@ func TestCassetteNormalizesLiveMarkersAndRestoresCanary(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rec.Record(func(_ context.Context, sys, _ string, _ int) (llmgw.Completion, error) {
+		rec.Record(func(_ context.Context, sys, _ string, _ int, _ json.RawMessage) (llmgw.Completion, error) {
 			m := promptCanary.FindStringSubmatch(sys)
 			leak := strings.ToUpper(m[1])
 			if half {

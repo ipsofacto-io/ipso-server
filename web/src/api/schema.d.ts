@@ -1516,12 +1516,19 @@ export interface components {
             decision_id: string;
             decision_version: number;
             /** @enum {string} */
-            engine: "opa" | "llm";
-            /** @enum {string} */
-            target: "agent-edit" | "diff" | "terraform-plan" | "kubernetes-manifest" | "json-snapshot" | "text";
+            engine: "opa" | "llm" | "semgrep";
+            /**
+             * @description Null for a Semgrep template check.
+             * @enum {string|null}
+             */
+            target: "agent-edit" | "diff" | "terraform-plan" | "kubernetes-manifest" | "json-snapshot" | "text" | null;
+            /** @description The built-in template a template check names (ADR-0165). Absent for a Rego or llm check. */
+            ref?: string;
             max_age_days?: number;
+            /** @description The rule of a Rego check, the llm specification of an llm check, or the catalog entry of a template check with its ref, title, and resources or languages. */
             spec: Record<string, never>;
-            rego: string;
+            /** @description Null for a template check. */
+            rego: string | null;
             fixtures: unknown[];
             repaired: boolean;
             model_id: string;
@@ -1544,10 +1551,13 @@ export interface components {
             /** @description The version of the decision in force now. */
             version_in_force: number;
             /** @enum {string} */
-            engine: "opa" | "llm";
-            target: string;
+            engine: "opa" | "llm" | "semgrep";
+            /** @description Null for a Semgrep template check. */
+            target: string | null;
+            /** @description The built-in template of a template check, which ipso deliver writes as the ref of the entry with no file (ADR-0165). Absent for a Rego or llm check, and when decision_version is not version_in_force. */
+            ref?: string;
             max_age_days?: number;
-            /** @description The stored Rego, byte for byte. Null when decision_version is not version_in_force or engine is llm. */
+            /** @description The stored Rego, byte for byte. Null when decision_version is not version_in_force, engine is llm, or the check is a template check. */
             rego: string | null;
             /** @description The sha256 of the rego in lowercase hex. Null when the rego is. */
             rego_sha256: string | null;

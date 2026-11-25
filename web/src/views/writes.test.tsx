@@ -37,8 +37,8 @@ describe('the inbox actions', () => {
     stubFetch();
     renderApp('/inbox');
     await screen.findByText('Check for decision 0194f2a0, version 2');
-    expect(screen.getAllByRole('button', { name: /^Approve / })).toHaveLength(4);
-    expect(screen.getAllByRole('button', { name: /^Reject / })).toHaveLength(4);
+    expect(screen.getAllByRole('button', { name: /^Approve / })).toHaveLength(5);
+    expect(screen.getAllByRole('button', { name: /^Reject / })).toHaveLength(5);
     expect(screen.queryByText(/cannot be approved here yet/)).not.toBeInTheDocument();
     const check = screen.getByText('Check for decision 0194f2a0, version 2').closest('li') as HTMLElement;
     expect(within(check).getByRole('button', { name: `Approve ${CHECK}` })).toBeInTheDocument();
@@ -211,7 +211,7 @@ describe('answering a drafted check', () => {
     expect(posts(stub)).toHaveLength(1);
     expect(posts(stub)[0]).toMatchObject({ url: CHECK_PATH, body: '{"outcome":"approved"}', contentType: 'application/json' });
     await waitFor(() => expect(screen.queryByText('Check for decision 0194f2a0, version 2')).not.toBeInTheDocument());
-    expect(screen.getByText('No drafted check waits for review.')).toBeInTheDocument();
+    expect(screen.getByText('Check for decision 0194f2a0, version 1')).toBeInTheDocument();
     expect(stub.requests.filter((request) => request === CHECK_QUEUE)).toHaveLength(2);
   });
 

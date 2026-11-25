@@ -42,12 +42,15 @@ var (
 	ErrUnavailable = errors.New("llm: no route answered")
 )
 
-// Request is one call. System and User are redacted before any route sees them.
+// Request is one call. System and User are redacted before any route sees them. Schema, when set,
+// is the JSON schema a chat route is asked to answer with instead of any JSON object. Converse
+// has no such switch, so the caller still checks the answer.
 type Request struct {
 	Tenant    uuid.UUID
 	System    string
 	User      string
 	MaxTokens int
+	Schema    json.RawMessage
 }
 
 // Completion is one answer.
@@ -100,6 +103,13 @@ func (g *Gateway) For(tenant uuid.UUID) func(ctx context.Context, system, user s
 	}
 }
 
+// ForSchema is For with the JSON schema the answer must follow (ADR-0165).
+func (g *Gateway) ForSchema(tenant uuid.UUID) func(ctx context.Context, system, user string, maxTokens int, schema json.RawMessage) (Completion, error) {
+	return func(ctx context.Context, system, user string, maxTokens int, schema json.RawMessage) (Completion, error) {
+		return g.Complete(ctx, Request{Tenant: tenant, System: system, User: user, MaxTokens: maxTokens, Schema: schema})
+	}
+}
+
 // Complete reserves the most the call can cost, tries each route, and settles the reservation to
 // what the provider reports. A call that fails on every route costs nothing.
 func (g *Gateway) Complete(ctx context.Context, req Request) (Completion, error) {
@@ -136,7 +146,7 @@ func (g *Gateway) Complete(ctx context.Context, req Request) (Completion, error)
 
 	for _, route := range p.routes {
 		started := g.now()
-		answer, err := g.call(ctx, route, system, user, maxTokens)
+		answer, err := g.call(ctx, route, system, user, maxTokens, req.Schema)
 		elapsed := g.now().Sub(started).Milliseconds()
 		if err == nil {
 			used := answer.InputTokens + answer.OutputTokens
@@ -194,7 +204,7 @@ func retryable(err error) bool {
 	return errors.As(err, &netErr) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
-func (g *Gateway) call(ctx context.Context, route endpoint, system, user string, maxTokens int) (Completion, error) {
+func (g *Gateway) call(ctx context.Context, route endpoint, system, user string, maxTokens int, schema json.RawMessage) (Completion, error) {
 	ctx, cancel := context.WithTimeout(ctx, route.timeout)
 	defer cancel()
 
@@ -202,7 +212,7 @@ func (g *Gateway) call(ctx context.Context, route endpoint, system, user string,
 	if route.provider == Bedrock {
 		body = converseRequest(system, user, maxTokens)
 	} else {
-		body = chatRequest(route.model, system, user, maxTokens)
+		body = chatRequest(route.model, system, user, maxTokens, schema)
 	}
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -258,15 +268,23 @@ type message struct {
 }
 
 // chatRequest is the OpenAI chat completions shape that Mistral and Azure OpenAI also accept. Every
-// prompt asks for one JSON object, so the route is asked to answer with valid JSON (ADR-0087).
-// Converse has no such switch, and the callers check every answer either way.
-func chatRequest(model, system, user string, maxTokens int) any {
+// prompt asks for one JSON object, so the route is asked to answer with valid JSON (ADR-0087), or
+// with the caller's schema when there is one (ADR-0165). Converse has no such switch, and the
+// callers check every answer either way.
+func chatRequest(model, system, user string, maxTokens int, schema json.RawMessage) any {
+	format := any(map[string]string{"type": "json_object"})
+	if schema != nil {
+		format = map[string]any{
+			"type":        "json_schema",
+			"json_schema": map[string]any{"name": "answer", "strict": true, "schema": schema},
+		}
+	}
 	return map[string]any{
 		"model":           model,
 		"messages":        []message{{Role: "system", Content: system}, {Role: "user", Content: user}},
 		"temperature":     0,
 		"max_tokens":      maxTokens,
-		"response_format": map[string]string{"type": "json_object"},
+		"response_format": format,
 	}
 }
 

@@ -9,7 +9,7 @@ import { Page } from '../components/Page';
 import { Queue, QUEUE_PAGE } from '../components/Queue';
 import { ExternalLink } from '../components/Safe';
 import { formatTime, shortId } from '../lib/format';
-import { preview } from '../lib/json';
+import { asString, asStrings, preview } from '../lib/json';
 import { decisionPath } from '../state/decision';
 import { proposalTitle } from '../state/draft';
 import { CheckActions, ReviewActions } from './ReviewActions';
@@ -94,10 +94,53 @@ function FromAgent({ proposal, report }: { proposal: AgentProposal; report: (rep
   );
 }
 
+// A template check names a built-in template of ipso and holds no rule of its own (ADR-0165).
+function TemplateCheck({ proposal, ref, name, report }: { proposal: CheckProposal; ref: string; name: string; report: (report: Report) => void }) {
+  const reads = [...asStrings(proposal.spec.resources), ...asStrings(proposal.spec.languages)];
+  return (
+    <>
+      <header className="card-head">
+        <h3 className="card-title">{`Check for ${name}`}</h3>
+        <DecisionStatus status="proposed" />
+      </header>
+      <dl className="meta">
+        <div>
+          <dt>Decision</dt>
+          <dd>
+            <Link to={decisionPath(proposal.decision_id)}>Open the decision</Link>
+          </dd>
+        </div>
+        <div>
+          <dt>Template</dt>
+          <dd>{asString(proposal.spec.title) ?? ref}</dd>
+        </div>
+        <div>
+          <dt>Ref</dt>
+          <dd className="mono">{ref}</dd>
+        </div>
+        <div>
+          <dt>Reads</dt>
+          <dd className="mono">{reads.length > 0 ? reads.join(', ') : '-'}</dd>
+        </div>
+        <ModelLabel modelID={proposal.model_id} promptVersion={proposal.prompt_version} />
+        <div>
+          <dt>Captured</dt>
+          <dd className="mono">{formatTime(proposal.captured_at)}</dd>
+        </div>
+      </dl>
+      <Advisory />
+      <p className="muted">The model chose this built-in template of ipso. The rule and its tests ship with the ipso version that builds the check.</p>
+      <CheckActions decisionId={proposal.decision_id} id={proposal.id} title={`the check for ${name}, captured ${formatTime(proposal.captured_at)}`} report={report} />
+    </>
+  );
+}
+
 function DraftedCheck({ proposal, report }: { proposal: CheckProposal; report: (report: Report) => void }) {
   const name = `decision ${shortId(proposal.decision_id)}, version ${proposal.decision_version}`;
+  if (proposal.ref) return <TemplateCheck proposal={proposal} ref={proposal.ref} name={name} report={report} />;
   const fixtures = proposal.fixtures.length;
-  const rego = proposal.rego.length > RAW_LIMIT ? `${proposal.rego.slice(0, RAW_LIMIT)}\n# ... cut` : proposal.rego;
+  const source = proposal.rego ?? '';
+  const rego = source.length > RAW_LIMIT ? `${source.slice(0, RAW_LIMIT)}\n# ... cut` : source;
   return (
     <>
       <header className="card-head">
@@ -113,7 +156,7 @@ function DraftedCheck({ proposal, report }: { proposal: CheckProposal; report: (
         </div>
         <div>
           <dt>Engine</dt>
-          <dd className="mono">{`${proposal.engine}, ${proposal.target}`}</dd>
+          <dd className="mono">{`${proposal.engine}, ${proposal.target ?? '-'}`}</dd>
         </div>
         <div>
           <dt>Fixtures</dt>

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -128,6 +129,31 @@ func TestRoutesToMistral(t *testing.T) {
 	}
 	if ledger.tokens[tenantA] != 50 {
 		t.Fatalf("charged %d tokens, want the 50 the provider reported", ledger.tokens[tenantA])
+	}
+}
+
+func TestSendsTheCallersSchema(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{"fits":{"type":"boolean"}},"required":["fits"],"additionalProperties":false}`)
+	p := &provider{responses: []*http.Response{reply(200, chatOK), reply(200, converseOK)}}
+	g, _ := newGateway(t, only("mistral"), p)
+	if _, err := g.ForSchema(tenantA)(t.Context(), "sys", "usr", 16, schema); err != nil {
+		t.Fatal(err)
+	}
+	format := p.requests[0].body["response_format"].(map[string]any)
+	spec, _ := format["json_schema"].(map[string]any)
+	var want any
+	_ = json.Unmarshal(schema, &want)
+	if format["type"] != "json_schema" || spec["name"] != "answer" || spec["strict"] != true || !reflect.DeepEqual(spec["schema"], want) {
+		t.Fatalf("response_format = %v", format)
+	}
+
+	// Converse takes no schema, so the request is the one without it.
+	g, _ = newGateway(t, only("bedrock-eu"), p)
+	if _, err := g.ForSchema(tenantA)(t.Context(), "sys", "usr", 16, schema); err != nil {
+		t.Fatal(err)
+	}
+	if body := p.requests[1].body; body["response_format"] != nil || body["inferenceConfig"] == nil {
+		t.Fatalf("body = %v", body)
 	}
 }
 
