@@ -243,7 +243,7 @@ export function checkProposals(now: Date): CheckProposal[] {
       fixtures: [],
       repaired: false,
       model_id: 'mistral-large-latest',
-      prompt_version: 'check-template-v1',
+      prompt_version: 'check-template-v2',
       captured_at: iso(new Date(now.getTime() - 55 * 60 * 1000)),
     },
   ];

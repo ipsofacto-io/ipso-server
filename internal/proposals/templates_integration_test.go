@@ -15,7 +15,7 @@ import (
 // the review queue (ADR-0165).
 func TestTemplateCheckWaitsInTheReviewQueue(t *testing.T) {
 	db := newDB(t)
-	llm := &scriptedLLM{answers: []string{`{"template":"aws/ebs-encrypted"}`}}
+	llm := &schemaLLM{scriptedLLM: scriptedLLM{answers: []string{`{"template":"aws/ebs-encrypted"}`, `{"fits":true}`}}}
 	check, _, err := DraftTemplateCheck(t.Context(), llm.complete, templateRequest())
 	if err != nil {
 		t.Fatal(err)

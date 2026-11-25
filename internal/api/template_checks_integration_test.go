@@ -35,7 +35,7 @@ func TestATemplateCheckWaitsForAPersonAndIsServedAsARef(t *testing.T) {
 		if !ok {
 			t.Fatalf("no template %s", ref)
 		}
-		check := proposals.TemplateCheck{DecisionID: decision, Version: version, Template: tmpl, Model: "test-model", PromptVersion: "check-template-v1"}
+		check := proposals.TemplateCheck{DecisionID: decision, Version: version, Template: tmpl, Model: "test-model", PromptVersion: "check-template-v2"}
 		if created, err := proposals.ProposeTemplateCheck(t.Context(), f.db, tenantA, check); err != nil || !created {
 			t.Fatalf("propose %s: created %v err %v", ref, created, err)
 		}

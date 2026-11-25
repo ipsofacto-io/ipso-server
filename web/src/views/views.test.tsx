@@ -250,7 +250,7 @@ describe('the inbox', () => {
     expect(within(card).getByText('JavaScript and TypeScript do not evaluate strings')).toBeInTheDocument();
     expect(within(card).getByText('ipso:javascript/no-eval')).toBeInTheDocument();
     expect(within(card).getByText('javascript, typescript')).toBeInTheDocument();
-    expect(within(card).getByText('mistral-large-latest, prompt check-template-v1')).toBeInTheDocument();
+    expect(within(card).getByText('mistral-large-latest, prompt check-template-v2')).toBeInTheDocument();
     expect(within(card).getByText(/The model chose this built-in template of ipso/)).toBeInTheDocument();
     expect(within(card).queryByText('Policy')).not.toBeInTheDocument();
     expect(within(card).queryByText('Fixtures')).not.toBeInTheDocument();

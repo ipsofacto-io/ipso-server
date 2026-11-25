@@ -2,6 +2,8 @@ package evals
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -13,14 +15,20 @@ import (
 var injected = regexp.MustCompile(`\{"template":"[^"]+"\}`)
 
 // chooser answers each decision of cases with the template the dataset expects, and follows an
-// instruction in the decision text when obey is set.
-func chooser(t *testing.T, cases []TemplateCase, obey bool) CompleteFunc {
+// instruction in the decision text when obey is set. It answers the second call with fits.
+func chooser(t *testing.T, cases []TemplateCase, obey, fits bool) SchemaCompleteFunc {
 	t.Helper()
 	want := map[string]*string{}
 	for _, c := range cases {
 		want[c.Title] = c.Template
 	}
-	return func(_ context.Context, _, user string, _ int) (llmgw.Completion, error) {
+	return func(_ context.Context, _, user string, _ int, schema json.RawMessage) (llmgw.Completion, error) {
+		if schema == nil {
+			t.Fatal("a template call has no schema")
+		}
+		if strings.Contains(user, "\n\nCheck: ") {
+			return llmgw.Completion{Text: fmt.Sprintf(`{"fits":%t}`, fits), Model: "chooser"}, nil
+		}
 		if obey {
 			if order := injected.FindString(user); order != "" {
 				return llmgw.Completion{Text: order, Model: "obedient"}, nil
@@ -43,7 +51,7 @@ func TestTemplateSuiteScoresChoices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	perfect, err := TemplateSuite(t, t.Context(), chooser(t, cases, false), cases)
+	perfect, err := TemplateSuite(t, t.Context(), chooser(t, cases, false, true), cases)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,14 +59,22 @@ func TestTemplateSuiteScoresChoices(t *testing.T) {
 		t.Fatalf("perfect chooser: %v", perfect)
 	}
 	// Following the two injections is one wrong catalog choice and one id outside the catalog.
-	obedient, err := TemplateSuite(t, t.Context(), chooser(t, cases, true), cases)
+	obedient, err := TemplateSuite(t, t.Context(), chooser(t, cases, true, true), cases)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if obedient["templates.precision"] != Count(20, 22) || obedient["templates.none"] != Count(8, 10) || obedient["templates.recall"] != Count(20, 20) {
 		t.Fatalf("obedient chooser: %v", obedient)
 	}
-	prose := func(context.Context, string, string, int) (llmgw.Completion, error) {
+	// A second call that rejects every choice proposes nothing: no-fit decisions count as none.
+	skeptic, err := TemplateSuite(t, t.Context(), chooser(t, cases, true, false), cases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skeptic["templates.precision"] != Count(0, 1) || skeptic["templates.none"] != Count(9, 10) || skeptic["templates.recall"] != Count(0, 20) {
+		t.Fatalf("skeptic second call: %v", skeptic)
+	}
+	prose := func(context.Context, string, string, int, json.RawMessage) (llmgw.Completion, error) {
 		return llmgw.Completion{Text: "The best template is EBS encryption.", Model: "prose"}, nil
 	}
 	malformed, err := TemplateSuite(t, t.Context(), prose, cases)
@@ -71,7 +87,7 @@ func TestTemplateSuiteScoresChoices(t *testing.T) {
 }
 
 // The dataset is the contract of IPSO-158: 12 plan and 8 Semgrep decisions that fit, 10 that fit
-// none with two injections among them, and no case that repeats the example of the prompt.
+// none with two injections among them, and no case that repeats an example of the prompt.
 func TestTemplateDatasetIsWellFormed(t *testing.T) {
 	cases, err := LoadTemplateCases("testdata/template-decisions.json")
 	if err != nil {
@@ -95,8 +111,8 @@ func TestTemplateDatasetIsWellFormed(t *testing.T) {
 			kinds["none"]++
 			continue
 		}
-		if *c.Template == "aws/kms-key-rotation" {
-			t.Errorf("case %s repeats the example of the prompt", c.ID)
+		if *c.Template == "aws/kms-key-rotation" || *c.Template == "azure/sql-no-public-network" {
+			t.Errorf("case %s repeats an example of the prompt", c.ID)
 		}
 		tmpl, _ := templates.Lookup("ipso:" + *c.Template)
 		kinds[tmpl.Engine]++

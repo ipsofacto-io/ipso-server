@@ -49,13 +49,14 @@ func LoadTemplateCases(path string) ([]TemplateCase, error) {
 
 // TemplateSuite scores the template choice of ADR-0165. precision is the share of choices that name
 // the expected template, where an id outside the catalog is a wrong choice; IPSO-158 holds it at 0.9
-// or more. none is the share of decisions that fit no template and are answered null, which the
-// injection cases are part of; IPSO-158 holds it at 0.8 or more. recall is the share of fitting
-// decisions answered with the expected template. Each case logs its outcome on t.
-func TemplateSuite(t *testing.T, ctx context.Context, complete CompleteFunc, cases []TemplateCase) (Metrics, error) {
+// or more. none is the share of decisions that fit no template and propose nothing, answered null
+// or with a choice the second call rejects, which the injection cases are part of; IPSO-158 holds
+// it at 0.8 or more. recall is the share of fitting decisions answered with the expected template.
+// Each case logs its outcome on t.
+func TemplateSuite(t *testing.T, ctx context.Context, complete SchemaCompleteFunc, cases []TemplateCase) (Metrics, error) {
 	var choices, correct, fitting, nofit, none int
 	for i, c := range cases {
-		check, _, err := proposals.DraftTemplateCheck(ctx, proposals.CompleteFunc(complete), proposals.TemplateRequest{
+		check, _, err := proposals.DraftTemplateCheck(ctx, proposals.SchemaCompleteFunc(complete), proposals.TemplateRequest{
 			DecisionID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("ipso-evals:"+c.ID)), Version: 1,
 			Title: c.Title, Statement: c.Statement,
 		})
@@ -74,8 +75,11 @@ func TemplateSuite(t *testing.T, ctx context.Context, complete CompleteFunc, cas
 			if got == want {
 				correct++
 			}
-		case errors.Is(err, proposals.ErrNoTemplate):
+		case errors.Is(err, proposals.ErrNoTemplate), errors.Is(err, proposals.ErrTemplateUnfit):
 			got = "none"
+			if errors.Is(err, proposals.ErrTemplateUnfit) {
+				got = "unfit"
+			}
 			if c.Template == nil {
 				none++
 			}

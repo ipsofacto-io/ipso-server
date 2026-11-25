@@ -297,10 +297,13 @@ func TestGoldenReferenceRulesPassEveryFixture(t *testing.T) {
 	}
 }
 
-// TestPromptsAskForJSON keeps both system prompts naming JSON: the gateway asks every chat route
-// for a JSON object, and Azure OpenAI refuses that mode when no message mentions JSON (ADR-0087).
+// TestPromptsAskForJSON keeps every system prompt naming JSON: the gateway asks every chat route
+// for a JSON object or a JSON schema, and Azure OpenAI refuses that mode when no message mentions
+// JSON (ADR-0087).
 func TestPromptsAskForJSON(t *testing.T) {
-	for name, prompt := range map[string]string{"pull request": systemPrompt, "check": checkPrompt} {
+	for name, prompt := range map[string]string{
+		"pull request": systemPrompt, "check": checkPrompt, "template": templatePrompt(), "template verify": verifyInstructions,
+	} {
 		if !strings.Contains(prompt, "JSON object") {
 			t.Errorf("the %s prompt does not ask for a JSON object", name)
 		}
