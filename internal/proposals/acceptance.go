@@ -19,7 +19,9 @@ const (
 	// AcceptanceTargetPercent is the share of answered proposals that section 1.6 asks reviewers to approve.
 	AcceptanceTargetPercent = 70
 	// AcceptanceMinAnswered is how many answered proposals a row needs before it reports a rate. A smaller
-	// row is one or two reviewers' answers, and reading it as a rate would read them.
+	// row is too few answers to mean anything as a share. The counts of such a row are still printed, so the
+	// threshold is about what a rate means and is not a privacy control: ADR-0012 is kept by what the report
+	// never selects or groups by, and not by hiding small rows.
 	AcceptanceMinAnswered = 10
 	// HumanAuthoredModel is the model id of a check that a person wrote. It is approved when it is stored,
 	// so it says nothing about a model.

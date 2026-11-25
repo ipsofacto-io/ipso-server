@@ -108,7 +108,18 @@ func TestEvals(t *testing.T) {
 		t.Fatal(err)
 	}
 	if *update {
-		if err := SaveBaseline(files.Baseline, Update(baseline, scores)); err != nil {
+		var others []Baseline
+		for _, other := range Routes {
+			if other.Name == files.Name {
+				continue
+			}
+			recorded, err := LoadBaseline(other.Baseline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			others = append(others, recorded)
+		}
+		if err := SaveBaseline(files.Baseline, InheritFloors(Update(baseline, scores), others...)); err != nil {
 			t.Fatal(err)
 		}
 		if err := AppendHistory(files.History, time.Now(), scores); err != nil {

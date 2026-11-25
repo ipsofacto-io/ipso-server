@@ -63,6 +63,26 @@ func LoadRoute(files RouteFiles) (RouteRecord, error) {
 	return RouteRecord{Name: files.Name, Models: cassette.Models(), Baseline: baseline}, nil
 }
 
+// InheritFloors returns next with the floor of each metric that has none, taken from the first of the
+// other baselines that has one. A floor is a product target and not a property of a model, so every route
+// holds the same one, and the first update of a route would otherwise record a baseline that no floor guards.
+func InheritFloors(next Baseline, others ...Baseline) Baseline {
+	out := make(Baseline, len(next))
+	for name, entry := range next {
+		if entry.Min == nil {
+			for _, other := range others {
+				if floor := other[name].Min; floor != nil {
+					kept := *floor
+					entry.Min = &kept
+					break
+				}
+			}
+		}
+		out[name] = entry
+	}
+	return out
+}
+
 const notRecorded = "not recorded"
 
 // ScoresTable renders one row per metric with its floor and the baseline score of each route, as a

@@ -96,7 +96,7 @@ func TestReservedHost(t *testing.T) {
 }
 
 func TestDatasetGuardCatchesARealAddress(t *testing.T) {
-	for _, text := range []string{"mail ada@prometeia.com now", "see https://github.com/acme/api", "https://user@real.io/x"} {
+	for _, text := range []string{"mail ada@gmail.com now", "see https://github.com/acme/api", "https://user@real.io/x"} {
 		var bad bool
 		for _, match := range emailDomain.FindAllStringSubmatch(text, -1) {
 			bad = bad || !reservedHost(match[1])

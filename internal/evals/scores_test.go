@@ -1,7 +1,9 @@
 package evals
 
 import (
+	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -104,20 +106,82 @@ func TestReplaceScoresKeepsTheTextAround(t *testing.T) {
 	}
 }
 
-// A floor is a product target (section 9.9), not a property of a model, so both routes hold the same one.
-func TestRoutesShareTheirFloors(t *testing.T) {
-	records := loadRoutes(t)
+// floorMismatches names each metric whose floor on one route is missing or different from the floor it
+// has on another route, for the metrics each route has recorded.
+func floorMismatches(records []RouteRecord) []string {
 	floors := map[string]float64{}
 	for _, record := range records {
 		for name, entry := range record.Baseline {
-			if entry.Min == nil {
-				continue
+			if entry.Min != nil {
+				floors[name] = *entry.Min
 			}
-			if first, ok := floors[name]; ok && first != *entry.Min {
-				t.Errorf("%s has the floor %v on one route and %v on route %s", name, first, *entry.Min, record.Name)
-			}
-			floors[name] = *entry.Min
 		}
+	}
+	var out []string
+	for _, record := range records {
+		for name, entry := range record.Baseline {
+			want, ok := floors[name]
+			switch {
+			case !ok:
+			case entry.Min == nil:
+				out = append(out, fmt.Sprintf("%s has no floor on route %s, and %v elsewhere", name, record.Name, want))
+			case *entry.Min != want:
+				out = append(out, fmt.Sprintf("%s has the floor %v on route %s, and %v elsewhere", name, *entry.Min, record.Name, want))
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// A floor is a product target (section 9.9), not a property of a model, so every route that has recorded a
+// metric holds the same floor for it.
+func TestRoutesShareTheirFloors(t *testing.T) {
+	if got := floorMismatches(loadRoutes(t)); len(got) != 0 {
+		t.Fatalf("the routes disagree on a floor: %v", got)
+	}
+}
+
+func TestFloorMismatchesNamesAMissingAndADifferentFloor(t *testing.T) {
+	high, low := 0.9, 0.8
+	records := []RouteRecord{
+		{Name: "local", Baseline: Baseline{"a": {Score: 0.95, Min: &high}, "b": {Score: 0.9, Min: &low}, "c": {Score: 0.5}}},
+		{Name: "eu", Baseline: Baseline{"a": {Score: 0.93}, "b": {Score: 0.85, Min: &high}, "c": {Score: 0.4}, "d": {Score: 1}}},
+	}
+	got := floorMismatches(records)
+	want := []string{"a has no floor on route eu, and 0.9 elsewhere"}
+	// b is the one floor that two routes hold differently: the message names whichever route is read last.
+	if len(got) != 2 || got[0] != want[0] || !strings.HasPrefix(got[1], "b has the floor ") {
+		t.Fatalf("mismatches = %v", got)
+	}
+	if got := floorMismatches([]RouteRecord{{Name: "local", Baseline: Baseline{"a": {Score: 1, Min: &high}}}, {Name: "eu"}}); len(got) != 0 {
+		t.Fatalf("a route that has not recorded a metric has a floor mismatch: %v", got)
+	}
+}
+
+// The first update of a route starts from an empty baseline, so it takes its floors from the routes that have
+// them. Without that, a production baseline recorded below a product target would pass its gate for good.
+func TestInheritFloorsGivesAFirstBaselineTheFloorsOfTheOtherRoutes(t *testing.T) {
+	high, low := 0.9, 0.8
+	local := Baseline{"a": {Score: 0.95, Min: &high}, "b": {Score: 0.9}, "c": {Score: 0.7, Min: &low}}
+	scores := Scores{"a": 0.5, "b": 0.6, "c": 0.7, "d": 0.4}
+	first := InheritFloors(Update(Baseline{}, scores), local)
+	if first["a"].Min == nil || *first["a"].Min != 0.9 || first["c"].Min == nil || *first["c"].Min != 0.8 || first["b"].Min != nil || first["d"].Min != nil {
+		t.Fatalf("first baseline = %+v", first)
+	}
+	// A below-floor first recording fails its own gate, so it is not accepted by the next gate run.
+	if got := Gate(first, Metrics{"a": Count(5, 10), "b": Count(6, 10), "c": Count(7, 10), "d": Count(4, 10)}); len(got) != 2 {
+		t.Fatalf("a first baseline below its floors passes the gate: %v", got)
+	}
+	// The floor of the route itself wins, and the copy is not shared with the other baseline.
+	own := 0.7
+	kept := InheritFloors(Baseline{"a": {Score: 0.8, Min: &own}, "c": {Score: 0.7}}, local)
+	if *kept["a"].Min != 0.7 {
+		t.Fatalf("an own floor was replaced: %+v", kept["a"])
+	}
+	*kept["c"].Min = 0.1
+	if *local["c"].Min != 0.8 {
+		t.Fatal("the inherited floor aliases the other baseline")
 	}
 }
 
