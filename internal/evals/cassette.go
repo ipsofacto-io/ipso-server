@@ -176,3 +176,19 @@ func restoreCanary(text, fixedCanary, callerCanary string) string {
 		return callerCanary[:16]
 	})
 }
+
+// Models lists the distinct models that the recorded answers name, sorted.
+func (c *Cassette) Models() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	seen := map[string]bool{}
+	for _, r := range c.recorded {
+		seen[r.Model] = true
+	}
+	models := make([]string, 0, len(seen))
+	for model := range seen {
+		models = append(models, model)
+	}
+	slices.Sort(models)
+	return models
+}

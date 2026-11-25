@@ -1,0 +1,53 @@
+name: evals-provider
+
+# Records fresh model answers of the route tenants use, the operator default route of the gateway,
+# and gates them against the baseline of that route (ADR-0082, ADR-0165). The datasets are
+# synthetic, and a pull request never reaches this workflow: it runs on a schedule and by hand, on
+# main only. The provider key is the secret IPSO_LLM_MISTRAL of the environment evals-provider,
+# whose deployment branches are limited to main, and only the step that records reads it. A person
+# accepts a run by copying the cassette from the artifact into internal/evals/testdata/mistral and
+# running `go test ./internal/evals -run '^TestEvals$' -route mistral -update`.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 7 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals-provider
+  cancel-in-progress: false
+
+jobs:
+  eu-route:
+    name: evals / eu-route
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: evals-provider
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Record answers and gate them
+        env:
+          IPSO_LLM_MISTRAL: ${{ secrets.IPSO_LLM_MISTRAL }}
+        run: go test ./internal/evals -run '^TestEvals$' -count=1 -timeout 40m -v -route mistral -record -report "${RUNNER_TEMP}/scores.json"
+      - name: Keep the answers and scores
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evals-provider-${{ github.run_id }}
+          path: |
+            internal/evals/testdata/mistral/cassette.json
+            ${{ runner.temp }}/scores.json
+          if-no-files-found: ignore
+          retention-days: 14
