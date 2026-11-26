@@ -160,9 +160,7 @@ func (s *Service) begin(w http.ResponseWriter, r *http.Request, id string, p pro
 	if held, err := authn.SessionToken(r); err == nil {
 		begun.Previous = base64.RawURLEncoding.EncodeToString(authn.SessionHash(held))
 	}
-	if len(r.CookiesNamed(choiceCookieName)) > 0 {
-		http.SetCookie(w, clearedChoiceCookie())
-	}
+	s.clearStaleChoice(w, r)
 	http.SetCookie(w, begun.cookie())
 	location := p.authorizeURL(s.redirectURI(id), state, nonce, verifier)
 	if isPosted {
@@ -441,9 +439,7 @@ func (s *Service) finishSignIn(w http.ResponseWriter, r *http.Request, ctx conte
 		if previous != nil {
 			s.known.remove(s.tenant, previous)
 		}
-		if len(r.CookiesNamed(choiceCookieName)) > 0 {
-			http.SetCookie(w, clearedChoiceCookie())
-		}
+		s.clearStaleChoice(w, r)
 		http.SetCookie(w, authn.NewSessionCookie(token, expires, now))
 		w.Header().Set("Location", "/")
 		w.WriteHeader(http.StatusSeeOther)
@@ -476,9 +472,7 @@ func (s *Service) finishSignIn(w http.ResponseWriter, r *http.Request, ctx conte
 	if previous != nil {
 		s.known.remove(s.tenant, previous)
 	}
-	if len(r.CookiesNamed(choiceCookieName)) > 0 {
-		http.SetCookie(w, clearedChoiceCookie())
-	}
+	s.clearStaleChoice(w, r)
 	http.SetCookie(w, authn.NewSessionCookie(token, expires, now))
 	w.Header().Set("Location", "/")
 	w.WriteHeader(http.StatusSeeOther)
@@ -648,12 +642,14 @@ func (s *Service) chooseTenant(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, codeInvalidLogin)
 		return
 	}
-	// Single-use fail-closed: clear the cookie and atomically consume the pending choice before checking
-	// the chosen tenant under forced RLS, so any unauthorized or failed selection creates no session.
-	http.SetCookie(w, clearedChoiceCookie())
+	// Single-use fail-closed: atomically consume the pending choice before checking the chosen
+	// tenant under forced RLS, so any unauthorized or failed selection creates no session. Clear
+	// the browser cookie once the row is known absent or consumed; leave it intact on a transient
+	// database error so the caller can retry without restarting IdP sign-in.
 	choice, err := s.store.consumeChoice(r.Context(), hash)
 	switch {
 	case errors.Is(err, identity.ErrUnknownChoice):
+		http.SetCookie(w, clearedChoiceCookie())
 		writeJSON(w, http.StatusUnauthorized, codeInvalidLogin)
 		return
 	case err != nil:
@@ -661,6 +657,7 @@ func (s *Service) chooseTenant(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, codeInternal)
 		return
 	}
+	http.SetCookie(w, clearedChoiceCookie())
 	if choice.IsCLI {
 		if !validLoopbackCallback(choice.CLIRedirect) || choice.CLIState == "" || !validBase64URLToken(choice.CLIChallenge, 43, 128) {
 			writeJSON(w, http.StatusBadRequest, codeInvalidLogin)
@@ -747,6 +744,22 @@ func (s *Service) cancelPendingTenant(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, clearedChoiceCookie())
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// clearStaleChoice cancels any pending choice cookie on the server (best effort in multi-tenant mode)
+// and instructs the browser to drop the cookie.
+func (s *Service) clearStaleChoice(w http.ResponseWriter, r *http.Request) {
+	if len(r.CookiesNamed(choiceCookieName)) == 0 {
+		return
+	}
+	if s.multiTenant {
+		if hash, ok := readChoiceHash(r); ok {
+			if err := s.store.cancelChoice(r.Context(), hash); err != nil {
+				s.log.Warn("a stale pending tenant choice could not be canceled")
+			}
+		}
+	}
+	http.SetCookie(w, clearedChoiceCookie())
 }
 
 func (s *Service) metadata(w http.ResponseWriter, r *http.Request) {

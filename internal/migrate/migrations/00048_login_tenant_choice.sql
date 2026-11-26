@@ -58,6 +58,7 @@ CREATE TABLE identity.login_choice (
 );
 
 CREATE INDEX login_choice_by_expiry ON identity.login_choice (expires_at);
+CREATE INDEX login_choice_by_subject ON identity.login_choice (issuer, subject);
 
 REVOKE ALL ON TABLE identity.login_choice FROM PUBLIC;
 
@@ -102,7 +103,9 @@ DECLARE
     v_now timestamptz := clock_timestamp();
     v_expires timestamptz := v_now + interval '5 minutes';
 BEGIN
-    DELETE FROM identity.login_choice WHERE expires_at <= v_now;
+    DELETE FROM identity.login_choice
+    WHERE expires_at <= v_now
+       OR (issuer = p_issuer AND subject = p_subject);
     INSERT INTO identity.login_choice (
         token_sha256,
         issuer,

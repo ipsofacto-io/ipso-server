@@ -262,6 +262,51 @@ func TestMultiTenantChoiceRefusesUnauthorizedExpiredCanceledAndSingleTenant(t *t
 	if rlRec.Code != http.StatusTooManyRequests || rlRec.Header().Get("Retry-After") == "" {
 		t.Fatalf("rate-limited GET /auth/tenants = %d Retry-After=%q, want 429", rlRec.Code, rlRec.Header().Get("Retry-After"))
 	}
+
+	// 9. Starting a new sign-in cancels any stale pending choice server-side, and minting a new
+	// pending choice for the same (issuer, subject) invalidates earlier pending choice tokens.
+	ck = freshChoice()
+	_, _ = r.start("fake", &http.Cookie{Name: ck.Name, Value: ck.Value})
+	staleReq := httptest.NewRequest(http.MethodGet, "/auth/tenants", nil)
+	staleReq.AddCookie(&http.Cookie{Name: ck.Name, Value: ck.Value})
+	if rec := newRecorder(r, staleReq); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("stale choice after new login start = %d, want 401", rec.Code)
+	}
+	ckFirst := freshChoice()
+	ckSecond := freshChoice()
+	firstReq := httptest.NewRequest(http.MethodGet, "/auth/tenants", nil)
+	firstReq.AddCookie(&http.Cookie{Name: ckFirst.Name, Value: ckFirst.Value})
+	if rec := newRecorder(r, firstReq); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("replaced choice token = %d, want 401", rec.Code)
+	}
+	secondReq := httptest.NewRequest(http.MethodGet, "/auth/tenants", nil)
+	secondReq.AddCookie(&http.Cookie{Name: ckSecond.Name, Value: ckSecond.Value})
+	if rec := newRecorder(r, secondReq); rec.Code != http.StatusOK {
+		t.Fatalf("latest choice token = %d, want 200", rec.Code)
+	}
+
+	// 10. A transient store error during consume returns 500 without clearing __Host-ipso-choice,
+	// so the caller can retry POST /auth/tenants without restarting IdP sign-in.
+	r.store.err = fmt.Errorf("transient db timeout")
+	errReq := httptest.NewRequest(http.MethodPost, "/auth/tenants", strings.NewReader(`{"tenant_id":"`+tenantA.String()+`"}`))
+	errReq.Header.Set("Content-Type", "application/json")
+	errReq.Header.Set("Sec-Fetch-Site", "same-origin")
+	errReq.AddCookie(&http.Cookie{Name: ckSecond.Name, Value: ckSecond.Value})
+	errRec := newRecorder(r, errReq)
+	if errRec.Code != http.StatusInternalServerError {
+		t.Fatalf("transient consume error = %d, want 500", errRec.Code)
+	}
+	if cleared := cookieNamed(errRec.Result().Cookies(), choiceCookieName); cleared != nil {
+		t.Fatalf("transient consume error cleared choice cookie: %+v", cleared)
+	}
+	r.store.err = nil
+	okRetry := httptest.NewRequest(http.MethodPost, "/auth/tenants", strings.NewReader(`{"tenant_id":"`+tenantA.String()+`"}`))
+	okRetry.Header.Set("Content-Type", "application/json")
+	okRetry.Header.Set("Sec-Fetch-Site", "same-origin")
+	okRetry.AddCookie(&http.Cookie{Name: ckSecond.Name, Value: ckSecond.Value})
+	if retryRec := newRecorder(r, okRetry); retryRec.Code != http.StatusOK {
+		t.Fatalf("retry after transient consume error = %d %s, want 200", retryRec.Code, retryRec.Body)
+	}
 }
 
 func TestMultiTenantCLIChoiceFlow(t *testing.T) {

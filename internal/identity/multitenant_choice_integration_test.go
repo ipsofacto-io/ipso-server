@@ -167,6 +167,34 @@ func TestLoginChoiceLifecycleExpiryAndConcurrentSingleUse(t *testing.T) {
 		t.Fatalf("ReadLoginChoice after cancel = %v, want ErrUnknownChoice", err)
 	}
 
+	// Creating a second choice for the same (issuer, subject) invalidates the first server-side.
+	_, firstHash, err := identity.NewChoiceToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := identity.CreateLoginChoice(t.Context(), app, firstHash, identity.LoginChoice{
+		Issuer:  idp,
+		Subject: "person-replace",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, secondHash, err := identity.NewChoiceToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := identity.CreateLoginChoice(t.Context(), app, secondHash, identity.LoginChoice{
+		Issuer:  idp,
+		Subject: "person-replace",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := identity.ReadLoginChoice(t.Context(), app, firstHash); !errors.Is(err, identity.ErrUnknownChoice) {
+		t.Fatalf("first choice after replacement = %v, want ErrUnknownChoice", err)
+	}
+	if _, err := identity.ReadLoginChoice(t.Context(), app, secondHash); err != nil {
+		t.Fatalf("second choice after replacement = %v, want nil", err)
+	}
+
 	// Expired row cannot be read or consumed, and is pruned by the next create.
 	_, expHash, err := identity.NewChoiceToken()
 	if err != nil {

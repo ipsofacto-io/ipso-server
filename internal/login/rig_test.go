@@ -399,7 +399,7 @@ func (f *fakeStore) createChoice(_ context.Context, hash []byte, choice identity
 	}
 	now := f.now()
 	for k, c := range f.choices {
-		if !now.Before(c.ExpiresAt) {
+		if !now.Before(c.ExpiresAt) || (c.Issuer == choice.Issuer && c.Subject == choice.Subject) {
 			delete(f.choices, k)
 		}
 	}

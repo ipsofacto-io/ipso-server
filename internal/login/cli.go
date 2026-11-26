@@ -221,9 +221,7 @@ func (s *Service) cliStart(w http.ResponseWriter, r *http.Request) {
 		begun.Verifier = "saml"
 		begun.Request = "post"
 	}
-	if len(r.CookiesNamed(choiceCookieName)) > 0 {
-		http.SetCookie(w, clearedChoiceCookie())
-	}
+	s.clearStaleChoice(w, r)
 	http.SetCookie(w, begun.cookie())
 	location := p.authorizeURL(s.redirectURI(providerID), state, nonce, verifier)
 	if isPosted {
@@ -342,9 +340,7 @@ func (s *Service) finishCLISignIn(w http.ResponseWriter, r *http.Request, ctx co
 		s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "server_error")
 		return
 	}
-	if len(r.CookiesNamed(choiceCookieName)) > 0 {
-		http.SetCookie(w, clearedChoiceCookie())
-	}
+	s.clearStaleChoice(w, r)
 	s.cliCodes.put(code, cliCodeEntry{
 		tenant:      tenant,
 		issuer:      who.issuer,
