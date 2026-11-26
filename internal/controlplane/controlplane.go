@@ -551,8 +551,11 @@ type service struct {
 	multiTenant bool
 	log         *slog.Logger
 
-	// lookup reads a login from the database. Tests replace it.
-	lookup func(ctx context.Context, issuer, subject string) (uuid.UUID, uuid.UUID, error)
+	// resolveTenant resolves the unique open tenant for an issuer and subject in multi-tenant mode.
+	// In single-tenant mode it returns s.tenant without touching the database. Tests replace it.
+	resolveTenant func(ctx context.Context, issuer, subject string) (uuid.UUID, error)
+	// lookup reads a principal for an issuer and subject within one verified tenant. Tests replace it.
+	lookup func(ctx context.Context, tenant uuid.UUID, issuer, subject string) (uuid.UUID, error)
 	// known keeps the logins that were found, and misses limits the lookups that reach the database
 	// for a login not kept, whether or not the database knows it.
 	known  *loginCache
@@ -577,22 +580,29 @@ func newService(db *sql.DB, tenant uuid.UUID, multiTenant bool, log *slog.Logger
 		misses:      ratelimit.New(limits.Rate, limits.Burst),
 		now:         time.Now,
 	}
-	s.lookup = func(ctx context.Context, issuer, subject string) (uuid.UUID, uuid.UUID, error) {
-		target := tenant
-		if multiTenant {
-			var err error
-			target, err = identity.LoginTenant(ctx, db, issuer, subject)
-			if err != nil {
-				return uuid.Nil, uuid.Nil, err
-			}
+	if multiTenant {
+		s.resolveTenant = func(ctx context.Context, issuer, subject string) (uuid.UUID, error) {
+			return identity.LoginTenant(ctx, db, issuer, subject)
 		}
-		principal, err := identity.PrincipalFor(ctx, db, target, issuer, subject)
-		if err != nil {
-			return uuid.Nil, uuid.Nil, err
+	} else {
+		s.resolveTenant = func(context.Context, string, string) (uuid.UUID, error) {
+			return tenant, nil
 		}
-		return target, principal, nil
+	}
+	s.lookup = func(ctx context.Context, target uuid.UUID, issuer, subject string) (uuid.UUID, error) {
+		return identity.PrincipalFor(ctx, db, target, issuer, subject)
 	}
 	return s
+}
+
+func (s *service) logLookupError(err error) {
+	switch {
+	case errors.Is(err, identity.ErrUnknownLogin):
+	case errors.Is(err, identity.ErrAmbiguousLogin):
+		s.log.Info("a login is bound in several tenants, so the call was refused")
+	default:
+		s.log.Warn("a login could not be read, so the call was refused", "tenant", s.tenant)
+	}
 }
 
 // caller is the only way a bearer token becomes a caller: the tenant and principal bound to the
@@ -600,33 +610,56 @@ func newService(db *sql.DB, tenant uuid.UUID, multiTenant bool, log *slog.Logger
 // mode, the tenant comes from identity.login_tenants and an ambiguous subject bound in two or more
 // tenants is refused fail-closed (ADR-0170).
 //
-// A closed login is unknown on the next database read. A found one is kept for loginTTL, which does
-// not keep a role (ADR-0131). Every other lookup is charged to a miss bucket before it reaches the
-// database, so a stream of valid tokens for unbound subjects costs the database no more than that
-// bucket allows.
+// In single-tenant mode, a found login is kept for loginTTL, which does not keep a role (ADR-0131).
+// In multi-tenant mode, a cache hit still verifies the live unique tenant with resolveTenant so a
+// closed login, a tenant move, or a newly ambiguous binding takes effect immediately without
+// serving a stale tenant. Every lookup not served from cache is charged to a miss bucket before it
+// reaches the database.
 func (s *service) caller(ctx context.Context, claims authn.Claims) (uuid.UUID, uuid.UUID, bool) {
 	key := loginKey{scope: s.tenant, issuer: claims.Issuer, subject: claims.Subject}
 	now := s.now()
 	if found, ok := s.known.get(key, now); ok {
-		return found.tenant, found.principal, true
+		if !s.multiTenant {
+			return found.tenant, found.principal, true
+		}
+		target, err := s.resolveTenant(ctx, claims.Issuer, claims.Subject)
+		if err != nil {
+			s.known.delete(key)
+			s.logLookupError(err)
+			return uuid.Nil, uuid.Nil, false
+		}
+		if target == found.tenant {
+			return found.tenant, found.principal, true
+		}
+		s.known.delete(key)
+		if _, ok := s.misses.Allow(s.tenant, now); !ok {
+			s.log.Warn("lookups of unknown logins are over their limit, so a login was refused", "tenant", s.tenant)
+			return uuid.Nil, uuid.Nil, false
+		}
+		principal, err := s.lookup(ctx, target, claims.Issuer, claims.Subject)
+		if err != nil {
+			s.logLookupError(err)
+			return uuid.Nil, uuid.Nil, false
+		}
+		s.known.put(key, resolvedLogin{tenant: target, principal: principal}, now)
+		return target, principal, true
 	}
 	if _, ok := s.misses.Allow(s.tenant, now); !ok {
 		s.log.Warn("lookups of unknown logins are over their limit, so a login was refused", "tenant", s.tenant)
 		return uuid.Nil, uuid.Nil, false
 	}
-	tenant, principal, err := s.lookup(ctx, claims.Issuer, claims.Subject)
+	target, err := s.resolveTenant(ctx, claims.Issuer, claims.Subject)
 	if err != nil {
-		switch {
-		case errors.Is(err, identity.ErrUnknownLogin):
-		case errors.Is(err, identity.ErrAmbiguousLogin):
-			s.log.Info("a login is bound in several tenants, so the call was refused")
-		default:
-			s.log.Warn("a login could not be read, so the call was refused", "tenant", s.tenant)
-		}
+		s.logLookupError(err)
 		return uuid.Nil, uuid.Nil, false
 	}
-	s.known.put(key, resolvedLogin{tenant: tenant, principal: principal}, now)
-	return tenant, principal, true
+	principal, err := s.lookup(ctx, target, claims.Issuer, claims.Subject)
+	if err != nil {
+		s.logLookupError(err)
+		return uuid.Nil, uuid.Nil, false
+	}
+	s.known.put(key, resolvedLogin{tenant: target, principal: principal}, now)
+	return target, principal, true
 }
 
 // health answers 204 when the database answers. It is outside the API's guard and says nothing else.

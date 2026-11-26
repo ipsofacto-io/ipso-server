@@ -111,6 +111,14 @@ func (c *loginCache) put(key loginKey, value resolvedLogin, now time.Time) {
 	keys[key] = struct{}{}
 }
 
+func (c *loginCache) delete(key loginKey) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry, ok := c.entries[key]; ok {
+		c.deleteLocked(key, entry.value.tenant)
+	}
+}
+
 func (c *loginCache) deleteLocked(key loginKey, tenant uuid.UUID) {
 	delete(c.entries, key)
 	if keys := c.byTenant[tenant]; keys != nil {

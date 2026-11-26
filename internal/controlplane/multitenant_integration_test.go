@@ -294,6 +294,17 @@ func TestMultiTenantAPIIsolatesTwoTenantsAcrossEveryCredentialPath(t *testing.T)
 	if recBothAfter.Code != http.StatusOK || !strings.Contains(recBothAfter.Body.String(), "beta-org") || strings.Contains(recBothAfter.Body.String(), "alpha-org") {
 		t.Fatalf("API bearer after closing A login: %d %s", recBothAfter.Code, recBothAfter.Body)
 	}
+	// Primed loginCache must not serve a stale tenant when a subject moves from A to B within loginTTL.
+	execIn(tenantA, `INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1, $2, $3, 'mover-api')`, tenantA, personA, apiAuth.Server.URL)
+	tokMover := apiAuth.Token(apiAudience, nil, authntest.Subject("mover-api"))
+	if rec := get(handler, "/v1/scopes", tokMover); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "alpha-org") {
+		t.Fatalf("primed mover in A: %d %s", rec.Code, rec.Body)
+	}
+	execIn(tenantA, `UPDATE identity.login SET closed_at = now() WHERE issuer = $1 AND subject = 'mover-api'`, apiAuth.Server.URL)
+	execIn(tenantB, `INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1, $2, $3, 'mover-api')`, tenantB, personB, apiAuth.Server.URL)
+	if rec := get(handler, "/v1/scopes", tokMover); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "beta-org") || strings.Contains(rec.Body.String(), "alpha-org") {
+		t.Fatalf("moved mover to B within TTL: %d %s", rec.Code, rec.Body)
+	}
 
 	// 2. Remote MCP bearer tokens: isolation + ambiguous subject fail-closed.
 	mcpTokA := mcpAuth.Token(mcpResource, []string{"ipso.read"}, authntest.Subject("agent-a"))

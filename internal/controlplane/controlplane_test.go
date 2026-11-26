@@ -110,12 +110,12 @@ func TestAFoundLoginIsKeptAndAMissIsNot(t *testing.T) {
 	svc.now = func() time.Time { return now }
 	bound := uuid.New()
 	calls := 0
-	svc.lookup = func(_ context.Context, issuer, subject string) (uuid.UUID, uuid.UUID, error) {
+	svc.lookup = func(_ context.Context, target uuid.UUID, issuer, subject string) (uuid.UUID, error) {
 		calls++
-		if subject == "known" {
-			return tenant, bound, nil
+		if subject == "known" && target == tenant {
+			return bound, nil
 		}
-		return uuid.Nil, uuid.Nil, identity.ErrUnknownLogin
+		return uuid.Nil, identity.ErrUnknownLogin
 	}
 	claims := func(subject string) authn.Claims {
 		return authn.Claims{Issuer: "https://idp.example.test", Subject: subject}
@@ -154,9 +154,9 @@ func TestLookupsForLoginsNotKeptAreLimited(t *testing.T) {
 	svc := newService(nil, uuid.New(), false, slog.New(slog.DiscardHandler), api.Limits{Rate: 0.001, Burst: 3})
 	svc.now = func() time.Time { return now }
 	reads := 0
-	svc.lookup = func(context.Context, string, string) (uuid.UUID, uuid.UUID, error) {
+	svc.lookup = func(context.Context, uuid.UUID, string, string) (uuid.UUID, error) {
 		reads++
-		return uuid.Nil, uuid.Nil, identity.ErrUnknownLogin
+		return uuid.Nil, identity.ErrUnknownLogin
 	}
 	for i := range 10 {
 		svc.caller(t.Context(), authn.Claims{Issuer: "https://idp.example.test", Subject: fmt.Sprint("stranger-", i)})
