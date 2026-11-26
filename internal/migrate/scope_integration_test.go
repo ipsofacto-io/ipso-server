@@ -38,23 +38,18 @@ func TestScopeObjectsExist(t *testing.T) {
 			t.Errorf("registry.%s missing (err %v)", name, err)
 		}
 	}
-	for _, index := range []string{"scope_candidates", "scope_history_candidates", "scope_closure_history_descendant", "decision_version_scope_refs_gin", "decision_version_history_scope_refs_gin"} {
+	for _, index := range []string{"scope_candidates", "scope_history_candidates", "scope_closure_history_descendant", "decision_scope_ref_pkey", "decision_version_history_decision"} {
 		var found bool
 		if err := s.admin.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, "registry."+index).Scan(&found); err != nil || !found {
 			t.Errorf("index registry.%s missing (err %v)", index, err)
 		}
 	}
 
-	// Reads are hot and writes are rare, so the GIN indexes skip the pending list, which would
-	// otherwise be scanned by a read right after a burst of writes.
-	for _, index := range []string{"decision_version_scope_refs_gin", "decision_version_history_scope_refs_gin"} {
-		var options string
-		err := s.admin.QueryRowContext(ctx, `SELECT coalesce(array_to_string(reloptions, ','), '') FROM pg_catalog.pg_class WHERE oid = $1::text::regclass`, "registry."+index).Scan(&options)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if options != "fastupdate=off" {
-			t.Errorf("index %s options = %q, want fastupdate=off", index, options)
+	// No role that reads through a policy can use an index on scope_refs, because the overlap operator
+	// is not leakproof (ADR-0168), so the read goes through decision_scope_ref and these are gone.
+	for _, index := range []string{"decision_version_scope_refs_gin", "decision_version_history_scope_refs_gin", "decision_version_history_tenant"} {
+		if n := count(t, s.admin, `SELECT count(*) FROM pg_catalog.pg_class WHERE relnamespace = 'registry'::regnamespace AND relname = $1`, index); n != 0 {
+			t.Errorf("index registry.%s still exists", index)
 		}
 	}
 
@@ -393,6 +388,7 @@ func TestScopeFunctionsAreOwnedByTheMigrationRoleAndNotCallable(t *testing.T) {
 		{"registry.scope_version()", true},
 		{"registry.scope_rewrite_closure()", true},
 		{"registry.decision_version_check_scope_refs()", false},
+		{"registry.decision_version_index_scope_refs()", true},
 	}
 	for _, f := range functions {
 		t.Run(f.signature, func(t *testing.T) {
@@ -476,50 +472,6 @@ func TestScopeRefsMustNameScopesOfTheSameTenant(t *testing.T) {
 	}
 	if n := count(t, s.admin, `SELECT count(*) FROM registry.decision_version_history`); n != 1 {
 		t.Errorf("history rows = %d, want 1", n)
-	}
-}
-
-// The GIN indexes serve the overlap query of resolution, so the planner must be able to use them.
-func TestScopeRefsOverlapUsesTheIndexes(t *testing.T) {
-	s := migrated(t)
-	ctx := t.Context()
-	s.insert(t, tenantA, 1, "[2026-01-01,)")
-	if _, err := pgtest.Exec(ctx, s.app, tenantA, `UPDATE registry.decision_version SET version = 2`); err != nil {
-		t.Fatal(err)
-	}
-
-	// With so few rows the planner prefers a sequential scan, so the test turns that off to
-	// show that an index path exists for the overlap operator on both tables.
-	conn, err := s.admin.Conn(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = conn.Close() }()
-	if _, err := conn.ExecContext(ctx, `SET enable_seqscan = off`); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := conn.QueryContext(ctx, `
-		EXPLAIN (FORMAT TEXT)
-		SELECT decision_id FROM registry.decision_version_all WHERE scope_refs && ARRAY[$1::uuid]`, s.orgs[tenantA])
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = rows.Close() }()
-	var plan strings.Builder
-	for rows.Next() {
-		var line string
-		if err := rows.Scan(&line); err != nil {
-			t.Fatal(err)
-		}
-		plan.WriteString(line + "\n")
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	for _, index := range []string{"decision_version_scope_refs_gin", "decision_version_history_scope_refs_gin"} {
-		if !strings.Contains(plan.String(), index) {
-			t.Errorf("the plan does not use %s:\n%s", index, plan.String())
-		}
 	}
 }
 

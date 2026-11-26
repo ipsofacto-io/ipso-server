@@ -403,6 +403,8 @@ func smuggleInserts() []smuggle {
 				(decision_id, version, tenant_id, body, scope_refs, valid_period, sys_period)
 			VALUES ($1::uuid, 1, $2::uuid, '{}', '{}', '[2020-01-01,)', '[2020-01-01,2020-02-01)')`,
 			[]any{decisionKeep, tenantA}, false},
+		// The trigger of the migration role is the only writer, so the application role has no INSERT at all.
+		{"registry.decision_scope_ref", `INSERT INTO registry.decision_scope_ref (tenant_id, scope_id, decision_id) VALUES ($1::uuid, $2::uuid, $2::uuid)`, []any{tenantA, decisionKeep}, false},
 		{"registry.scope_history", `
 			INSERT INTO registry.scope_history (tenant_id, id, kind, selector, match_org, sys_period)
 			VALUES ($1::uuid, $2::uuid, 'org', 'acme', 'acme', '[2020-01-01,2020-02-01)')`,
@@ -542,6 +544,7 @@ func policyTables() []string {
 		"proposals.tracker_approval",
 		"proposals.tracker_proposal",
 		"registry.baseline",
+		"registry.decision_scope_ref",
 		"registry.decision_version",
 		"registry.decision_version_history",
 		"registry.grandfather_period",
@@ -604,6 +607,7 @@ func expectedPolicies() []string {
 		"proposals.tracker_approval":        "SELECT INSERT",
 		"proposals.tracker_proposal":        "SELECT INSERT",
 		"registry.baseline":                 "SELECT INSERT",
+		"registry.decision_scope_ref":       "SELECT",
 		"registry.decision_version":         "SELECT INSERT UPDATE DELETE",
 		"registry.decision_version_history": "SELECT",
 		"registry.grandfather_period":       "SELECT INSERT",
