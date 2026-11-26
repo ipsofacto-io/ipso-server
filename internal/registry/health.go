@@ -480,49 +480,18 @@ func ListDecisionHealth(ctx context.Context, db *sql.DB, tenant uuid.UUID, f Hea
 		return nil, fmt.Errorf("%w: query or filter exceeds maximum length", ErrInvalidQuery)
 	}
 
+	var terms []termRange
+	if q != "" {
+		terms = searchTerms(q)
+		if len(terms) == 0 {
+			return []mcptools.DecisionHealth{}, nil
+		}
+	}
+	stmt, args := listDecisionHealthQuery(terms, f.KnownAt, f.Page.before(), repo, f.ValidAt, f.Page.Limit)
+
 	out := []mcptools.DecisionHealth{}
 	err := readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT DISTINCT ON (d.decision_id) d.decision_id, d.version, d.body, d.scope_refs::text, lower(d.valid_period), upper(d.valid_period)
-			FROM registry.decision_version_all d
-			WHERE d.tenant_id = ipso.current_tenant()
-			  AND d.sys_period @> $1::timestamptz
-			  AND ($2::uuid IS NULL OR d.decision_id < $2::uuid)
-			  AND (
-			      $3 = ''
-			      OR (
-			          NOT (coalesce(d.body->'tags', '[]'::jsonb) ? 'sensitive')
-			          AND NOT coalesce((d.body->>'sensitive')::boolean, false)
-			          AND (
-			              to_tsvector('simple',
-			                  coalesce(d.body->>'title', '') || ' ' ||
-			                  coalesce(d.body->>'slug', '') || ' ' ||
-			                  coalesce(d.body->>'statement', '')) @@ plainto_tsquery('simple', $3)
-			              OR coalesce(d.body->>'title', '') ILIKE '%' || $7 || '%' ESCAPE '\'
-			          )
-			      )
-			      OR coalesce(d.body->>'slug', '') ILIKE '%' || $7 || '%' ESCAPE '\'
-			  )
-			  AND (
-			      $4 = ''
-			      OR EXISTS (
-			          SELECT 1
-			          FROM registry.scope_all s
-			          JOIN registry.scope_closure_all sc
-			            ON sc.tenant_id = s.tenant_id AND sc.descendant_id = s.id
-			          WHERE s.tenant_id = d.tenant_id
-			            AND s.sys_period @> $1::timestamptz
-			            AND sc.sys_period @> $1::timestamptz
-			            AND sc.ancestor_id = ANY(d.scope_refs)
-			            AND (
-			                (s.kind IN ('repo', 'path', 'env') AND s.match_repo = $4)
-			                OR (s.kind = 'org' AND s.match_org = split_part($4, '/', 1))
-			            )
-			      )
-			  )
-			ORDER BY d.decision_id DESC, (d.valid_period @> $5::timestamptz) DESC, d.version DESC
-			LIMIT $6`,
-			f.KnownAt, f.Page.before(), q, repo, f.ValidAt, f.Page.Limit, escapeILIKE(q))
+		rows, err := tx.QueryContext(ctx, stmt, args...)
 		if err != nil {
 			return fmt.Errorf("list decision health: %w", err)
 		}

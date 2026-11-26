@@ -515,6 +515,7 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 		{"registry.decision_version", "decision_version_archive", 1 | 2 | 8 | 16},
 		{"registry.decision_version", "decision_version_clear_premise", 1 | 16},
 		{"registry.decision_version", "decision_version_index_scope_refs", 1 | 4 | 16},
+		{"registry.decision_version", "decision_version_index_search_terms", 1 | 4 | 16},
 		{"registry.decision_version", "decision_version_open_sys_period", 1 | 2 | 4},
 		{"registry.decision_version", "decision_version_scope_refs", 1 | 2 | 4 | 16},
 		{"registry.grandfather_period", "grandfather_period_open_sys_period", 1 | 2 | 4},

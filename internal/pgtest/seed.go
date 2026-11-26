@@ -53,7 +53,7 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 		[]any{tenant, payments}, &repo)
 	mustExec(`UPDATE registry.scope SET parent_id = $2::uuid WHERE id = $1::uuid`, repo, labs)
 
-	body := `{"premises":[{"id":"tls-version"}]}`
+	body := `{"slug":"synthetic-decision","title":"Synthetic decision","premises":[{"id":"tls-version"}]}`
 	for _, decision := range []struct{ id, valid string }{
 		{DecisionKeep, "[2020-01-01,)"},
 		{DecisionFrom, "[2020-01-01,2025-01-01)"},
