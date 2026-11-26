@@ -23,6 +23,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
+	"github.com/ipsofacto-io/ipso-server/internal/telemetry"
 )
 
 const (
@@ -32,6 +33,7 @@ const (
 )
 
 type cliCodeEntry struct {
+	tenant      uuid.UUID
 	issuer      string
 	subject     string
 	redirectURI string
@@ -84,30 +86,30 @@ func (c *cliCodeStore) take(code string, now time.Time) (cliCodeEntry, bool) {
 	return entry, true
 }
 
-// LookupCLI returns the principal an opaque ipsocli_ token speaks for.
-func (s *Service) LookupCLI(ctx context.Context, rawToken string) (uuid.UUID, Status) {
+// LookupCLI returns the tenant and principal an opaque ipsocli_ token speaks for.
+func (s *Service) LookupCLI(ctx context.Context, rawToken string) (uuid.UUID, uuid.UUID, Status) {
 	hash, ok := identity.CLITokenHash(rawToken)
 	if !ok {
-		return uuid.Nil, Unknown
+		return uuid.Nil, uuid.Nil, Unknown
 	}
 	now := s.now()
-	if principal, ok := s.cliKnown.get(hash, now); ok {
-		return principal, Found
+	if tenant, principal, ok := s.cliKnown.get(s.tenant, hash, now); ok {
+		return tenant, principal, Found
 	}
 	if _, ok := s.misses.Allow(s.tenant, now); !ok {
 		s.log.Warn("lookups of CLI sessions not kept are over their limit, so one was refused", "tenant", s.tenant)
-		return uuid.Nil, Busy
+		return uuid.Nil, uuid.Nil, Busy
 	}
-	principal, expires, err := s.store.cliPrincipal(ctx, hash)
+	tenant, principal, expires, err := s.store.cliPrincipal(ctx, hash)
 	if errors.Is(err, identity.ErrUnknownCLISession) {
-		return uuid.Nil, Unknown
+		return uuid.Nil, uuid.Nil, Unknown
 	}
 	if err != nil {
 		s.log.Warn("a CLI session could not be read, so the call was refused", "tenant", s.tenant)
-		return uuid.Nil, Failed
+		return uuid.Nil, uuid.Nil, Failed
 	}
-	s.cliKnown.put(hash, principal, minTime(now.Add(sessionTTL), expires))
-	return principal, Found
+	s.cliKnown.put(s.tenant, hash, tenant, principal, minTime(now.Add(sessionTTL), expires), now)
+	return tenant, principal, Found
 }
 
 func validLoopbackCallback(raw string) bool {
@@ -272,12 +274,13 @@ func (s *Service) finishCLISignIn(w http.ResponseWriter, r *http.Request, ctx co
 		s.writeCallbackRefusal(w, r, http.StatusBadRequest, codeInvalidLogin, nil)
 		return
 	}
-	switch err := s.store.cliCheck(ctx, who.issuer, who.subject); {
+	tenant, err := s.store.cliCheck(ctx, who.issuer, who.subject)
+	switch {
 	case errors.Is(err, identity.ErrUnknownLogin):
 		s.log.Info("a CLI sign-in named a login the tenant never bound", "provider", id)
 		s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "unknown_login")
 		return
-	case errors.Is(err, identity.ErrNotHuman):
+	case errors.Is(err, identity.ErrNotHuman), errors.Is(err, identity.ErrAmbiguousLogin):
 		s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "forbidden")
 		return
 	case err != nil:
@@ -285,12 +288,14 @@ func (s *Service) finishCLISignIn(w http.ResponseWriter, r *http.Request, ctx co
 		s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "server_error")
 		return
 	}
+	telemetry.SetTenant(r.Context(), tenant)
 	code, err := randomText(32)
 	if err != nil {
 		s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "server_error")
 		return
 	}
 	s.cliCodes.put(code, cliCodeEntry{
+		tenant:      tenant,
 		issuer:      who.issuer,
 		subject:     who.subject,
 		redirectURI: a.CLIRedirect,
@@ -372,12 +377,12 @@ func (s *Service) cliToken(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, codeInternal)
 		return
 	}
-	expires, err := s.store.cliStart(r.Context(), entry.issuer, entry.subject, hash)
+	expires, err := s.store.cliStart(r.Context(), entry.tenant, entry.issuer, entry.subject, hash)
 	switch {
 	case errors.Is(err, identity.ErrUnknownLogin):
 		writeJSON(w, http.StatusForbidden, codeUnknownLogin)
 		return
-	case errors.Is(err, identity.ErrNotHuman):
+	case errors.Is(err, identity.ErrNotHuman), errors.Is(err, identity.ErrAmbiguousLogin):
 		writeJSON(w, http.StatusForbidden, codeForbidden)
 		return
 	case err != nil:
@@ -385,6 +390,7 @@ func (s *Service) cliToken(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, codeInternal)
 		return
 	}
+	telemetry.SetTenant(r.Context(), entry.tenant)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		AccessToken string `json:"access_token"`
@@ -414,18 +420,22 @@ func (s *Service) cliLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.now()
-	if _, kept := s.cliKnown.get(hash, now); !kept {
+	if _, _, kept := s.cliKnown.get(s.tenant, hash, now); !kept {
 		if wait, ok := s.misses.Allow(s.tenant, now); !ok {
 			w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
 			writeJSON(w, http.StatusTooManyRequests, codeRateLimited)
 			return
 		}
 	}
-	if err := s.store.cliEnd(r.Context(), hash); err != nil {
+	tenant, err := s.store.cliEnd(r.Context(), hash)
+	if err != nil {
 		s.log.Warn("a CLI session could not be ended")
 		writeJSON(w, http.StatusInternalServerError, codeInternal)
 		return
 	}
-	s.cliKnown.remove(hash)
+	if tenant != uuid.Nil {
+		telemetry.SetTenant(r.Context(), tenant)
+	}
+	s.cliKnown.remove(s.tenant, hash)
 	w.WriteHeader(http.StatusNoContent)
 }

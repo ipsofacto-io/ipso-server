@@ -14,22 +14,23 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
 )
 
-// Admin replaces one connector binding for the process tenant.
+// Admin replaces one connector binding for a tenant. When fixedTenant is non-nil (single-tenant
+// mode), Put refuses any other tenant as defense in depth.
 type Admin struct {
-	db     *sql.DB
-	tenant uuid.UUID
-	key    []byte
+	db          *sql.DB
+	fixedTenant uuid.UUID
+	key         []byte
 }
 
-// NewAdmin returns an admin bound to one tenant and one connector key.
+// NewAdmin returns an admin for connector bindings. Pass uuid.Nil as tenant in multi-tenant mode.
 func NewAdmin(db *sql.DB, tenant uuid.UUID, key []byte) Admin {
-	return Admin{db: db, tenant: tenant, key: key}
+	return Admin{db: db, fixedTenant: tenant, key: key}
 }
 
-// Put seals the token and the webhook secret and replaces the binding for connector.
+// Put seals the token and the webhook secret and replaces the binding for connector in tenant.
 // The subject of the action log is the connector, not the secret.
-func (a Admin) Put(ctx context.Context, actor uuid.UUID, connector, account, label, token, webhook string) (uuid.UUID, error) {
-	if a.db == nil || a.tenant == uuid.Nil || len(a.key) != 32 || actor == uuid.Nil || !KnownConnector(connector) {
+func (a Admin) Put(ctx context.Context, tenant, actor uuid.UUID, connector, account, label, token, webhook string) (uuid.UUID, error) {
+	if a.db == nil || tenant == uuid.Nil || (a.fixedTenant != uuid.Nil && tenant != a.fixedTenant) || len(a.key) != 32 || actor == uuid.Nil || !KnownConnector(connector) {
 		return uuid.Nil, ErrInvalid
 	}
 	if !plainText(account, 200) || !plainText(token, 4000) || !plainText(webhook, 4000) {
@@ -41,26 +42,26 @@ func (a Admin) Put(ctx context.Context, actor uuid.UUID, connector, account, lab
 	if !labelPattern.MatchString(label) {
 		return uuid.Nil, ErrInvalid
 	}
-	tokenSealed, err := Seal(a.key, a.tenant, connector, token)
+	tokenSealed, err := Seal(a.key, tenant, connector, token)
 	if err != nil {
 		return uuid.Nil, err
 	}
-	webhookSealed, err := Seal(a.key, a.tenant, connector, webhook)
+	webhookSealed, err := Seal(a.key, tenant, connector, webhook)
 	if err != nil {
 		return uuid.Nil, err
 	}
 	var id uuid.UUID
-	err = identity.WithAction(ctx, a.db, a.tenant, actor, "api.put_tracker", func(tx *sql.Tx) (string, error) {
+	err = identity.WithAction(ctx, a.db, tenant, actor, "api.put_tracker", func(tx *sql.Tx) (string, error) {
 		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM integrations.tracker_binding
-			WHERE tenant_id = $1 AND connector = $2`, a.tenant, connector); err != nil {
+			WHERE tenant_id = $1 AND connector = $2`, tenant, connector); err != nil {
 			return "", err
 		}
 		err := tx.QueryRowContext(ctx, `
 			INSERT INTO integrations.tracker_binding
 				(tenant_id, connector, external_account, label, token_sealed, webhook_sealed)
 			VALUES ($1, $2, $3, $4, $5, $6)
-			RETURNING id`, a.tenant, connector, account, label, tokenSealed, webhookSealed).Scan(&id)
+			RETURNING id`, tenant, connector, account, label, tokenSealed, webhookSealed).Scan(&id)
 		if err != nil {
 			return "", err
 		}
@@ -89,14 +90,22 @@ type Secret struct {
 	Webhook   []byte
 }
 
-// Lookup reads the binding named by the webhook path. The caller has no tenant set.
-// The row is the one binding, not a list.
+// Lookup reads the binding named by the webhook path. The transaction clears ipso.tenant first so
+// any setting left on a pooled connection cannot hide the row. The row is the one binding, not a list.
 func Lookup(ctx context.Context, db *sql.DB, id uuid.UUID) (Secret, error) {
 	if db == nil || id == uuid.Nil {
 		return Secret{}, ErrInvalid
 	}
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return Secret{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('ipso.tenant', '', true)`); err != nil {
+		return Secret{}, err
+	}
 	var secret Secret
-	err := db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		SELECT tenant_id, connector, external_account, label, token_sealed, webhook_sealed
 		FROM integrations.tracker_binding_for_webhook($1)`, id).Scan(
 		&secret.Tenant, &secret.Connector, &secret.Account, &secret.Label, &secret.Token, &secret.Webhook)

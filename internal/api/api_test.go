@@ -602,13 +602,15 @@ func (allowChat) Allow(feature string) bool { return feature == eehooks.FeatureC
 
 type stubChatAdmin struct{}
 
-func (stubChatAdmin) Put(context.Context, uuid.UUID, string, string) (uuid.UUID, error) {
+func (stubChatAdmin) Put(context.Context, uuid.UUID, uuid.UUID, string, string) (uuid.UUID, error) {
 	return uuid.Nil, nil
 }
 
-func (stubChatAdmin) Delete(context.Context, uuid.UUID, string) error { return nil }
+func (stubChatAdmin) Delete(context.Context, uuid.UUID, uuid.UUID, string) error { return nil }
 
-func (stubChatAdmin) List(context.Context) ([]eehooks.ChatDestination, error) { return nil, nil }
+func (stubChatAdmin) List(context.Context, uuid.UUID) ([]eehooks.ChatDestination, error) {
+	return nil, nil
+}
 
 func TestChatRoutesStayOffUntilTheFeatureIsAllowed(t *testing.T) {
 	t.Cleanup(eehooks.ResetForTest)
@@ -623,9 +625,9 @@ func TestChatRoutesStayOffUntilTheFeatureIsAllowed(t *testing.T) {
 		t.Fatalf("routes without a registration: %v", chatPatterns(got))
 	}
 	eehooks.RegisterChatGuarded([]eehooks.GuardedRoute{
-		{Pattern: "GET /v1/chat", Op: "list_chat", Serve: func(http.ResponseWriter, *http.Request, uuid.UUID) {}},
-		{Pattern: "PUT /v1/chat/{connector}", Op: "put_chat", Serve: func(http.ResponseWriter, *http.Request, uuid.UUID) {}},
-		{Pattern: "DELETE /v1/chat/{connector}", Op: "delete_chat", Serve: func(http.ResponseWriter, *http.Request, uuid.UUID) {}},
+		{Pattern: "GET /v1/chat", Op: "list_chat", Serve: func(http.ResponseWriter, *http.Request, uuid.UUID, uuid.UUID) {}},
+		{Pattern: "PUT /v1/chat/{connector}", Op: "put_chat", Serve: func(http.ResponseWriter, *http.Request, uuid.UUID, uuid.UUID) {}},
+		{Pattern: "DELETE /v1/chat/{connector}", Op: "delete_chat", Serve: func(http.ResponseWriter, *http.Request, uuid.UUID, uuid.UUID) {}},
 	})
 	var actions []string
 	for _, rt := range routes(nil, time.Now, nil, "") {

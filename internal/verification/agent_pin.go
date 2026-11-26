@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -290,4 +291,70 @@ func LookupAgentPin(ctx context.Context, db *sql.DB, tenant uuid.UUID, pinHex st
 		return AgentPin{}, reduce("lookup agent pin: scan", err)
 	}
 	return out, nil
+}
+
+// AgentPinTenant resolves a pin_sha256 hex digest to its owning tenant across tenants via
+// verification.agent_pin_tenant after clearing ipso.tenant (ADR-0170).
+func AgentPinTenant(ctx context.Context, db *sql.DB, pinHex string) (uuid.UUID, bool, error) {
+	if db == nil || !hexDigits.MatchString(pinHex) {
+		return uuid.Nil, false, nil
+	}
+	pinBytes, err := hex.DecodeString(pinHex)
+	if err != nil {
+		return uuid.Nil, false, nil
+	}
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return uuid.Nil, false, reduce("agent pin tenant: begin", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('ipso.tenant', '', true)`); err != nil {
+		return uuid.Nil, false, reduce("agent pin tenant: clear tenant", err)
+	}
+	var tenant uuid.NullUUID
+	if err := tx.QueryRowContext(ctx, `SELECT verification.agent_pin_tenant($1)`, pinBytes).Scan(&tenant); err != nil {
+		return uuid.Nil, false, reduce("agent pin tenant: look up", err)
+	}
+	if !tenant.Valid {
+		return uuid.Nil, false, nil
+	}
+	return tenant.UUID, true, nil
+}
+
+// LookupAgentPinAnyTenant resolves a pin_sha256 hex digest in multi-tenant mode by first resolving
+// the owning tenant through verification.agent_pin_tenant and then reading the pin under forced RLS.
+func LookupAgentPinAnyTenant(ctx context.Context, db *sql.DB, pinHex string) (AgentPin, error) {
+	tenant, ok, err := AgentPinTenant(ctx, db, pinHex)
+	if err != nil {
+		return AgentPin{}, err
+	}
+	if !ok {
+		return AgentPin{}, ErrUnknownPin
+	}
+	return LookupAgentPin(ctx, db, tenant, pinHex)
+}
+
+// RequireAgentPinLookup verifies at start in multi-tenant mode that verification.agent_pin_tenant exists.
+// It passes an empty bytea, which cannot match any 32-byte pin_sha256 row.
+func RequireAgentPinLookup(ctx context.Context, db *sql.DB) error {
+	if db == nil {
+		return errors.New("agent pin lookup: a database is required")
+	}
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return reduce("agent pin lookup: begin", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('ipso.tenant', '', true)`); err != nil {
+		return reduce("agent pin lookup: clear tenant", err)
+	}
+	var tenant uuid.NullUUID
+	if err := tx.QueryRowContext(ctx, `SELECT verification.agent_pin_tenant($1)`, []byte{}).Scan(&tenant); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && (pgErr.Code == "42883" || pgErr.Code == "3F000") {
+			return errors.New("agent pin lookup: the database has no verification.agent_pin_tenant, run ipso-server migrate")
+		}
+		return reduce("agent pin lookup", err)
+	}
+	return nil
 }

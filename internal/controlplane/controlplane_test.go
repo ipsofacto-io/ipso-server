@@ -34,6 +34,7 @@ func TestNewRefusesAnIncompleteConfigBeforeItTouchesTheDatabase(t *testing.T) {
 	}{
 		{"no database", func(c *Config) { c.DB = nil }, "database"},
 		{"no tenant", func(c *Config) { c.Tenant = uuid.Nil }, "tenant"},
+		{"both multi-tenant and tenant", func(c *Config) { c.MultiTenant = true }, "cannot both"},
 		{"no issuer", func(c *Config) { c.Issuer = "" }, "issuer"},
 		{"no audience", func(c *Config) { c.Audience = "" }, "audience"},
 		{"an MCP issuer alone", func(c *Config) { c.MCPIssuer = "https://mcp.example.test" }, "together"},
@@ -71,7 +72,7 @@ func TestHealthIs503WhenTheDatabaseDoesNotAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := newService(db, uuid.New(), slog.New(slog.DiscardHandler), api.Limits{})
+	svc := newService(db, uuid.New(), false, slog.New(slog.DiscardHandler), api.Limits{})
 	rec := httptest.NewRecorder()
 	svc.health(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -85,7 +86,7 @@ func TestHealthKeepsTheLastAnswerForAMoment(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	svc := newService(db, uuid.New(), slog.New(slog.DiscardHandler), api.Limits{})
+	svc := newService(db, uuid.New(), false, slog.New(slog.DiscardHandler), api.Limits{})
 	svc.now = func() time.Time { return now }
 	svc.healthAt, svc.healthy = now, true
 	if rec := httptest.NewRecorder(); true {
@@ -104,31 +105,32 @@ func TestHealthKeepsTheLastAnswerForAMoment(t *testing.T) {
 
 func TestAFoundLoginIsKeptAndAMissIsNot(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	svc := newService(nil, uuid.New(), slog.New(slog.DiscardHandler), api.Limits{Rate: 1000, Burst: 1000})
+	tenant := uuid.New()
+	svc := newService(nil, tenant, false, slog.New(slog.DiscardHandler), api.Limits{Rate: 1000, Burst: 1000})
 	svc.now = func() time.Time { return now }
 	bound := uuid.New()
 	calls := 0
-	svc.lookup = func(_ context.Context, issuer, subject string) (uuid.UUID, error) {
+	svc.lookup = func(_ context.Context, issuer, subject string) (uuid.UUID, uuid.UUID, error) {
 		calls++
 		if subject == "known" {
-			return bound, nil
+			return tenant, bound, nil
 		}
-		return uuid.Nil, identity.ErrUnknownLogin
+		return uuid.Nil, uuid.Nil, identity.ErrUnknownLogin
 	}
 	claims := func(subject string) authn.Claims {
 		return authn.Claims{Issuer: "https://idp.example.test", Subject: subject}
 	}
 
 	for range 3 {
-		if got, ok := svc.principal(t.Context(), claims("known")); !ok || got != bound {
-			t.Fatalf("known = %v, %v", got, ok)
+		if gotTenant, got, ok := svc.caller(t.Context(), claims("known")); !ok || gotTenant != tenant || got != bound {
+			t.Fatalf("known = %v, %v, %v", gotTenant, got, ok)
 		}
 	}
 	if calls != 1 {
 		t.Fatalf("a found login was read %d times, want 1", calls)
 	}
 	for range 2 {
-		if _, ok := svc.principal(t.Context(), claims("stranger")); ok {
+		if _, _, ok := svc.caller(t.Context(), claims("stranger")); ok {
 			t.Fatal("an unbound subject was accepted")
 		}
 	}
@@ -137,11 +139,11 @@ func TestAFoundLoginIsKeptAndAMissIsNot(t *testing.T) {
 	}
 	// Another issuer's subject of the same name is another login.
 	other := authn.Claims{Issuer: "https://other.example.test", Subject: "known"}
-	if _, ok := svc.principal(t.Context(), other); !ok || calls != 4 {
+	if _, _, ok := svc.caller(t.Context(), other); !ok || calls != 4 {
 		t.Fatalf("another issuer: ok %v, reads %d", ok, calls)
 	}
 	now = now.Add(2 * loginTTL)
-	svc.principal(t.Context(), claims("known"))
+	svc.caller(t.Context(), claims("known"))
 	if calls != 5 {
 		t.Fatalf("an old login was not read again: %d reads", calls)
 	}
@@ -149,15 +151,15 @@ func TestAFoundLoginIsKeptAndAMissIsNot(t *testing.T) {
 
 func TestLookupsForLoginsNotKeptAreLimited(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	svc := newService(nil, uuid.New(), slog.New(slog.DiscardHandler), api.Limits{Rate: 0.001, Burst: 3})
+	svc := newService(nil, uuid.New(), false, slog.New(slog.DiscardHandler), api.Limits{Rate: 0.001, Burst: 3})
 	svc.now = func() time.Time { return now }
 	reads := 0
-	svc.lookup = func(context.Context, string, string) (uuid.UUID, error) {
+	svc.lookup = func(context.Context, string, string) (uuid.UUID, uuid.UUID, error) {
 		reads++
-		return uuid.Nil, identity.ErrUnknownLogin
+		return uuid.Nil, uuid.Nil, identity.ErrUnknownLogin
 	}
 	for i := range 10 {
-		svc.principal(t.Context(), authn.Claims{Issuer: "https://idp.example.test", Subject: fmt.Sprint("stranger-", i)})
+		svc.caller(t.Context(), authn.Claims{Issuer: "https://idp.example.test", Subject: fmt.Sprint("stranger-", i)})
 	}
 	if reads != 3 {
 		t.Fatalf("the database was read %d times, want the burst of 3", reads)
@@ -166,9 +168,10 @@ func TestLookupsForLoginsNotKeptAreLimited(t *testing.T) {
 
 func TestTheLoginCacheStaysBounded(t *testing.T) {
 	now := time.Now()
-	cache := newLoginCache(time.Minute, 2)
+	tenant := uuid.New()
+	cache := newLoginCache(time.Minute, 2, 2)
 	for _, subject := range []string{"a", "b", "c"} {
-		cache.put(loginKey{"https://idp.example.test", subject}, uuid.New(), now)
+		cache.put(loginKey{scope: tenant, issuer: "https://idp.example.test", subject: subject}, resolvedLogin{tenant: tenant, principal: uuid.New()}, now)
 	}
 	if len(cache.entries) > 2 {
 		t.Fatalf("%d entries, want at most 2", len(cache.entries))

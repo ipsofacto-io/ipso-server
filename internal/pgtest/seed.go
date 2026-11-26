@@ -163,10 +163,10 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 		VALUES ($1::uuid, $2::uuid, 'admin', NULL), ($1::uuid, $2::uuid, 'approver', $3::uuid)`, tenant, person, repo)
 	mustExec(`
 		INSERT INTO identity.session (tenant_id, login_id, token_sha256)
-		SELECT tenant_id, id, sha256(convert_to('seeded session', 'UTF8')) FROM identity.login`)
+		SELECT tenant_id, id, sha256(convert_to('seeded session-' || $1::text, 'UTF8')) FROM identity.login`, tenant)
 	mustExec(`
 		INSERT INTO identity.cli_session (tenant_id, login_id, token_sha256)
-		SELECT tenant_id, id, sha256(convert_to('seeded cli session', 'UTF8')) FROM identity.login`)
+		SELECT tenant_id, id, sha256(convert_to('seeded cli session-' || $1::text, 'UTF8')) FROM identity.login`, tenant)
 	var humanProposal string
 	mustScan(`
 		INSERT INTO proposals.human_proposal (tenant_id, principal_id, payload)
@@ -186,13 +186,13 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 		VALUES ($1::uuid, 'prod', 7)`, tenant)
 	mustExec(`
 		INSERT INTO identity.invitation (tenant_id, token_sha256, name, role, created_by)
-		VALUES ($1::uuid, sha256(convert_to('seeded invitation', 'UTF8')), 'Invited', 'viewer', $2::uuid)`, tenant, person)
+		VALUES ($1::uuid, sha256(convert_to('seeded invitation-' || $1::text, 'UTF8')), 'Invited', 'viewer', $2::uuid)`, tenant, person)
 	mustExec(`
 		INSERT INTO identity.scim_user (tenant_id, principal_id, external_id, user_name)
 		VALUES ($1::uuid, $2::uuid, 'subject-1', 'ada@example.test')`, tenant, person)
 	mustExec(`
 		INSERT INTO identity.scim_token (tenant_id, token_sha256)
-		VALUES ($1::uuid, sha256(convert_to('seeded scim token', 'UTF8')))`, tenant)
+		VALUES ($1::uuid, sha256(convert_to('seeded scim token-' || $1::text, 'UTF8')))`, tenant)
 	mustExec(`
 		INSERT INTO identity.scim_group (tenant_id, group_ref)
 		VALUES ($1::uuid, 'engineering')`, tenant)

@@ -102,7 +102,7 @@ func (m *uploadMapper) lookup(ctx context.Context, run authn.RunClaims) (api.Map
 		m.log.Warn("the tenant of an installation could not be read", "installation", installation.ID, "error", err.Error())
 		return api.Mapping{}, api.MappingFailed
 	}
-	if !found || tenant != m.tenant {
+	if !found || (m.tenant != uuid.Nil && tenant != m.tenant) {
 		return api.Mapping{}, api.MappingUnknown
 	}
 	return api.Mapping{Tenant: tenant, Installation: installation.ID}, api.MappingFound

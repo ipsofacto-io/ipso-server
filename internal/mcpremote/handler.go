@@ -211,6 +211,7 @@ func (h *handler) post(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusForbidden, "this token speaks for no principal here")
 		return
 	}
+	telemetry.SetTenant(r.Context(), caller.Tenant)
 	// The tenant is known, so the call is charged to it before the body is read.
 	if wait, ok := h.limiter.Allow(caller.Tenant, h.now()); !ok {
 		w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))

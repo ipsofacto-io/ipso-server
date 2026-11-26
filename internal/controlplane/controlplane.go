@@ -1,8 +1,10 @@
 // Package controlplane starts the HTTP side of the control plane: the API of ADR-0090, the remote MCP
 // handler of ADR-0077 when its own issuer is configured (ADR-0094), the browser sign-in of ADR-0099
-// when providers are configured, and the web app of ADR-0106 at every other path. Nothing is served until the start gates pass, in this order: the
-// connected role cannot bypass row-level security, the tenant has a row, and each authorization server
-// and each sign-in provider answers its metadata over https.
+// when providers are configured, and the web app of ADR-0106 at every other path. Nothing is served
+// until the start gates pass, in this order: the connected role cannot bypass row-level security,
+// either the configured tenant has a row (single-tenant mode) or the cross-tenant lookup functions
+// exist (multi-tenant mode, ADR-0170), and each authorization server and sign-in provider answers
+// its metadata over https.
 package controlplane
 
 import (
@@ -21,7 +23,6 @@ import (
 
 	"github.com/ipsofacto-io/ipso/pkg/mcptools"
 
-	"github.com/ipsofacto-io/ipso-server/chat"
 	"github.com/ipsofacto-io/ipso-server/eehooks"
 	"github.com/ipsofacto-io/ipso-server/internal/api"
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
@@ -41,16 +42,23 @@ import (
 )
 
 const (
-	healthTimeout = 2 * time.Second
-	healthTTL     = time.Second
+	healthTimeout        = 2 * time.Second
+	healthTTL            = time.Second
+	maxKnownPins         = 256
+	maxKnownPinsPerTenant = 64
+	pinCacheTTL          = 15 * time.Second
 )
 
 // Config is what the control plane needs to start.
 type Config struct {
 	// DB connects as the application role. Start refuses a role that can bypass row-level security.
 	DB *sql.DB
-	// Tenant is the one tenant this process serves (single-tenant mode, ADR-0093). It must have a row.
+	// Tenant is the one tenant this process serves in single-tenant mode (ADR-0093). It must have a
+	// row. Mutually exclusive with MultiTenant.
 	Tenant uuid.UUID
+	// MultiTenant serves every tenant in DB by resolving each request's tenant from its verified
+	// credential or stored mapping (ADR-0170). Mutually exclusive with Tenant.
+	MultiTenant bool
 	// Issuer is the authorization server of the API, and Audience is what its tokens name. Audience is
 	// opaque: a URL for a resource server, a client id for an issuer that mints no resource audience.
 	Issuer   string
@@ -101,15 +109,29 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 	if err := rls.Check(ctx, cfg.DB); err != nil {
 		return nil, err
 	}
-	if err := tenancy.Require(ctx, cfg.DB, cfg.Tenant); err != nil {
-		return nil, err
+	if cfg.MultiTenant {
+		if err := identity.RequireMultiTenantLookups(ctx, cfg.DB); err != nil {
+			return nil, err
+		}
+		if err := verification.RequireAgentPinLookup(ctx, cfg.DB); err != nil {
+			return nil, err
+		}
+		if cfg.CIAudience != "" {
+			if err := tenancy.RequireInstallationLookup(ctx, cfg.DB); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		if err := tenancy.Require(ctx, cfg.DB, cfg.Tenant); err != nil {
+			return nil, err
+		}
 	}
 
 	policy, err := authz.New(ctx)
 	if err != nil {
 		return nil, err
 	}
-	svc := newService(cfg.DB, cfg.Tenant, cfg.Log, cfg.Limits)
+	svc := newService(cfg.DB, cfg.Tenant, cfg.MultiTenant, cfg.Log, cfg.Limits)
 	mcpOn := cfg.MCPIssuer != ""
 	limits := cfg.Limits.WithDefaults()
 
@@ -128,11 +150,12 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 	)
 	if len(cfg.Providers) > 0 {
 		signIn, err = login.New(ctx, login.Options{
-			DB:        cfg.DB,
-			Tenant:    cfg.Tenant,
-			PublicURL: cfg.PublicURL,
-			Providers: cfg.Providers,
-			Secret:    cfg.Secrets,
+			DB:          cfg.DB,
+			Tenant:      cfg.Tenant,
+			MultiTenant: cfg.MultiTenant,
+			PublicURL:   cfg.PublicURL,
+			Providers:   cfg.Providers,
+			Secret:      cfg.Secrets,
 			// An ID token must never pass as a bearer token of either handler.
 			Forbidden: []string{cfg.Audience, cfg.MCPResourceURL},
 			Client:    cfg.Client,
@@ -150,25 +173,33 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		}
 	}
 	installDirectory(cfg, signIn)
-	livePinCache := newKnownPinCache(256, 15*time.Second)
+	livePinCache := newKnownPinCache(maxKnownPins, maxKnownPinsPerTenant, pinCacheTTL)
 	livePinMisses := ratelimit.New(limits.Rate, limits.Burst)
 	liveUploads := &api.LiveUploads{
 		LookupPin: func(ctx context.Context, pinHex string) (verification.AgentPin, api.SessionStatus) {
 			now := time.Now()
-			if pin, ok := livePinCache.get(pinHex, now); ok {
+			if pin, ok := livePinCache.get(cfg.Tenant, pinHex, now); ok {
 				return pin, api.SessionFound
 			}
 			if _, ok := livePinMisses.Allow(cfg.Tenant, now); !ok {
 				return verification.AgentPin{}, api.SessionBusy
 			}
-			pin, err := verification.LookupAgentPin(ctx, cfg.DB, cfg.Tenant, pinHex)
+			var (
+				pin verification.AgentPin
+				err error
+			)
+			if cfg.MultiTenant {
+				pin, err = verification.LookupAgentPinAnyTenant(ctx, cfg.DB, pinHex)
+			} else {
+				pin, err = verification.LookupAgentPin(ctx, cfg.DB, cfg.Tenant, pinHex)
+			}
 			if errors.Is(err, verification.ErrUnknownPin) {
 				return verification.AgentPin{}, api.SessionUnknown
 			}
 			if err != nil {
 				return verification.AgentPin{}, api.SessionFailed
 			}
-			livePinCache.put(pinHex, pin, now)
+			livePinCache.put(cfg.Tenant, pinHex, pin, now)
 			return pin, api.SessionFound
 		},
 		EvictPin: livePinCache.evictByID,
@@ -192,7 +223,7 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 			eehooks.SetTrackerAdmin(trackers.NewAdmin(cfg.DB, cfg.Tenant, key))
 		}
 		if eehooks.Allow(eehooks.FeatureChat) {
-			eehooks.SetChatAdmin(chatAdmin{store: chat.NewStore(cfg.DB, cfg.Tenant, key)})
+			eehooks.SetChatAdmin(chatAdmin{db: cfg.DB, fixedTenant: cfg.Tenant, key: key})
 		}
 	}
 	apiHandler, err := api.New(api.Config{
@@ -202,8 +233,8 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		LiveUploads: liveUploads,
 		Gateway:     cfg.Gateway,
 		Callers: func(ctx context.Context, claims authn.Claims) (api.Caller, bool) {
-			principal, ok := svc.principal(ctx, claims)
-			return api.Caller{Tenant: cfg.Tenant, Principal: principal}, ok
+			tenant, principal, ok := svc.caller(ctx, claims)
+			return api.Caller{Tenant: tenant, Principal: principal}, ok
 		},
 		Sessions: sessions,
 		Policy:   policy,
@@ -225,7 +256,14 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 	}
 
 	mux := http.NewServeMux()
-	eehooks.Mount(eehooks.MountContext{Mux: mux, Log: cfg.Log, DB: cfg.DB, Tenant: cfg.Tenant})
+	eehooks.Mount(eehooks.MountContext{
+		Mux:         mux,
+		Log:         cfg.Log,
+		DB:          cfg.DB,
+		Tenant:      cfg.Tenant,
+		MultiTenant: cfg.MultiTenant,
+		SetTenant:   telemetry.SetTenant,
+	})
 	mux.HandleFunc("GET /healthz", svc.health)
 	// Every route of the API is under /v1. It answers 401 before it says whether a route exists.
 	mux.Handle("/v1/", apiHandler)
@@ -257,8 +295,8 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		mcpHandler, err := mcpremote.NewHandler(mcpConfig,
 			authn.Exclusive(mcpVerifier, cfg.Audience),
 			func(ctx context.Context, claims authn.Claims) (mcpremote.Caller, bool) {
-				principal, ok := svc.principal(ctx, claims)
-				return mcpremote.Caller{Tenant: cfg.Tenant, Principal: principal}, ok
+				tenant, principal, ok := svc.caller(ctx, claims)
+				return mcpremote.Caller{Tenant: tenant, Principal: principal}, ok
 			},
 			func(caller mcpremote.Caller) mcptools.Backend {
 				return &mcpremote.Backend{DB: cfg.DB, Caller: caller, Now: time.Now, Gateway: cfg.Gateway}
@@ -298,22 +336,29 @@ func Serve(ctx context.Context, listener net.Listener, cfg Config) error {
 	return httpserve.Serve(ctx, listener, handler, nil)
 }
 
-// sessionCaller adapts the sign-in's answer to the API's. The tenant is the process's, never the cookie's.
-func sessionCaller(signIn *login.Service, tenant uuid.UUID) func(context.Context, []byte) (api.Caller, api.SessionStatus) {
+// sessionCaller adapts the sign-in's answer to the API's. When fixedTenant is non-nil (single-tenant
+// mode), any other tenant is rejected as defense in depth.
+func sessionCaller(signIn *login.Service, fixedTenant uuid.UUID) func(context.Context, []byte) (api.Caller, api.SessionStatus) {
 	return func(ctx context.Context, token []byte) (api.Caller, api.SessionStatus) {
-		principal, status := signIn.Lookup(ctx, token)
+		tenant, principal, status := signIn.Lookup(ctx, token)
 		if status != login.Found {
 			return api.Caller{}, sessionStatus(status)
+		}
+		if tenant == uuid.Nil || (fixedTenant != uuid.Nil && tenant != fixedTenant) {
+			return api.Caller{}, api.SessionUnknown
 		}
 		return api.Caller{Tenant: tenant, Principal: principal}, api.SessionFound
 	}
 }
 
-func cliSessionCaller(signIn *login.Service, tenant uuid.UUID) func(context.Context, string) (api.Caller, api.SessionStatus) {
+func cliSessionCaller(signIn *login.Service, fixedTenant uuid.UUID) func(context.Context, string) (api.Caller, api.SessionStatus) {
 	return func(ctx context.Context, token string) (api.Caller, api.SessionStatus) {
-		principal, status := signIn.LookupCLI(ctx, token)
+		tenant, principal, status := signIn.LookupCLI(ctx, token)
 		if status != login.Found {
 			return api.Caller{}, sessionStatus(status)
+		}
+		if tenant == uuid.Nil || (fixedTenant != uuid.Nil && tenant != fixedTenant) {
+			return api.Caller{}, api.SessionUnknown
 		}
 		return api.Caller{Tenant: tenant, Principal: principal}, api.SessionFound
 	}
@@ -332,58 +377,97 @@ func sessionStatus(status login.Status) api.SessionStatus {
 	}
 }
 
+type pinCacheKey struct {
+	scope  uuid.UUID
+	pinHex string
+}
+
 type cachedAgentPin struct {
 	pin       verification.AgentPin
 	expiresAt time.Time
 }
 
 type knownPinCache struct {
-	mu      sync.Mutex
-	max     int
-	ttl     time.Duration
-	entries map[string]cachedAgentPin
+	mu           sync.Mutex
+	max          int
+	maxPerTenant int
+	ttl          time.Duration
+	entries      map[pinCacheKey]cachedAgentPin
+	byTenant     map[uuid.UUID]map[pinCacheKey]struct{}
 }
 
-func newKnownPinCache(max int, ttl time.Duration) *knownPinCache {
-	return &knownPinCache{max: max, ttl: ttl, entries: make(map[string]cachedAgentPin)}
+func newKnownPinCache(max, maxPerTenant int, ttl time.Duration) *knownPinCache {
+	if maxPerTenant <= 0 || maxPerTenant > max {
+		maxPerTenant = max
+	}
+	return &knownPinCache{
+		max:          max,
+		maxPerTenant: maxPerTenant,
+		ttl:          ttl,
+		entries:      make(map[pinCacheKey]cachedAgentPin),
+		byTenant:     make(map[uuid.UUID]map[pinCacheKey]struct{}),
+	}
 }
 
-func (c *knownPinCache) get(pinHex string, now time.Time) (verification.AgentPin, bool) {
+func (c *knownPinCache) get(scope uuid.UUID, pinHex string, now time.Time) (verification.AgentPin, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entry, ok := c.entries[pinHex]
+	key := pinCacheKey{scope: scope, pinHex: pinHex}
+	entry, ok := c.entries[key]
 	if !ok {
 		return verification.AgentPin{}, false
 	}
 	if !now.Before(entry.expiresAt) {
-		delete(c.entries, pinHex)
+		c.deleteLocked(key, entry.pin.Tenant)
 		return verification.AgentPin{}, false
 	}
 	return entry.pin, true
 }
 
-func (c *knownPinCache) put(pinHex string, pin verification.AgentPin, now time.Time) {
+func (c *knownPinCache) put(scope uuid.UUID, pinHex string, pin verification.AgentPin, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, exists := c.entries[pinHex]; !exists && len(c.entries) >= c.max {
+	key := pinCacheKey{scope: scope, pinHex: pinHex}
+	tenant := pin.Tenant
+	if prev, exists := c.entries[key]; exists {
+		if prev.pin.Tenant != tenant {
+			c.deleteLocked(key, prev.pin.Tenant)
+		} else {
+			c.entries[key] = cachedAgentPin{pin: pin, expiresAt: now.Add(c.ttl)}
+			return
+		}
+	}
+	if keys := c.byTenant[tenant]; len(keys) >= c.maxPerTenant {
+		for k := range keys {
+			if !now.Before(c.entries[k].expiresAt) {
+				c.deleteLocked(k, tenant)
+			}
+		}
+		for len(c.byTenant[tenant]) >= c.maxPerTenant {
+			c.evictOldestFromTenantLocked(tenant)
+		}
+	}
+	if len(c.entries) >= c.max {
 		for k, v := range c.entries {
 			if !now.Before(v.expiresAt) {
-				delete(c.entries, k)
+				c.deleteLocked(k, v.pin.Tenant)
 			}
 		}
-	}
-	for _, exists := c.entries[pinHex]; !exists && len(c.entries) >= c.max; _, exists = c.entries[pinHex] {
-		var oldestKey string
-		var oldestTime time.Time
-		for k, v := range c.entries {
-			if oldestKey == "" || v.expiresAt.Before(oldestTime) {
-				oldestKey = k
-				oldestTime = v.expiresAt
+		for len(c.entries) >= c.max {
+			largest := c.largestTenantLocked()
+			if largest == uuid.Nil && len(c.byTenant[uuid.Nil]) == 0 {
+				break
 			}
+			c.evictOldestFromTenantLocked(largest)
 		}
-		delete(c.entries, oldestKey)
 	}
-	c.entries[pinHex] = cachedAgentPin{pin: pin, expiresAt: now.Add(c.ttl)}
+	c.entries[key] = cachedAgentPin{pin: pin, expiresAt: now.Add(c.ttl)}
+	keys := c.byTenant[tenant]
+	if keys == nil {
+		keys = make(map[pinCacheKey]struct{})
+		c.byTenant[tenant] = keys
+	}
+	keys[key] = struct{}{}
 }
 
 func (c *knownPinCache) evictByID(id uuid.UUID) {
@@ -391,8 +475,47 @@ func (c *knownPinCache) evictByID(id uuid.UUID) {
 	defer c.mu.Unlock()
 	for k, v := range c.entries {
 		if v.pin.ID == id {
-			delete(c.entries, k)
+			c.deleteLocked(k, v.pin.Tenant)
 		}
+	}
+}
+
+func (c *knownPinCache) deleteLocked(key pinCacheKey, tenant uuid.UUID) {
+	delete(c.entries, key)
+	if keys := c.byTenant[tenant]; keys != nil {
+		delete(keys, key)
+		if len(keys) == 0 {
+			delete(c.byTenant, tenant)
+		}
+	}
+}
+
+func (c *knownPinCache) largestTenantLocked() uuid.UUID {
+	var best uuid.UUID
+	bestCount := -1
+	for tenant, keys := range c.byTenant {
+		if len(keys) > bestCount {
+			best = tenant
+			bestCount = len(keys)
+		}
+	}
+	return best
+}
+
+func (c *knownPinCache) evictOldestFromTenantLocked(tenant uuid.UUID) {
+	var oldestKey pinCacheKey
+	var oldestTime time.Time
+	found := false
+	for k := range c.byTenant[tenant] {
+		expires := c.entries[k].expiresAt
+		if !found || expires.Before(oldestTime) {
+			oldestKey = k
+			oldestTime = expires
+			found = true
+		}
+	}
+	if found {
+		c.deleteLocked(oldestKey, tenant)
 	}
 }
 
@@ -400,7 +523,9 @@ func (c Config) validate() error {
 	switch {
 	case c.DB == nil:
 		return errors.New("a database is required")
-	case c.Tenant == uuid.Nil:
+	case c.MultiTenant && c.Tenant != uuid.Nil:
+		return errors.New("multi-tenant mode and a tenant cannot both be set")
+	case !c.MultiTenant && c.Tenant == uuid.Nil:
 		return errors.New("a tenant is required")
 	case c.Issuer == "":
 		return errors.New("an issuer is required")
@@ -421,12 +546,13 @@ func (c Config) validate() error {
 }
 
 type service struct {
-	db     *sql.DB
-	tenant uuid.UUID
-	log    *slog.Logger
+	db          *sql.DB
+	tenant      uuid.UUID
+	multiTenant bool
+	log         *slog.Logger
 
 	// lookup reads a login from the database. Tests replace it.
-	lookup func(ctx context.Context, issuer, subject string) (uuid.UUID, error)
+	lookup func(ctx context.Context, issuer, subject string) (uuid.UUID, uuid.UUID, error)
 	// known keeps the logins that were found, and misses limits the lookups that reach the database
 	// for a login not kept, whether or not the database knows it.
 	known  *loginCache
@@ -440,49 +566,67 @@ type service struct {
 	healthy  bool
 }
 
-func newService(db *sql.DB, tenant uuid.UUID, log *slog.Logger, limits api.Limits) *service {
+func newService(db *sql.DB, tenant uuid.UUID, multiTenant bool, log *slog.Logger, limits api.Limits) *service {
 	limits = limits.WithDefaults()
 	s := &service{
-		db:     db,
-		tenant: tenant,
-		log:    log,
-		known:  newLoginCache(loginTTL, maxKnownLogins),
-		misses: ratelimit.New(limits.Rate, limits.Burst),
-		now:    time.Now,
+		db:          db,
+		tenant:      tenant,
+		multiTenant: multiTenant,
+		log:         log,
+		known:       newLoginCache(loginTTL, maxKnownLogins, maxKnownLoginsPerTenant),
+		misses:      ratelimit.New(limits.Rate, limits.Burst),
+		now:         time.Now,
 	}
-	s.lookup = func(ctx context.Context, issuer, subject string) (uuid.UUID, error) {
-		return identity.PrincipalFor(ctx, db, tenant, issuer, subject)
+	s.lookup = func(ctx context.Context, issuer, subject string) (uuid.UUID, uuid.UUID, error) {
+		target := tenant
+		if multiTenant {
+			var err error
+			target, err = identity.LoginTenant(ctx, db, issuer, subject)
+			if err != nil {
+				return uuid.Nil, uuid.Nil, err
+			}
+		}
+		principal, err := identity.PrincipalFor(ctx, db, target, issuer, subject)
+		if err != nil {
+			return uuid.Nil, uuid.Nil, err
+		}
+		return target, principal, nil
 	}
 	return s
 }
 
-// principal is the only way a token becomes a caller: the principal this tenant bound to the token's
-// issuer and subject. The tenant is the process's, never the token's or the request's.
+// caller is the only way a bearer token becomes a caller: the tenant and principal bound to the
+// token's issuer and subject. In single-tenant mode, the tenant is the process's; in multi-tenant
+// mode, the tenant comes from identity.login_tenants and an ambiguous subject bound in two or more
+// tenants is refused fail-closed (ADR-0170).
 //
 // A closed login is unknown on the next database read. A found one is kept for loginTTL, which does
-// not keep a role (ADR-0131). Every other lookup is
-// charged to a bucket of the tenant before it reaches the database, so a stream of valid tokens for
-// subjects the tenant never bound costs the database no more than that bucket allows. While the
-// bucket is empty, a login not yet kept is refused like an unbound one.
-func (s *service) principal(ctx context.Context, claims authn.Claims) (uuid.UUID, bool) {
-	key := loginKey{issuer: claims.Issuer, subject: claims.Subject}
+// not keep a role (ADR-0131). Every other lookup is charged to a miss bucket before it reaches the
+// database, so a stream of valid tokens for unbound subjects costs the database no more than that
+// bucket allows.
+func (s *service) caller(ctx context.Context, claims authn.Claims) (uuid.UUID, uuid.UUID, bool) {
+	key := loginKey{scope: s.tenant, issuer: claims.Issuer, subject: claims.Subject}
 	now := s.now()
-	if principal, ok := s.known.get(key, now); ok {
-		return principal, true
+	if found, ok := s.known.get(key, now); ok {
+		return found.tenant, found.principal, true
 	}
 	if _, ok := s.misses.Allow(s.tenant, now); !ok {
 		s.log.Warn("lookups of unknown logins are over their limit, so a login was refused", "tenant", s.tenant)
-		return uuid.Nil, false
+		return uuid.Nil, uuid.Nil, false
 	}
-	principal, err := s.lookup(ctx, claims.Issuer, claims.Subject)
+	tenant, principal, err := s.lookup(ctx, claims.Issuer, claims.Subject)
 	if err != nil {
-		if !errors.Is(err, identity.ErrUnknownLogin) {
+		switch {
+		case errors.Is(err, identity.ErrUnknownLogin):
+		case errors.Is(err, identity.ErrAmbiguousLogin):
+			s.log.Info("a login is bound in several tenants, so the call was refused")
+		default:
 			s.log.Warn("a login could not be read, so the call was refused", "tenant", s.tenant)
 		}
-		return uuid.Nil, false
+		return uuid.Nil, uuid.Nil, false
 	}
-	s.known.put(key, principal, now)
-	return principal, true
+	s.known.put(key, resolvedLogin{tenant: tenant, principal: principal}, now)
+	return tenant, principal, true
 }
 
 // health answers 204 when the database answers. It is outside the API's guard and says nothing else.

@@ -334,9 +334,9 @@ func routesWithLive(db *sql.DB, now func() time.Time, log *slog.Logger, origin s
 }
 
 // enterpriseRoutes are the admin routes the enterprise binary registered. They are absent unless
-// sso.saml is allowed and a directory is installed, so the community document stays unchanged.
+// sso.saml is allowed and a directory store is installed, so the community document stays unchanged.
 func enterpriseRoutes() []route {
-	if !eehooks.Allow(eehooks.FeatureSAML) || eehooks.CurrentDirectory() == nil {
+	if !eehooks.Allow(eehooks.FeatureSAML) || eehooks.CurrentDirectoryStore() == nil {
 		return nil
 	}
 	var out []route
@@ -348,11 +348,11 @@ func enterpriseRoutes() []route {
 			action:  authz.PrincipalManage,
 			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				caller, ok := r.Context().Value(callerKey{}).(Caller)
-				if !ok || caller.Principal == uuid.Nil {
+				if !ok || caller.Tenant == uuid.Nil || caller.Principal == uuid.Nil {
 					writeError(w, http.StatusForbidden, errForbidden)
 					return
 				}
-				serve(w, r, caller.Principal)
+				serve(w, r, caller.Tenant, caller.Principal)
 			}),
 		})
 	}
@@ -396,11 +396,11 @@ func trackerRoutes(db *sql.DB, log *slog.Logger) []route {
 			action:  authz.PrincipalManage,
 			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				caller, ok := r.Context().Value(callerKey{}).(Caller)
-				if !ok || caller.Principal == uuid.Nil {
+				if !ok || caller.Tenant == uuid.Nil || caller.Principal == uuid.Nil {
 					writeError(w, http.StatusForbidden, errForbidden)
 					return
 				}
-				serve(w, r, caller.Principal)
+				serve(w, r, caller.Tenant, caller.Principal)
 			}),
 		})
 	}
@@ -422,11 +422,11 @@ func chatRoutes() []route {
 			action:  authz.PrincipalManage,
 			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				caller, ok := r.Context().Value(callerKey{}).(Caller)
-				if !ok || caller.Principal == uuid.Nil {
+				if !ok || caller.Tenant == uuid.Nil || caller.Principal == uuid.Nil {
 					writeError(w, http.StatusForbidden, errForbidden)
 					return
 				}
-				serve(w, r, caller.Principal)
+				serve(w, r, caller.Tenant, caller.Principal)
 			}),
 		})
 	}

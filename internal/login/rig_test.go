@@ -30,15 +30,27 @@ const (
 
 var tenant = uuid.MustParse("00000000-0000-4000-8000-00000000000a")
 
+type fakeSession struct {
+	tenant    uuid.UUID
+	principal uuid.UUID
+	expires   time.Time
+}
+
+type fakeLogin struct {
+	tenant    uuid.UUID
+	principal uuid.UUID
+	kind      string
+}
+
 // fakeStore is the database of a session, in memory. A login is bound to a person or to an agent.
 type fakeStore struct {
-	mu       sync.Mutex
-	now      func() time.Time
-	logins   map[[2]string]string
-	sessions    map[string]time.Time
-	cliSessions map[string]time.Time
-	// invitations are the hashes of the open invitations, as the database keeps them.
-	invitations map[string]bool
+	mu          sync.Mutex
+	now         func() time.Time
+	logins      map[[2]string][]fakeLogin
+	sessions    map[string]fakeSession
+	cliSessions map[string]fakeSession
+	// invitations are the hashes of the open invitations mapped to their owning tenant.
+	invitations map[string]uuid.UUID
 
 	starts, lookups, checks int
 	previous                []byte
@@ -48,159 +60,220 @@ type fakeStore struct {
 func newFakeStore(now func() time.Time) *fakeStore {
 	return &fakeStore{
 		now:         now,
-		logins:      map[[2]string]string{},
-		sessions:    map[string]time.Time{},
-		cliSessions: map[string]time.Time{},
-		invitations: map[string]bool{},
+		logins:      map[[2]string][]fakeLogin{},
+		sessions:    map[string]fakeSession{},
+		cliSessions: map[string]fakeSession{},
+		invitations: map[string]uuid.UUID{},
 	}
 }
 
-// open makes an invitation with this token open.
+// open makes an invitation with this token open in the default tenant.
 func (f *fakeStore) open(token string) {
+	f.openIn(tenant, token)
+}
+
+func (f *fakeStore) openIn(t uuid.UUID, token string) {
 	hash, ok := identity.InvitationHash(token)
 	if !ok {
 		panic("a token that does not read")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.invitations[string(hash)] = true
+	f.invitations[string(hash)] = t
 }
 
 func (f *fakeStore) isOpen(token string) bool {
 	hash, _ := identity.InvitationHash(token)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.invitations[string(hash)]
+	_, ok := f.invitations[string(hash)]
+	return ok
 }
 
-func (f *fakeStore) check(_ context.Context, invitation []byte) error {
+func (f *fakeStore) check(_ context.Context, invitation []byte) (uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.checks++
 	if f.err != nil {
-		return f.err
+		return uuid.Nil, f.err
 	}
-	if !f.invitations[string(invitation)] {
-		return identity.ErrUnknownInvitation
+	t, ok := f.invitations[string(invitation)]
+	if !ok {
+		return uuid.Nil, identity.ErrUnknownInvitation
 	}
-	return nil
+	return t, nil
 }
 
 func (f *fakeStore) bind(issuer, subject, kind string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.logins[[2]string{issuer, subject}] = kind
+	f.bindIn(tenant, personID, issuer, subject, kind)
 }
 
-func (f *fakeStore) start(_ context.Context, issuer, subject string, hash, previous, invitation []byte) (time.Time, error) {
+func (f *fakeStore) bindIn(t, principal uuid.UUID, issuer, subject, kind string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := [2]string{issuer, subject}
+	for i, existing := range f.logins[key] {
+		if existing.tenant == t {
+			f.logins[key][i] = fakeLogin{tenant: t, principal: principal, kind: kind}
+			return
+		}
+	}
+	f.logins[key] = append(f.logins[key], fakeLogin{tenant: t, principal: principal, kind: kind})
+}
+
+func (f *fakeStore) resolveLoginLocked(issuer, subject string) (fakeLogin, error) {
+	entries := f.logins[[2]string{issuer, subject}]
+	switch len(entries) {
+	case 0:
+		return fakeLogin{}, identity.ErrUnknownLogin
+	case 1:
+		return entries[0], nil
+	default:
+		return fakeLogin{}, identity.ErrAmbiguousLogin
+	}
+}
+
+func (f *fakeStore) start(_ context.Context, issuer, subject string, hash, previous, invitation []byte) (uuid.UUID, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.starts++
 	f.previous = previous
 	if f.err != nil {
-		return time.Time{}, f.err
+		return uuid.Nil, time.Time{}, f.err
 	}
-	switch f.logins[[2]string{issuer, subject}] {
-	case "":
-		if invitation == nil {
-			return time.Time{}, identity.ErrUnknownLogin
+	var target fakeLogin
+	if invitation != nil {
+		invTenant, ok := f.invitations[string(invitation)]
+		if !ok {
+			// Fall back to existing login if already bound in a single tenant (matching existing behavior).
+			existing, err := f.resolveLoginLocked(issuer, subject)
+			if err != nil {
+				return uuid.Nil, time.Time{}, identity.ErrUnknownInvitation
+			}
+			target = existing
+		} else {
+			foundInTenant := false
+			for _, l := range f.logins[[2]string{issuer, subject}] {
+				if l.tenant == invTenant {
+					target = l
+					foundInTenant = true
+					break
+				}
+			}
+			if !foundInTenant {
+				delete(f.invitations, string(invitation))
+				target = fakeLogin{tenant: invTenant, principal: personID, kind: identity.KindHuman}
+				f.logins[[2]string{issuer, subject}] = append(f.logins[[2]string{issuer, subject}], target)
+			}
 		}
-		// The invitation is used, and the person it names is bound to this issuer and subject.
-		if !f.invitations[string(invitation)] {
-			return time.Time{}, identity.ErrUnknownInvitation
+	} else {
+		var err error
+		target, err = f.resolveLoginLocked(issuer, subject)
+		if err != nil {
+			return uuid.Nil, time.Time{}, err
 		}
-		delete(f.invitations, string(invitation))
-		f.logins[[2]string{issuer, subject}] = identity.KindHuman
-	case identity.KindAgent:
-		return time.Time{}, identity.ErrNotHuman
+	}
+	if target.kind == identity.KindAgent {
+		return uuid.Nil, time.Time{}, identity.ErrNotHuman
 	}
 	if previous != nil {
 		delete(f.sessions, string(previous))
 	}
 	expires := f.now().Add(8 * time.Hour)
-	f.sessions[string(hash)] = expires
-	return expires, nil
+	f.sessions[string(hash)] = fakeSession{tenant: target.tenant, principal: target.principal, expires: expires}
+	return target.tenant, expires, nil
 }
 
-func (f *fakeStore) principal(_ context.Context, hash []byte) (uuid.UUID, time.Time, error) {
+func (f *fakeStore) principal(_ context.Context, hash []byte) (uuid.UUID, uuid.UUID, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lookups++
 	if f.err != nil {
-		return uuid.Nil, time.Time{}, f.err
+		return uuid.Nil, uuid.Nil, time.Time{}, f.err
 	}
-	expires, ok := f.sessions[string(hash)]
-	if !ok || !f.now().Before(expires) {
-		return uuid.Nil, time.Time{}, identity.ErrUnknownSession
+	sess, ok := f.sessions[string(hash)]
+	if !ok || !f.now().Before(sess.expires) {
+		return uuid.Nil, uuid.Nil, time.Time{}, identity.ErrUnknownSession
 	}
-	return personID, expires, nil
+	return sess.tenant, sess.principal, sess.expires, nil
 }
 
-func (f *fakeStore) end(_ context.Context, hash []byte) error {
+func (f *fakeStore) end(_ context.Context, hash []byte) (uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return f.err
+		return uuid.Nil, f.err
 	}
+	sess := f.sessions[string(hash)]
 	delete(f.sessions, string(hash))
-	return nil
+	return sess.tenant, nil
 }
 
-func (f *fakeStore) cliCheck(_ context.Context, issuer, subject string) error {
+func (f *fakeStore) cliCheck(_ context.Context, issuer, subject string) (uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return f.err
+		return uuid.Nil, f.err
 	}
-	switch f.logins[[2]string{issuer, subject}] {
-	case "":
-		return identity.ErrUnknownLogin
-	case identity.KindAgent:
-		return identity.ErrNotHuman
-	default:
-		return nil
+	target, err := f.resolveLoginLocked(issuer, subject)
+	if err != nil {
+		return uuid.Nil, err
 	}
+	if target.kind == identity.KindAgent {
+		return uuid.Nil, identity.ErrNotHuman
+	}
+	return target.tenant, nil
 }
 
-func (f *fakeStore) cliStart(_ context.Context, issuer, subject string, hash []byte) (time.Time, error) {
+func (f *fakeStore) cliStart(_ context.Context, targetTenant uuid.UUID, issuer, subject string, hash []byte) (time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return time.Time{}, f.err
 	}
-	switch f.logins[[2]string{issuer, subject}] {
-	case "":
+	var target fakeLogin
+	found := false
+	for _, l := range f.logins[[2]string{issuer, subject}] {
+		if targetTenant == uuid.Nil || l.tenant == targetTenant {
+			target = l
+			found = true
+			break
+		}
+	}
+	if !found {
 		return time.Time{}, identity.ErrUnknownLogin
-	case identity.KindAgent:
+	}
+	if target.kind == identity.KindAgent {
 		return time.Time{}, identity.ErrNotHuman
 	}
 	expires := f.now().Add(30 * 24 * time.Hour)
-	f.cliSessions[string(hash)] = expires
+	f.cliSessions[string(hash)] = fakeSession{tenant: target.tenant, principal: target.principal, expires: expires}
 	return expires, nil
 }
 
-func (f *fakeStore) cliPrincipal(_ context.Context, hash []byte) (uuid.UUID, time.Time, error) {
+func (f *fakeStore) cliPrincipal(_ context.Context, hash []byte) (uuid.UUID, uuid.UUID, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lookups++
 	if f.err != nil {
-		return uuid.Nil, time.Time{}, f.err
+		return uuid.Nil, uuid.Nil, time.Time{}, f.err
 	}
-	expires, ok := f.cliSessions[string(hash)]
-	if !ok || !f.now().Before(expires) {
-		return uuid.Nil, time.Time{}, identity.ErrUnknownCLISession
+	sess, ok := f.cliSessions[string(hash)]
+	if !ok || !f.now().Before(sess.expires) {
+		return uuid.Nil, uuid.Nil, time.Time{}, identity.ErrUnknownCLISession
 	}
-	return personID, expires, nil
+	return sess.tenant, sess.principal, sess.expires, nil
 }
 
-func (f *fakeStore) cliEnd(_ context.Context, hash []byte) error {
+func (f *fakeStore) cliEnd(_ context.Context, hash []byte) (uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return f.err
+		return uuid.Nil, f.err
 	}
+	sess := f.cliSessions[string(hash)]
 	delete(f.cliSessions, string(hash))
-	return nil
+	return sess.tenant, nil
 }
 
 func (f *fakeStore) sessionCount() int {
@@ -238,6 +311,7 @@ type rigConfig struct {
 	meta        map[string]any
 	rate        float64
 	burst       int
+	multiTenant bool
 }
 
 func withMeta(key string, value any) rigOption {
@@ -250,6 +324,10 @@ func withLimits(rate float64, burst int) rigOption {
 
 func withKeys(options ...authntest.Option) rigOption {
 	return func(c *rigConfig) { c.authOptions = append(c.authOptions, options...) }
+}
+
+func withMultiTenant() rigOption {
+	return func(c *rigConfig) { c.multiTenant = true }
 }
 
 func newRig(t *testing.T, options ...rigOption) *rig {
@@ -272,19 +350,23 @@ func newRig(t *testing.T, options ...rigOption) *rig {
 	}
 	auth.Mux.HandleFunc("POST /token", r.token)
 
-	svc, err := New(t.Context(), Options{
-		store:     r.store,
-		Tenant:    tenant,
-		PublicURL: publicURL,
-		Providers: []ProviderConfig{{ID: "fake", Kind: KindOIDC, Issuer: auth.Server.URL, ClientID: clientID, ClientSecretEnv: secretEnv}},
-		Secret:    func(name string) string { return map[string]string{secretEnv: clientSecret}[name] },
-		Forbidden: []string{"https://api.example.test/v1"},
-		Client:    auth.Server.Client(),
-		Rate:      limitOr(cfg.rate, 100),
-		Burst:     int(limitOr(float64(cfg.burst), 100)),
-		Log:       newLogger(r.logs),
-		Now:       func() time.Time { return r.now },
-	})
+	opts := Options{
+		store:       r.store,
+		MultiTenant: cfg.multiTenant,
+		PublicURL:   publicURL,
+		Providers:   []ProviderConfig{{ID: "fake", Kind: KindOIDC, Issuer: auth.Server.URL, ClientID: clientID, ClientSecretEnv: secretEnv}},
+		Secret:      func(name string) string { return map[string]string{secretEnv: clientSecret}[name] },
+		Forbidden:   []string{"https://api.example.test/v1"},
+		Client:      auth.Server.Client(),
+		Rate:        limitOr(cfg.rate, 100),
+		Burst:       int(limitOr(float64(cfg.burst), 100)),
+		Log:         newLogger(r.logs),
+		Now:         func() time.Time { return r.now },
+	}
+	if !cfg.multiTenant {
+		opts.Tenant = tenant
+	}
+	svc, err := New(t.Context(), opts)
 	if err != nil {
 		t.Fatal(err)
 	}

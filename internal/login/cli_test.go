@@ -110,9 +110,9 @@ func TestCLILoopbackPKCEFlowAndLogout(t *testing.T) {
 		t.Fatalf("code replay status = %d, want 400", replayRec.Code)
 	}
 
-	principal, status := r.svc.LookupCLI(t.Context(), tokResp.AccessToken)
-	if status != Found || principal != personID {
-		t.Fatalf("LookupCLI = (%v, %v), want (%v, Found)", principal, status, personID)
+	gotTenant, principal, status := r.svc.LookupCLI(t.Context(), tokResp.AccessToken)
+	if status != Found || gotTenant != tenant || principal != personID {
+		t.Fatalf("LookupCLI = (%v, %v, %v), want (%v, %v, Found)", gotTenant, principal, status, tenant, personID)
 	}
 
 	logoutReq := httptest.NewRequest(http.MethodPost, publicURL+"/auth/cli/logout", nil)
@@ -123,7 +123,7 @@ func TestCLILoopbackPKCEFlowAndLogout(t *testing.T) {
 		t.Fatalf("cli logout status = %d, want 204", logoutRec.Code)
 	}
 
-	_, status = r.svc.LookupCLI(t.Context(), tokResp.AccessToken)
+	_, _, status = r.svc.LookupCLI(t.Context(), tokResp.AccessToken)
 	if status != Unknown {
 		t.Fatalf("LookupCLI after logout = %v, want Unknown", status)
 	}

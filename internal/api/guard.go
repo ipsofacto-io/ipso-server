@@ -126,6 +126,7 @@ func (g *guard) guardPerson(w http.ResponseWriter, r *http.Request, rt route, ne
 	if !ok {
 		return
 	}
+	telemetry.SetTenant(r.Context(), caller.Tenant)
 	if wait, ok := g.limiter.Allow(caller.Tenant, g.now()); !ok {
 		w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
 		writeError(w, http.StatusTooManyRequests, errRateLimited)
@@ -386,6 +387,7 @@ func (g *guard) guardUpload(w http.ResponseWriter, r *http.Request, keys []strin
 		writeError(w, http.StatusForbidden, errForbidden)
 		return
 	}
+	telemetry.SetTenant(r.Context(), mapping.Tenant)
 	if wait, ok := g.limiter.Allow(mapping.Tenant, g.now()); !ok {
 		w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
 		writeError(w, http.StatusTooManyRequests, errRateLimited)
@@ -468,6 +470,7 @@ func (g *guard) guardLiveUpload(w http.ResponseWriter, r *http.Request, keys []s
 		writeError(w, http.StatusUnauthorized, errUnauthorized)
 		return
 	}
+	telemetry.SetTenant(r.Context(), pin.Tenant)
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	ctx := context.WithValue(r.Context(), callerKey{}, Caller{Tenant: pin.Tenant})
 	ctx = context.WithValue(ctx, livePinKey{}, verifiedLiveAgent{Pin: pin, Timestamp: tsHeader})
