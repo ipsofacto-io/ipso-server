@@ -47,10 +47,15 @@ const (
 	maxSAMLBody = 256 << 10
 	// maxInvitationBody bounds the body of POST /auth/invitation/{provider}, which holds one 43 character token.
 	maxInvitationBody = 1024
+	// maxChoiceBody bounds the body of POST /auth/tenants, which holds one UUID.
+	maxChoiceBody = 1024
+
+	flowBrowser = "browser"
+	flowCLI     = "cli"
 )
 
-// Handler serves GET /auth/providers, /auth/login/{provider}, /auth/callback/{provider}, and POST
-// /auth/invitation/{provider} and /auth/logout. Every answer
+// Handler serves GET /auth/providers, /auth/login/{provider}, /auth/callback/{provider}, /auth/tenants,
+// and POST /auth/invitation/{provider} and /auth/logout. Every answer
 // carries no-store and no-referrer: a callback URL holds a one-time code, and none of it should be
 // cached or sent on.
 func (s *Service) Handler() http.Handler {
@@ -59,6 +64,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("/auth/login/{provider}", s.start)
 	mux.HandleFunc("/auth/invitation/{provider}", s.invite)
 	mux.HandleFunc("/auth/callback/{provider}", s.callback)
+	mux.HandleFunc("/auth/tenants", s.tenants)
 	mux.HandleFunc("GET /auth/saml/{provider}/metadata", s.metadata)
 	mux.HandleFunc("/auth/cli/start", s.cliStart)
 	mux.HandleFunc("/auth/cli/token", s.cliToken)
@@ -154,6 +160,7 @@ func (s *Service) begin(w http.ResponseWriter, r *http.Request, id string, p pro
 	if held, err := authn.SessionToken(r); err == nil {
 		begun.Previous = base64.RawURLEncoding.EncodeToString(authn.SessionHash(held))
 	}
+	s.clearStaleChoice(w, r)
 	http.SetCookie(w, begun.cookie())
 	location := p.authorizeURL(s.redirectURI(id), state, nonce, verifier)
 	if isPosted {
@@ -385,6 +392,59 @@ func (s *Service) finishSignIn(w http.ResponseWriter, r *http.Request, ctx conte
 			return
 		}
 	}
+	if s.multiTenant && invitation == nil {
+		tenants, err := s.store.humanTenants(ctx, who.issuer, who.subject)
+		switch {
+		case errors.Is(err, identity.ErrUnknownLogin):
+			s.log.Info("a sign-in named a login the tenant never bound", "provider", id)
+			s.writeCallbackRefusal(w, r, http.StatusForbidden, codeUnknownLogin, &who)
+			return
+		case errors.Is(err, identity.ErrNotHuman):
+			s.writeCallbackRefusal(w, r, http.StatusForbidden, codeForbidden, nil)
+			return
+		case err != nil:
+			s.log.Warn("a sign-in could not list tenants", "provider", id)
+			s.writeCallbackRefusal(w, r, http.StatusInternalServerError, codeInternal, nil)
+			return
+		}
+		if len(tenants) >= 2 {
+			s.beginTenantChoice(w, r, ctx, id, tenants, identity.LoginChoice{
+				Issuer:   who.issuer,
+				Subject:  who.subject,
+				Previous: previous,
+			})
+			return
+		}
+		target := tenants[0].ID
+		token, err := authn.NewSessionToken()
+		if err != nil {
+			s.writeCallbackRefusal(w, r, http.StatusInternalServerError, codeInternal, nil)
+			return
+		}
+		expires, err := s.store.startForTenant(ctx, target, who.issuer, who.subject, authn.SessionHash(token), previous)
+		switch {
+		case errors.Is(err, identity.ErrUnknownLogin):
+			s.log.Info("a sign-in named a login the tenant never bound", "provider", id)
+			s.writeCallbackRefusal(w, r, http.StatusForbidden, codeUnknownLogin, &who)
+			return
+		case errors.Is(err, identity.ErrNotHuman):
+			s.writeCallbackRefusal(w, r, http.StatusForbidden, codeForbidden, nil)
+			return
+		case err != nil:
+			s.log.Warn("a session could not be started", "provider", id)
+			s.writeCallbackRefusal(w, r, http.StatusInternalServerError, codeInternal, nil)
+			return
+		}
+		telemetry.SetTenant(r.Context(), target)
+		if previous != nil {
+			s.known.remove(s.tenant, previous)
+		}
+		s.clearStaleChoice(w, r)
+		http.SetCookie(w, authn.NewSessionCookie(token, expires, now))
+		w.Header().Set("Location", "/")
+		w.WriteHeader(http.StatusSeeOther)
+		return
+	}
 	token, err := authn.NewSessionToken()
 	if err != nil {
 		s.writeCallbackRefusal(w, r, http.StatusInternalServerError, codeInternal, nil)
@@ -412,9 +472,294 @@ func (s *Service) finishSignIn(w http.ResponseWriter, r *http.Request, ctx conte
 	if previous != nil {
 		s.known.remove(s.tenant, previous)
 	}
+	s.clearStaleChoice(w, r)
 	http.SetCookie(w, authn.NewSessionCookie(token, expires, now))
 	w.Header().Set("Location", "/")
 	w.WriteHeader(http.StatusSeeOther)
+}
+
+type tenantOptionJSON struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type tenantChoiceResponse struct {
+	Tenants []tenantOptionJSON `json:"tenants"`
+	Flow    string             `json:"flow"`
+}
+
+type tenantChoiceRequest struct {
+	TenantID string `json:"tenant_id"`
+}
+
+func toTenantOptions(in []identity.TenantOption) []tenantOptionJSON {
+	out := make([]tenantOptionJSON, 0, len(in))
+	for _, t := range in {
+		out = append(out, tenantOptionJSON{ID: t.ID.String(), Name: t.Name})
+	}
+	return out
+}
+
+func flowName(isCLI bool) string {
+	if isCLI {
+		return flowCLI
+	}
+	return flowBrowser
+}
+
+// beginTenantChoice stores a short-lived, single-use pending tenant choice and hands the browser an
+// opaque __Host-ipso-choice cookie without creating a session or CLI authorization code (ADR-0171).
+func (s *Service) beginTenantChoice(w http.ResponseWriter, r *http.Request, ctx context.Context, id string, tenants []identity.TenantOption, choice identity.LoginChoice) {
+	fail := func() {
+		if choice.IsCLI {
+			if prefersPage(r) {
+				s.redirectCLIError(w, choice.CLIRedirect, choice.CLIState, "server_error")
+			} else {
+				writeJSON(w, http.StatusInternalServerError, codeInternal)
+			}
+			return
+		}
+		s.writeCallbackRefusal(w, r, http.StatusInternalServerError, codeInternal, nil)
+	}
+	choiceTok, choiceHash, err := identity.NewChoiceToken()
+	if err != nil {
+		fail()
+		return
+	}
+	if _, err := s.store.createChoice(ctx, choiceHash, choice); err != nil {
+		s.log.Warn("a pending tenant choice could not be stored", "provider", id)
+		fail()
+		return
+	}
+	http.SetCookie(w, choiceCookie(choiceTok))
+	if prefersPage(r) {
+		w.Header().Set("Location", "/signin/tenant")
+		w.WriteHeader(http.StatusSeeOther)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(tenantChoiceResponse{
+		Tenants: toTenantOptions(tenants),
+		Flow:    flowName(choice.IsCLI),
+	})
+}
+
+// tenants serves GET, POST, and DELETE /auth/tenants in multi-tenant mode so a verified person bound
+// in several tenants can inspect their eligible human tenants, pick one, or cancel the choice (ADR-0171).
+func (s *Service) tenants(w http.ResponseWriter, r *http.Request) {
+	if !s.multiTenant {
+		writeJSON(w, http.StatusNotFound, codeNotFound)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		s.listPendingTenants(w, r)
+	case http.MethodPost:
+		s.chooseTenant(w, r)
+	case http.MethodDelete:
+		s.cancelPendingTenant(w, r)
+	default:
+		methodNotAllowed(w, "GET, POST, DELETE")
+	}
+}
+
+func (s *Service) listPendingTenants(w http.ResponseWriter, r *http.Request) {
+	if wait, ok := s.choices.Allow(s.tenant, s.now()); !ok {
+		w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
+		writeJSON(w, http.StatusTooManyRequests, codeRateLimited)
+		return
+	}
+	hash, ok := readChoiceHash(r)
+	if !ok {
+		http.SetCookie(w, clearedChoiceCookie())
+		writeJSON(w, http.StatusUnauthorized, codeInvalidLogin)
+		return
+	}
+	choice, err := s.store.readChoice(r.Context(), hash)
+	switch {
+	case errors.Is(err, identity.ErrUnknownChoice):
+		http.SetCookie(w, clearedChoiceCookie())
+		writeJSON(w, http.StatusUnauthorized, codeInvalidLogin)
+		return
+	case err != nil:
+		s.log.Warn("a pending tenant choice could not be read")
+		writeJSON(w, http.StatusInternalServerError, codeInternal)
+		return
+	}
+	tenants, err := s.store.humanTenants(r.Context(), choice.Issuer, choice.Subject)
+	switch {
+	case errors.Is(err, identity.ErrUnknownLogin), errors.Is(err, identity.ErrNotHuman):
+		_ = s.store.cancelChoice(r.Context(), hash)
+		http.SetCookie(w, clearedChoiceCookie())
+		writeJSON(w, http.StatusForbidden, codeForbidden)
+		return
+	case err != nil:
+		s.log.Warn("eligible tenants could not be listed for a pending choice")
+		writeJSON(w, http.StatusInternalServerError, codeInternal)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(tenantChoiceResponse{
+		Tenants: toTenantOptions(tenants),
+		Flow:    flowName(choice.IsCLI),
+	})
+}
+
+func (s *Service) chooseTenant(w http.ResponseWriter, r *http.Request) {
+	if err := s.check.Check(r); err != nil {
+		writeJSON(w, http.StatusForbidden, codeForbidden)
+		return
+	}
+	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
+		writeJSON(w, http.StatusUnsupportedMediaType, codeInvalidRequest)
+		return
+	}
+	var req tenantChoiceRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxChoiceBody))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, codeInvalidRequest)
+		return
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, codeInvalidRequest)
+		return
+	}
+	target, err := uuid.Parse(req.TenantID)
+	if err != nil || target == uuid.Nil {
+		writeJSON(w, http.StatusBadRequest, codeInvalidRequest)
+		return
+	}
+	now := s.now()
+	if wait, ok := s.choices.Allow(s.tenant, now); !ok {
+		w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
+		writeJSON(w, http.StatusTooManyRequests, codeRateLimited)
+		return
+	}
+	hash, ok := readChoiceHash(r)
+	if !ok {
+		http.SetCookie(w, clearedChoiceCookie())
+		writeJSON(w, http.StatusUnauthorized, codeInvalidLogin)
+		return
+	}
+	// Single-use fail-closed: atomically consume the pending choice before checking the chosen
+	// tenant under forced RLS, so any unauthorized or failed selection creates no session. Clear
+	// the browser cookie once the row is known absent or consumed; leave it intact on a transient
+	// database error so the caller can retry without restarting IdP sign-in.
+	choice, err := s.store.consumeChoice(r.Context(), hash)
+	switch {
+	case errors.Is(err, identity.ErrUnknownChoice):
+		http.SetCookie(w, clearedChoiceCookie())
+		writeJSON(w, http.StatusUnauthorized, codeInvalidLogin)
+		return
+	case err != nil:
+		s.log.Warn("a pending tenant choice could not be consumed")
+		writeJSON(w, http.StatusInternalServerError, codeInternal)
+		return
+	}
+	http.SetCookie(w, clearedChoiceCookie())
+	if choice.IsCLI {
+		if !validLoopbackCallback(choice.CLIRedirect) || choice.CLIState == "" || !validBase64URLToken(choice.CLIChallenge, 43, 128) {
+			writeJSON(w, http.StatusBadRequest, codeInvalidLogin)
+			return
+		}
+		err := s.store.cliCheckForTenant(r.Context(), target, choice.Issuer, choice.Subject)
+		switch {
+		case errors.Is(err, identity.ErrUnknownLogin), errors.Is(err, identity.ErrNotHuman):
+			writeJSON(w, http.StatusForbidden, codeForbidden)
+			return
+		case err != nil:
+			s.log.Warn("a CLI tenant choice could not be verified")
+			writeJSON(w, http.StatusInternalServerError, codeInternal)
+			return
+		}
+		telemetry.SetTenant(r.Context(), target)
+		code, err := randomText(32)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, codeInternal)
+			return
+		}
+		s.cliCodes.put(code, cliCodeEntry{
+			tenant:      target,
+			issuer:      choice.Issuer,
+			subject:     choice.Subject,
+			redirectURI: choice.CLIRedirect,
+			challenge:   choice.CLIChallenge,
+			expiresAt:   now.Add(cliCodeTTL),
+		}, now)
+		v := url.Values{}
+		v.Set("code", code)
+		v.Set("state", choice.CLIState)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"location": choice.CLIRedirect + "?" + v.Encode()})
+		return
+	}
+
+	previous := choice.Previous
+	if previous == nil {
+		if old, err := authn.SessionToken(r); err == nil {
+			previous = authn.SessionHash(old)
+		}
+	}
+	token, err := authn.NewSessionToken()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, codeInternal)
+		return
+	}
+	expires, err := s.store.startForTenant(r.Context(), target, choice.Issuer, choice.Subject, authn.SessionHash(token), previous)
+	switch {
+	case errors.Is(err, identity.ErrUnknownLogin), errors.Is(err, identity.ErrNotHuman):
+		writeJSON(w, http.StatusForbidden, codeForbidden)
+		return
+	case err != nil:
+		s.log.Warn("a session could not be started for the chosen tenant")
+		writeJSON(w, http.StatusInternalServerError, codeInternal)
+		return
+	}
+	telemetry.SetTenant(r.Context(), target)
+	if previous != nil {
+		s.known.remove(s.tenant, previous)
+	}
+	http.SetCookie(w, authn.NewSessionCookie(token, expires, now))
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"location": "/"})
+}
+
+func (s *Service) cancelPendingTenant(w http.ResponseWriter, r *http.Request) {
+	if err := s.check.Check(r); err != nil {
+		writeJSON(w, http.StatusForbidden, codeForbidden)
+		return
+	}
+	if wait, ok := s.choices.Allow(s.tenant, s.now()); !ok {
+		w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
+		writeJSON(w, http.StatusTooManyRequests, codeRateLimited)
+		return
+	}
+	if hash, ok := readChoiceHash(r); ok {
+		if err := s.store.cancelChoice(r.Context(), hash); err != nil {
+			s.log.Warn("a pending tenant choice could not be canceled")
+			writeJSON(w, http.StatusInternalServerError, codeInternal)
+			return
+		}
+	}
+	http.SetCookie(w, clearedChoiceCookie())
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// clearStaleChoice cancels any pending choice cookie on the server (best effort in multi-tenant mode)
+// and instructs the browser to drop the cookie.
+func (s *Service) clearStaleChoice(w http.ResponseWriter, r *http.Request) {
+	if len(r.CookiesNamed(choiceCookieName)) == 0 {
+		return
+	}
+	if s.multiTenant {
+		if hash, ok := readChoiceHash(r); ok {
+			if err := s.store.cancelChoice(r.Context(), hash); err != nil {
+				s.log.Warn("a stale pending tenant choice could not be canceled")
+			}
+		}
+	}
+	http.SetCookie(w, clearedChoiceCookie())
 }
 
 func (s *Service) metadata(w http.ResponseWriter, r *http.Request) {

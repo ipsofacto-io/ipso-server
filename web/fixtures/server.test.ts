@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import { ids, scopes } from './data.ts';
-import { EXPORT_BYTES, EXPORT_SHA256, newFixtureState, OPEN_INVITATION, respond, SESSION_COOKIE, type FixtureRequest } from './server.ts';
+import { CHOICE_COOKIE, EXPORT_BYTES, EXPORT_SHA256, FIXTURE_TENANTS, newFixtureState, OPEN_INVITATION, respond, SESSION_COOKIE, type FixtureRequest } from './server.ts';
 
 const NOW = new Date('2026-11-07T12:00:00Z');
 const cookie = `${SESSION_COOKIE}=1`;
@@ -524,5 +524,59 @@ describe('the invitation start of the fixtures server (ADR-0127)', () => {
     expect(start('dex', { token: OPEN_INVITATION }, { body: '{no' }).status).toBe(400);
     expect(start('nobody', { token: OPEN_INVITATION }).status).toBe(404);
     expect(respond({ method: 'GET', url: '/auth/invitation/dex', cookie: '' }, NOW, newFixtureState()).status).toBe(405);
+  });
+});
+
+describe('the tenant choice routes of the fixtures server (ADR-0171)', () => {
+  const choiceCookie = `${CHOICE_COOKIE}=1`;
+
+  it('lists pending tenants only when the pending choice cookie is present', () => {
+    expect(respond({ method: 'GET', url: '/auth/tenants', cookie: '' }, NOW, newFixtureState()).status).toBe(401);
+    const ok = respond({ method: 'GET', url: '/auth/tenants', cookie: choiceCookie }, NOW, newFixtureState());
+    expect(ok).toMatchObject({ status: 200, body: { tenants: FIXTURE_TENANTS, flow: 'browser' } });
+  });
+
+  it('accepts one known tenant_id, clears the choice cookie, and refuses unknown or malformed ids', () => {
+    const ok = respond(
+      {
+        method: 'POST',
+        url: '/auth/tenants',
+        cookie: choiceCookie,
+        contentType: 'application/json',
+        body: JSON.stringify({ tenant_id: FIXTURE_TENANTS[0].id }),
+      },
+      NOW,
+      newFixtureState(),
+    );
+    expect(ok.status).toBe(200);
+    expect(ok.body).toEqual({ location: '/' });
+
+    expect(
+      respond(
+        {
+          method: 'POST',
+          url: '/auth/tenants',
+          cookie: choiceCookie,
+          contentType: 'application/json',
+          body: JSON.stringify({ tenant_id: '0194f2a0-0000-7000-8000-000000009999' }),
+        },
+        NOW,
+        newFixtureState(),
+      ).status,
+    ).toBe(403);
+    expect(
+      respond(
+        {
+          method: 'POST',
+          url: '/auth/tenants',
+          cookie: choiceCookie,
+          contentType: 'application/json',
+          body: JSON.stringify({ tenant_id: 'not-a-uuid' }),
+        },
+        NOW,
+        newFixtureState(),
+      ).status,
+    ).toBe(400);
+    expect(respond({ method: 'DELETE', url: '/auth/tenants', cookie: choiceCookie }, NOW, newFixtureState()).status).toBe(204);
   });
 });

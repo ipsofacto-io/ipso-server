@@ -77,6 +77,23 @@ export interface InvitationStart {
   location: string;
 }
 
+/** One organization a verified person may pick at sign-in in multi-tenant mode (ADR-0171). */
+export interface TenantChoice {
+  id: string;
+  name: string;
+}
+
+/** The pending sign-in choice returned by GET /auth/tenants (ADR-0171). */
+export interface PendingTenants {
+  tenants: TenantChoice[];
+  flow: 'browser' | 'cli';
+}
+
+/** Where POST /auth/tenants says to send the browser after verifying the chosen tenant (ADR-0171). */
+export interface TenantChoiceStart {
+  location: string;
+}
+
 // Verifiability analysis, human proposals, and Decision Health (ADR-0161, ADR-0163).
 export type VerifiabilityRequest = Schemas['VerifiabilityRequest'];
 export type CandidatePremise = Schemas['CandidatePremise'];

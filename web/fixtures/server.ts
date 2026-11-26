@@ -73,6 +73,12 @@ export interface FixtureReply {
 }
 
 export const SESSION_COOKIE = 'fixtures-session';
+export const CHOICE_COOKIE = 'fixtures-choice';
+
+export const FIXTURE_TENANTS = [
+  { id: '00000000-0000-4000-8000-00000000000a', name: 'Acme Europe' },
+  { id: '00000000-0000-4000-8000-00000000000b', name: 'Beta Platform' },
+] as const;
 
 /** The one invitation token that is open in the fixtures: 43 characters of unpadded base64url, like a real one. */
 export const OPEN_INVITATION = 'o'.repeat(43);
@@ -508,6 +514,31 @@ export function respond(request: FixtureRequest, now: Date = new Date(), state: 
   }
   if (path === '/auth/logout' && request.method === 'POST') {
     return { status: 204, headers: { 'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Max-Age=0` } };
+  }
+  if (path === '/auth/tenants') {
+    const hasChoice = request.cookie.split(';').some((part) => part.trim() === `${CHOICE_COOKIE}=1`);
+    const clearChoice = `${CHOICE_COOKIE}=; Path=/; Max-Age=0`;
+    if (request.method === 'GET') {
+      if (!hasChoice) return error(401, 'invalid_login', { 'Set-Cookie': clearChoice });
+      return json(200, { tenants: FIXTURE_TENANTS, flow: 'browser' });
+    }
+    if (request.method === 'POST') {
+      const parsed = parse(request, ['tenant_id']);
+      if (!parsed.ok) return error(parsed.reply.status === 413 ? 400 : parsed.reply.status, 'invalid_request');
+      const { tenant_id: tenantId } = parsed.fields;
+      if (typeof tenantId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tenantId)) {
+        return error(400, 'invalid_request');
+      }
+      if (!hasChoice) return error(401, 'invalid_login', { 'Set-Cookie': clearChoice });
+      if (!FIXTURE_TENANTS.some((t) => t.id === tenantId)) {
+        return error(403, 'forbidden', { 'Set-Cookie': clearChoice });
+      }
+      return json(200, { location: '/' }, { 'Set-Cookie': `${SESSION_COOKIE}=1; Path=/; SameSite=Strict` });
+    }
+    if (request.method === 'DELETE') {
+      return { status: 204, headers: { 'Set-Cookie': clearChoice } };
+    }
+    return error(405, 'method_not_allowed', { Allow: 'GET, POST, DELETE' });
   }
   // The start of a sign-in with an invitation (ADR-0127). Like the server, it needs no session, it asks for the token in a
   // JSON body, and every token that is not open is one answer. The location is the stand-in sign-in of the fixtures.

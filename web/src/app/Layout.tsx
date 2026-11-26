@@ -128,8 +128,8 @@ export function Layout() {
         </div>
       </header>
       <main id="main" ref={main} tabIndex={-1} className="main">
-        {/* A call the server refused with 401 means there is no session: the sign-in is the page. An invitation takes no session. */}
-        {signedIn === false && location.pathname !== '/signin' && location.pathname !== '/invitation' ? <Navigate to="/signin" replace /> : <Outlet />}
+        {/* A call the server refused with 401 means there is no session: the sign-in is the page. An invitation or pending tenant choice takes no session. */}
+        {signedIn === false && location.pathname !== '/signin' && location.pathname !== '/signin/tenant' && location.pathname !== '/invitation' ? <Navigate to="/signin" replace /> : <Outlet />}
       </main>
       <footer className="foot">
         <div className="foot-inner">

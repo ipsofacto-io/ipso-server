@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -47,6 +48,8 @@ type fakeStore struct {
 	mu          sync.Mutex
 	now         func() time.Time
 	logins      map[[2]string][]fakeLogin
+	tenantNames map[uuid.UUID]string
+	choices     map[string]identity.LoginChoice
 	sessions    map[string]fakeSession
 	cliSessions map[string]fakeSession
 	// invitations are the hashes of the open invitations mapped to their owning tenant.
@@ -61,10 +64,18 @@ func newFakeStore(now func() time.Time) *fakeStore {
 	return &fakeStore{
 		now:         now,
 		logins:      map[[2]string][]fakeLogin{},
+		tenantNames: map[uuid.UUID]string{},
+		choices:     map[string]identity.LoginChoice{},
 		sessions:    map[string]fakeSession{},
 		cliSessions: map[string]fakeSession{},
 		invitations: map[string]uuid.UUID{},
 	}
+}
+
+func (f *fakeStore) setTenantName(t uuid.UUID, name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tenantNames[t] = name
 }
 
 // open makes an invitation with this token open in the default tenant.
@@ -280,6 +291,152 @@ func (f *fakeStore) sessionCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.sessions)
+}
+
+func (f *fakeStore) cliSessionCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.cliSessions)
+}
+
+func (f *fakeStore) humanTenants(_ context.Context, issuer, subject string) ([]identity.TenantOption, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	entries := f.logins[[2]string{issuer, subject}]
+	var out []identity.TenantOption
+	for _, l := range entries {
+		if l.kind != identity.KindHuman {
+			continue
+		}
+		name := f.tenantNames[l.tenant]
+		if name == "" {
+			name = "Tenant " + l.tenant.String()[:8]
+		}
+		out = append(out, identity.TenantOption{ID: l.tenant, Name: name})
+	}
+	slices.SortFunc(out, func(a, b identity.TenantOption) int {
+		if c := strings.Compare(a.Name, b.Name); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID.String(), b.ID.String())
+	})
+	if len(out) > 0 {
+		return out, nil
+	}
+	if len(entries) > 0 {
+		return nil, identity.ErrNotHuman
+	}
+	return nil, identity.ErrUnknownLogin
+}
+
+func (f *fakeStore) startForTenant(_ context.Context, target uuid.UUID, issuer, subject string, hash, previous []byte) (time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.starts++
+	f.previous = previous
+	if f.err != nil {
+		return time.Time{}, f.err
+	}
+	var match *fakeLogin
+	for i := range f.logins[[2]string{issuer, subject}] {
+		if f.logins[[2]string{issuer, subject}][i].tenant == target {
+			match = &f.logins[[2]string{issuer, subject}][i]
+			break
+		}
+	}
+	if match == nil {
+		return time.Time{}, identity.ErrUnknownLogin
+	}
+	if match.kind != identity.KindHuman {
+		return time.Time{}, identity.ErrNotHuman
+	}
+	if previous != nil {
+		delete(f.sessions, string(previous))
+	}
+	expires := f.now().Add(8 * time.Hour)
+	f.sessions[string(hash)] = fakeSession{tenant: match.tenant, principal: match.principal, expires: expires}
+	return expires, nil
+}
+
+func (f *fakeStore) cliCheckForTenant(_ context.Context, target uuid.UUID, issuer, subject string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	for _, l := range f.logins[[2]string{issuer, subject}] {
+		if l.tenant == target {
+			if l.kind != identity.KindHuman {
+				return identity.ErrNotHuman
+			}
+			return nil
+		}
+	}
+	return identity.ErrUnknownLogin
+}
+
+func (f *fakeStore) createChoice(_ context.Context, hash []byte, choice identity.LoginChoice) (time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return time.Time{}, f.err
+	}
+	now := f.now()
+	for k, c := range f.choices {
+		if !now.Before(c.ExpiresAt) || (c.Issuer == choice.Issuer && c.Subject == choice.Subject) {
+			delete(f.choices, k)
+		}
+	}
+	choice.ExpiresAt = now.Add(identity.LoginChoiceTTL)
+	choice.IsCLI = choice.CLIRedirect != ""
+	f.choices[string(hash)] = choice
+	return choice.ExpiresAt, nil
+}
+
+func (f *fakeStore) readChoice(_ context.Context, hash []byte) (identity.LoginChoice, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return identity.LoginChoice{}, f.err
+	}
+	c, ok := f.choices[string(hash)]
+	if !ok || !f.now().Before(c.ExpiresAt) {
+		return identity.LoginChoice{}, identity.ErrUnknownChoice
+	}
+	return c, nil
+}
+
+func (f *fakeStore) consumeChoice(_ context.Context, hash []byte) (identity.LoginChoice, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return identity.LoginChoice{}, f.err
+	}
+	now := f.now()
+	for k, c := range f.choices {
+		if !now.Before(c.ExpiresAt) {
+			delete(f.choices, k)
+		}
+	}
+	c, ok := f.choices[string(hash)]
+	if !ok || !now.Before(c.ExpiresAt) {
+		return identity.LoginChoice{}, identity.ErrUnknownChoice
+	}
+	delete(f.choices, string(hash))
+	return c, nil
+}
+
+func (f *fakeStore) cancelChoice(_ context.Context, hash []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	delete(f.choices, string(hash))
+	return nil
 }
 
 var personID = uuid.MustParse("00000000-0000-4000-8000-0000000000a1")

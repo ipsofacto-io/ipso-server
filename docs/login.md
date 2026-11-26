@@ -77,7 +77,13 @@ A login of an agent cannot start a browser session.
 
 The session cookie holds 32 random bytes and the database keeps their SHA-256, so a read of the table is not a session. It is HttpOnly, Secure, SameSite=Strict, and `Path=/`, and the session ends 8 hours after sign-in. Every sign-in mints a new token and ends the session the browser held when the sign-in began. A request that could change state and comes from another origin is refused with 403 before the cookie is looked up. Each process keeps a session it has found for a minute, so a logout on another process takes up to a minute to reach this one.
 
-A session belongs to the one tenant the process serves, and each tenant process needs its own origin. A person in two tenants signs in at each. Choosing a tenant at sign-in is IPSO-138. If you remove the providers, cookies are ignored at once.
+A session belongs to one tenant. In single-tenant mode (`IPSO_TENANT_ID`), each process serves one tenant on its own origin and a person in two tenants signs in at each. In multi-tenant mode (`IPSO_MULTI_TENANT=true`, [ADR-0170](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0170-multi-tenant-api-mode.md), [ADR-0171](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0171-tenant-choice-at-signin.md)), when a browser or CLI sign-in callback resolves a verified identity provider subject with open human logins in two or more tenants, the server stores a 5-minute single-use pending choice in PostgreSQL, sets the opaque `__Host-ipso-choice` cookie without creating a session, and sends HTML browsers 303 to `/signin/tenant` (or answers 200 JSON with the tenant list and flow to non-HTML clients):
+
+- `GET /auth/tenants` reads the `__Host-ipso-choice` cookie and returns the person's live open human tenants as `{"tenants":[{"id":"...","name":"..."}],"flow":"browser"|"cli"}`.
+- `POST /auth/tenants` checks same-origin, takes `{"tenant_id":"..."}`, atomically consumes the pending choice, clears `__Host-ipso-choice`, verifies membership in the chosen tenant under forced row-level security, and either starts the browser session (setting `__Host-ipso-session` and answering `{"location":"/"}`) or mints the one-time CLI loopback code (answering `{"location":"http://127.0.0.1:<port>/callback?..."}`). Any unauthorized or failed choice creates no session.
+- `DELETE /auth/tenants` checks same-origin, cancels the pending choice, clears `__Host-ipso-choice`, and answers 204 with no session.
+
+If you remove the providers, cookies are ignored at once.
 
 ## Limits to know
 

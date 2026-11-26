@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/ipsofacto-io/ipso-server/internal/identity"
 )
 
 const (
@@ -16,6 +18,14 @@ const (
 	attemptLife       = 10 * time.Minute
 	// maxAttemptCookie bounds what is parsed. A CLI PKCE attempt adds loopback callback metadata.
 	maxAttemptCookie = 2048
+
+	// choiceCookieName holds the opaque single-use token of a pending tenant choice between the IdP
+	// callback and POST /auth/tenants in multi-tenant mode (ADR-0171). The database keeps only its
+	// SHA-256. SameSite=Lax allows the cookie set on the cross-site callback redirect to travel on the
+	// subsequent same-origin /signin/tenant page load and /auth/tenants fetch while blocking cross-site
+	// POSTs (paired with CrossOriginProtection).
+	choiceCookieName = "__Host-ipso-choice"
+	choiceLife       = identity.LoginChoiceTTL
 )
 
 // attempt is what a sign-in needs to remember: which provider it went to, the state and nonce it
@@ -108,4 +118,35 @@ func randomText(n int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func choiceCookie(token string) *http.Cookie {
+	return &http.Cookie{
+		Name:     choiceCookieName,
+		Value:    token,
+		Path:     "/",
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(choiceLife / time.Second),
+	}
+}
+
+func clearedChoiceCookie() *http.Cookie {
+	return &http.Cookie{
+		Name:     choiceCookieName,
+		Path:     "/",
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	}
+}
+
+func readChoiceHash(r *http.Request) ([]byte, bool) {
+	cookies := r.CookiesNamed(choiceCookieName)
+	if len(cookies) != 1 {
+		return nil, false
+	}
+	return identity.ChoiceTokenHash(cookies[0].Value)
 }
