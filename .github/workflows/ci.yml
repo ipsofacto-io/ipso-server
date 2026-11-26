@@ -74,8 +74,18 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # Testcontainers starts PostgreSQL 18 on the runner's Docker.
-      - run: go test -tags integration -count=1 ./...
+      # Testcontainers starts PostgreSQL 18 on the runner's Docker. The packages run in parallel,
+      # each on its own PostgreSQL, and a timed loop that shares the CPU with them flakes, so the
+      # Resolve latency budget is held in the next step on its own (ADR-0167).
+      - run: go test -tags integration -count=1 -skip '^TestResolveP95UnderBudgetAt10kDecisions$' ./...
+      # Runs after a failed step too, so one run shows both answers. The grep fails the step when
+      # the test was renamed or skipped, which go test alone reports as a pass.
+      - name: Hold Resolve to its p95 budget
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          go test -tags integration -count=1 -v -run '^TestResolveP95UnderBudgetAt10kDecisions$' ./internal/registry | tee "$RUNNER_TEMP/latency.log"
+          grep -q -- '--- PASS: TestResolveP95UnderBudgetAt10kDecisions' "$RUNNER_TEMP/latency.log"
 
   mcp-conformance:
     name: ci / mcp-conformance
