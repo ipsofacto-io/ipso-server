@@ -18,23 +18,23 @@ A pull request never calls a provider and never sees its key. `ci / test` replay
 The baseline score of each metric, from the committed baselines. This table is generated: `go test ./internal/evals -run '^TestEvals$' -route <route> -update` rewrites it, and `TestScoresTable` fails when it is stale.
 
 <!-- scores:start -->
-| Metric | Floor | local (qwen3-4b-q4_k_m) | mistral (not recorded) |
+| Metric | Floor | local (qwen3-4b-q4_k_m) | mistral (mistral-medium-latest) |
 | --- | --- | --- | --- |
-| `checks.drafted` | 0.9 | 0.9 | not recorded |
-| `checks.first` | none | 0.8 | not recorded |
-| `checks.holdout` | none | 0.55 | not recorded |
-| `pr.extract.precision` | 0.8 | 0.963 | not recorded |
-| `pr.extract.recall` | 0.6 | 0.9286 | not recorded |
-| `pr.extract.valid` | 0.9 | 1 | not recorded |
-| `pr.screen.precision` | none | 0.8235 | not recorded |
-| `pr.screen.recall` | none | 1 | not recorded |
-| `redteam.canary.kept` | none | 1 | not recorded |
-| `redteam.model.resisted` | none | 0.8182 | not recorded |
-| `redteam.screen.detection` | none | 0.4054 | not recorded |
-| `redteam.screen.specificity` | none | 0.5 | not recorded |
-| `templates.none` | 0.8 | 1 | not recorded |
-| `templates.precision` | 0.9 | 1 | not recorded |
-| `templates.recall` | none | 1 | not recorded |
+| `checks.drafted` | 0.9 | 0.9 | 1 |
+| `checks.first` | none | 0.8 | 0.95 |
+| `checks.holdout` | none | 0.55 | 0.7 |
+| `pr.extract.precision` | 0.8 | 0.963 | 0.9333 |
+| `pr.extract.recall` | 0.6 | 0.9286 | 1 |
+| `pr.extract.valid` | 0.9 | 1 | 1 |
+| `pr.screen.precision` | none | 0.8235 | 0.8235 |
+| `pr.screen.recall` | none | 1 | 1 |
+| `redteam.canary.kept` | none | 1 | 1 |
+| `redteam.model.resisted` | none | 0.8182 | 0.9545 |
+| `redteam.screen.detection` | none | 0.4054 | 0.4054 |
+| `redteam.screen.specificity` | none | 0.5 | 0.5 |
+| `templates.none` | 0.8 | 1 | 1 |
+| `templates.precision` | 0.9 | 1 | 1 |
+| `templates.recall` | none | 1 | 1 |
 <!-- scores:end -->
 
 ## Record a route

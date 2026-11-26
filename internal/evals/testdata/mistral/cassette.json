@@ -1,0 +1,642 @@
+[
+  {
+    "prompt_sha256": "0294145ada3f0fdd7b57dc48e56d73f355de396225b0c02a0a0364a72e34f11b",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Service-to-service events use NATS JetStream\", \"statement\": \"Service-to-service events will use NATS JetStream as the messaging system, and Kafka will not be added to the platform.\", \"rationale\": \"The decision has already been made to standardize on NATS JetStream for service-to-service events.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "0311f61355f6e964bd1b2973e439ff73a5faaee7b5746d57f221fa1c88cd954f",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Redis for caching\", \"statement\": \"Redis is selected as the caching technology for the system.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "03d5b5b704f734fbd389f400dee1bcc38a0a2e07acc210d3bde488b60c7fe7fb",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny have tool 'edit' and a path under migrations/.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"tool\", \"op\": \"equals\", \"value\": \"edit\"}, {\"field\": \"path\", \"op\": \"prefix\", \"value\": \"migrations/\"}], \"message\": \"Database migrations are append-only; existing migration files cannot be edited.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"prefix\", \"value\": \"migrations/\"}, {\"field\": \"tool\", \"op\": \"equals\", \"value\": \"edit\"}], \"message\": \"Database migrations are append-only; existing migration files cannot be edited.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "03ddac8e3bd93f02b37c3b652faff4ef8954f5a6fc015458eb1cec260bfab397",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt Kubernetes for deployment\", \"statement\": \"The system will use Kubernetes as the deployment platform.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "05457ad1f6993f152b07509572f1aa797235314f68030fb669b64c172db534eb",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt Rust as the primary language\", \"statement\": \"The system will be implemented using Rust as the primary programming language.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "059fc51a6e88d6fedbe8c670ce45197f38a5bd614095828ca98be0dbd8637ec2",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny have a shell command containing 'rm -rf'.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"tool\", \"op\": \"equals\", \"value\": \"shell\"}, {\"field\": \"command\", \"op\": \"contains\", \"value\": \"rm -rf\"}], \"message\": \"Agents do not run rm -rf.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"tool\", \"op\": \"equals\", \"value\": \"shell\"}, {\"field\": \"command\", \"op\": \"regex\", \"value\": \"rm\\\\s+-rf\"}], \"message\": \"Agents do not run rm -rf.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "066b8b503d17f20097b94112dd408ce3e24e6212b3004c819454e229bcac2f85",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": []}"
+  },
+  {
+    "prompt_sha256": "071c4429bba9f9d54e38f277e24d76a046cce97c13ac6fdcc6b678c907157588",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"javascript/no-eval\"}"
+  },
+  {
+    "prompt_sha256": "076f7c820f519d747f0035eb0a8938398bd03abd2a3eb23baf8118987150ae1c",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Deprecate v1 API and enforce migration to v2\", \"statement\": \"The v1 API is deprecated and will be shut down on 1 June, requiring all clients to migrate to v2.\", \"rationale\": \"The v1 API is no longer supported and has a defined end-of-life date.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "084e5dd3c62d1ef0ade20e145f6df74c08dd291cd96fae2d8bc21c73037f05c3",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Service-to-service calls use mTLS through Linkerd\", \"statement\": \"Service-to-service communication will use mutual TLS (mTLS) via Linkerd for encryption and authentication.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "0aa9c02cb33ee41fcb250e35d163553bf228b1a9640077099f2011e40506b46d",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"java/no-system-out\"}"
+  },
+  {
+    "prompt_sha256": "0d898abdae0f03ffc0091f04107762605bae1bf82252ca6d6fd59920e57a3940",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Vault for secrets management\", \"statement\": \"The system will use Vault as the secrets management solution.\", \"rationale\": \"\", \"confidence\": 0.9}]}"
+  },
+  {
+    "prompt_sha256": "112f1eaab6e1c4db0dbc80cfef23a4c43eaf7072087fb5c32b101899f2a2b346",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"javascript/no-inner-html\"}"
+  },
+  {
+    "prompt_sha256": "1299c7f7ae5c5ba75d0ea2447267f2b9dc5d76769baf08acf996a44bf0ad0dfb",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "12e2aef07f16d616bdac7005abd451f04b5b99ab2d11d705dc1aaa714d317bfa",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "12fc008c8f5c68d0e20fab6255b4b811f554dbac40d2c88795871bbf4be744fc",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"azure/aks-private-cluster\"}"
+  },
+  {
+    "prompt_sha256": "13d9b6c154b9c2bd255459dcd0875e7390fed448aece1c96ceaf06d35172c18f",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Warehouse and data locality choice\", \"statement\": \"The data warehouse is BigQuery, hosted in the EU region, and no dataset will be exported or moved out of it.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "14f17de455ec9b4eab535cee27d120443658c5c11f439a507072bd0228d6798a",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "158f80b9de665f740e8554d0a080840b06721da23ec5c38d8a532086bca38607",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Standardize logging to JSON via log/slog\", \"statement\": \"All services will use log/slog for JSON logging, and logrus will be removed to simplify the log pipeline.\", \"rationale\": \"One format keeps the log pipeline simple.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "15ef55e272e3eec1a7ffa779182276b36ba779f44ea12405b501379b1893c1b6",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": null}"
+  },
+  {
+    "prompt_sha256": "1963203c510ddd837948609171c7bc7fc1d30fe597a92518412412435a736b4e",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny contain SELECT * in any letter case in .sql files.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \".sql\"}, {\"field\": \"content\", \"op\": \"regex\", \"value\": \"(?i)SELECT\\\\s+\\\\*\"}], \"message\": \"SQL names its columns; SELECT * is not allowed.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \".sql\"}, {\"field\": \"added\", \"op\": \"regex\", \"value\": \"(?i)SELECT\\\\s+\\\\*\"}], \"message\": \"SQL names its columns; SELECT * is not allowed.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "1adb2f7e5ff1e4c0005cc5c77c59c84ca176b3c61f6409034fa7406519829814",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Pin GitHub Actions to full commit SHA\", \"statement\": \"GitHub Actions workflows in this organization must be pinned to a full commit SHA instead of tags.\", \"rationale\": \"Tags are mutable and one moved under us last month, causing issues.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "1eeea37ef6cef8e55443c3b71918b2d5dff887c4e1318736c102d4e8a6543d49",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": null}"
+  },
+  {
+    "prompt_sha256": "1ffc51bd2393694a5cc50a04f750bc6d204e4edc1eb3b43c4effda79eb1dee2d",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny add privileged: true to Kubernetes manifests under k8s/.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"prefix\", \"value\": \"k8s/\"}, {\"field\": \"added\", \"op\": \"contains\", \"value\": \"privileged: true\"}], \"message\": \"No privileged containers in Kubernetes manifests under k8s/.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"prefix\", \"value\": \"k8s/\"}, {\"field\": \"added\", \"op\": \"regex\", \"value\": \"privileged\\\\s*:\\\\s*true\"}], \"message\": \"No privileged containers in Kubernetes manifests under k8s/.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "25dc498c590eaed59de05a06c0360fae265444151b74317cf18ef6c950766520",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "27e935dbf06948475274d8c9f4d175a8c2d41bfa1edd9dad6ed8676e3ead829c",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": null}"
+  },
+  {
+    "prompt_sha256": "2ce81916ea5a6568efaf2da95f41b9d28b6d53bdce508882300ed5f444cfbae2",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Postgres as the database\", \"statement\": \"The system will use Postgres as its database.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "31f281db4b0b1abfd7adf12aaf2b70388a521de033fc69e683ae181e0f1cf90f",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny add a System.out.println call in a .java file.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \".java\"}, {\"field\": \"added\", \"op\": \"contains\", \"value\": \"System.out.println\"}], \"message\": \"No System.out.println in Java code; use SLF4J instead.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \".java\"}, {\"field\": \"added\", \"op\": \"regex\", \"value\": \"System\\\\.out\\\\.println\\\\s*\\\\(\"}], \"message\": \"No System.out.println in Java code; use SLF4J instead.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "33c009faa79159a3d19371e58395370ab2e06584d62973bcca020a76c2217699",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt OIDC Federation for CI and Remove Long-Lived Cloud Keys\", \"statement\": \"CI will use OIDC federation for authentication, and long-lived cloud keys will be deleted.\", \"rationale\": \"The old keys are already rotated, indicating a security-driven transition.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "34110909e2cbab0f3fcc68a30ecd728dd228dfbe9bd1749d8c937e79225f3d85",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Drop Redux for state management\", \"statement\": \"Server state will be managed by TanStack Query and local UI state will remain in component state, eliminating Redux.\", \"rationale\": \"Decision made after a spike to simplify state management by separating concerns between server and local state.\", \"confidence\": 0.95}]}"
+  },
+  {
+    "prompt_sha256": "35e96c2e4c618c3bd934b8e8543205b00226083fdeb62ca2842ad25abb6d7651",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt OPA for policy enforcement\", \"statement\": \"The system will use OPA for policy decisions.\", \"rationale\": \"\", \"confidence\": 0.9}]}"
+  },
+  {
+    "prompt_sha256": "3b59e692a517fcc714ba108bc8099578a26a5cb48815ac4fdb05bfcf50ffbe62",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt Tailwind CSS for new styles\", \"statement\": \"Use Tailwind CSS for all new CSS development in the project.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "3ff76e4528ebc6d854fc7a2c7257046487e110dfe0b3b71d35f396f9bd460e4a",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use gRPC for internal service communication\", \"statement\": \"Internal services will communicate using gRPC.\", \"rationale\": \"Outcome from the design review.\", \"confidence\": 1.0}, {\"source\": 0, \"title\": \"Public endpoints remain REST with JSON\", \"statement\": \"Public endpoints will continue to use REST with JSON.\", \"rationale\": \"Outcome from the design review.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "443ee2f183c7b749ce549b3ff741a3e37067ca0c21a5f85b6c56e7da2b9c2999",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"aws/sg-no-ssh-from-internet\"}"
+  },
+  {
+    "prompt_sha256": "449d50934ff4170d965b4b4184047a48b1f4fd699a5b384aaece92dbb8884286",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": null}"
+  },
+  {
+    "prompt_sha256": "4871b1164adedbd10fff3c2300a34be1c97e6c6bada7eaaa0a8b41409047b504",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "4a0623bd7a637af1be38e3c4afe54166095b7cb4febac23a6a86c7b59d7ba5ed",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"azure/keyvault-purge-protection\"}"
+  },
+  {
+    "prompt_sha256": "4c49583b64bf9a401388b95ef7d0f9e83f3b147688de1589a0d747aaef8df625",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Pin provider versions in Terraform modules\", \"statement\": \"Every Terraform module must pin its provider versions.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "4d1f8a0c0711a95679109cf5bf09ae832eaa171c7d7c135efb448e879e137ee7",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"aws/s3-kms-cmk\"}"
+  },
+  {
+    "prompt_sha256": "4f362070f58fb23b5f7ae49c55a52d24bee72651bcd9590239b5a1116e6155ff",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt Kafka for event streaming\", \"statement\": \"The system will use Kafka as the event streaming technology.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "53c4208ba9cd14be493f74f64fc8658735e2981454ca1185229dd4d27c03e06e",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"python/requests-timeout\"}"
+  },
+  {
+    "prompt_sha256": "5439bd896372d7b7eccd08fcbf98ba286255a355927c587391ce1a4ba5545236",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": null}"
+  },
+  {
+    "prompt_sha256": "56504877de46541c85ec4b4238fb4af5a068e4f15073b76367d13ac3fe618c8d",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "56b7b1c9d02cef1464f45a88d1609ba09ff63327223c38ae185f5ceabaf262f2",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"aws/s3-no-public-acl\"}"
+  },
+  {
+    "prompt_sha256": "58f84bcc583c0b578fe99f0a22518e1f736cae178cd1bd6dc9257fafb6a306b2",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Kustomize overlays for own services, Helm for third-party charts\", \"statement\": \"Kustomize overlays will be used for managing environment-specific configurations of own services, while Helm will remain the tool for third-party charts.\", \"rationale\": \"\", \"confidence\": 1.0}, {\"source\": 1, \"title\": \"Flat Kustomize overlay structure\", \"statement\": \"Kustomize overlays will be kept flat with one level of bases and no nested overlays.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "5ae33c5a8bc8a4d53b55acf9144e4e050309fca388fae9cce6e3bd76359de9ab",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": null}"
+  },
+  {
+    "prompt_sha256": "5bd5fcaaf1f1706e21c9e4e4d8a5a648240c99453f56b92f5a2ff1173d80c62b",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Postgres for services storing money\", \"statement\": \"All services that store money must use Postgres as the database.\", \"rationale\": \"This was a long-standing decision for the system.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "5c8c69fb40c73ac843f151925748bec6e9d29ac4b490bc6fb22f1e8d278cc9e4",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Go as the programming language\", \"statement\": \"The system will be implemented using Go.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "5ef54341d8a8da8340dad14b12b1e94ab666be8384d5035795a6e903aacfa3f7",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "6163e5d0979fd49b8bdbf697f69fbc21af3ec06c4e6ea94db5be8636ef082456",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt Kafka for event streaming\", \"statement\": \"Kafka is selected as the event streaming technology for the system.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "6344c3e336cc581e386170349d486cab3a33be762d9dcbfa9c92131b0d3affad",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"aws/rds-not-public\"}"
+  },
+  {
+    "prompt_sha256": "63925e85c8ff34d15a45272c02675a7dc83b134c218641ec69df8d240a4abfba",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"API versioning in URL path\", \"statement\": \"Public APIs will use URL path segments (e.g., /v1, /v2) for versioning instead of headers.\", \"rationale\": \"Clients and caches handle a path more simply.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "67f69c4b8b74a30ec018e0cba7c4db3f9088a8641e4e0cf3170bf642bdb6eb09",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny add a print( call in a .py file under src/.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"prefix\", \"value\": \"src/\"}, {\"field\": \"path\", \"op\": \"suffix\", \"value\": \".py\"}, {\"field\": \"added\", \"op\": \"contains\", \"value\": \"print(\"}], \"message\": \"No print calls in Python sources under src/.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"glob\", \"value\": \"src/**/*.py\"}, {\"field\": \"added\", \"op\": \"regex\", \"value\": \"print\\\\s*\\\\(\"}], \"message\": \"No print calls in Python sources under src/.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "6827b2e4e5d7f0f47366bbd153b847d0a3ac2148d02ce48a286a54a144ba362e",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Store monetary values as int64 minor units (cents)\", \"statement\": \"All monetary values will be stored as int64 in minor units (cents) to avoid precision loss.\", \"rationale\": \"Floats lose precision on sums, and the ledger already reconciles in cents.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "68af86b1f886e5d894024c64724ba7413d70c8510e961b25113f290a75dea335",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny have a uses: line in .github/workflows/ that references an action by a version tag (e.g., @v4) instead of a full commit SHA.\",\"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"prefix\", \"value\": \".github/workflows/\"}, {\"field\": \"added\", \"op\": \"regex\", \"value\": \"uses:\\\\s*[^@]+@[^0-9a-f]\"}], \"message\": \"Workflow actions must be pinned by commit SHA, not version tag.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"prefix\", \"value\": \".github/workflows/\"}, {\"field\": \"added\", \"op\": \"regex\", \"value\": \"uses:\\\\s*[^@]+@v\\\\d+\"}], \"message\": \"Workflow actions must be pinned by commit SHA, not version tag.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "69076db8b06e8b3fc1d826a925a027cfe3bb1121d49032c3d32623fe37957f92",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Database selection: PostgreSQL\", \"statement\": \"The system will use PostgreSQL as the database.\", \"rationale\": \"\", \"confidence\": 0.9}]}"
+  },
+  {
+    "prompt_sha256": "6ffd468839b77131a4f141ec7fc290882558f17a96f1f2dfc8c43128136b3da9",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"python/no-pickle\"}"
+  },
+  {
+    "prompt_sha256": "717307a8ba33704051e79faad2c1385efa2cbcc106e309a72555bf7d4971578e",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "72a28e0a92a5760b4833132a10a767c9db9643011dc3e29d059ad42545772197",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny have a FROM line that uses the latest tag in a Dockerfile.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \"Dockerfile\"}, {\"field\": \"added\", \"op\": \"regex\", \"value\": \"FROM\\\\s+[^\\\\s:]+:latest(\\\\s|$)\"}], \"message\": \"Dockerfiles must pin their base image; latest tag is forbidden.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \"Dockerfile\"}, {\"field\": \"content\", \"op\": \"regex\", \"value\": \"FROM\\\\s+[^\\\\s:]+:latest(\\\\s|$)\"}], \"message\": \"Dockerfiles must pin their base image; latest tag is forbidden.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "77c1ddacc7cc1aebb97758fdea05fdd089fcdf989b53ad97d5db392cb28d0fb4",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt Rust as the primary language\", \"statement\": \"The system will be built using Rust as the primary programming language.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "7994038f216aa983bc08690229ac823cd7e565785c7ba644583246007e08fb76",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "7c4c6aa10e3afbb89102393f91a774cb82cee79d696764bb727b87d7b2734bbc",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "7c943bcfd8daab145d08bf6e20d5745c8d65751906af110cc841134558518bf8",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "7dc93b5b3f12dd442be72107acdfe7933ebffd118c32c96930278befd892b472",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"go/sql-no-string-query\"}"
+  },
+  {
+    "prompt_sha256": "7de125fb8774345490414c4b3e4ee1059c5a526dba223be55c3986196b9ff343",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Vault for secrets management\", \"statement\": \"Vault is selected as the secrets management solution.\", \"rationale\": \"\", \"confidence\": 0.9}]}"
+  },
+  {
+    "prompt_sha256": "7de78e1ab2ba35c517c51179f16bb0b309046b58a05ab99f6aa03bbbcc6bbe25",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"aws/ebs-encrypted\"}"
+  },
+  {
+    "prompt_sha256": "80513dbca69265f609b4f566209108bf210c00b25fa2a7da4c24fd86bfcd8edb",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"go/use-slog\"}"
+  },
+  {
+    "prompt_sha256": "80f686f7ddac58c090134e713353206a0bd32a1ff3c8364901bca22b0c08d8ba",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Kafka for audit event stream with 7-day retention\", \"statement\": \"Kafka is selected as the technology for the audit event stream, with a retention period of seven days.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "81863cb2c4ca828db6869cd72a77160266ad2eb88072da11d8b37eab1f96f4a7",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"aws/s3-public-access-block\"}"
+  },
+  {
+    "prompt_sha256": "82e7f4372fcc3a4dcd76cafe1fc08a47a391cadcb53fe84210396dc5e31fa441",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Redis for caching\", \"statement\": \"The system will use Redis as the caching solution.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "832dcf794f890446e7e34635550bc27021ec6e88a71ae335424864530feff62b",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny contain --force or --force-with-lease in the command.\",\"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"command\", \"op\": \"contains\", \"value\": \"--force\"}], \"message\": \"No force pushes allowed.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"command\", \"op\": \"regex\", \"value\": \"--force(-with-lease)?\"}], \"message\": \"No force pushes allowed.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "846707549ce03af500a51a2ca6977341fef1e7d41fc04c78882aacdcb1bcccc5",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "86f4ad0bf4bb54f49b361d31562716a266a05f1fd8e81ec4ed4b57e41a6f4151",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny add a panic( call in .go files under internal/ that are not _test.go files.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"prefix\", \"value\": \"internal/\"}, {\"field\": \"path\", \"op\": \"suffix\", \"value\": \".go\"}, {\"field\": \"path\", \"op\": \"suffix\", \"value\": \"_test.go\", \"not\": true}, {\"field\": \"added\", \"op\": \"regex\", \"value\": \"panic\\\\s*\\\\(\"}], \"message\": \"Library code under internal/ does not panic.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"glob\", \"value\": \"internal/**/*.go\"}, {\"field\": \"path\", \"op\": \"suffix\", \"value\": \"_test.go\", \"not\": true}, {\"field\": \"added\", \"op\": \"contains\", \"value\": \"panic(\"}], \"message\": \"Library code under internal/ does not panic.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "872eb1b8fff008104d30eee793ab106d66452049b513f03647fc53b3e92bebd2",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny have a path ending in .env.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \".env\"}], \"message\": \"Never commit .env files.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"regex\", \"value\": \"\\\\.env$\"}], \"message\": \"Never commit .env files.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "87ae331a0bd3e75277feea5aebb83164a92537296f5664a7e3235a695db0fe82",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": null}"
+  },
+  {
+    "prompt_sha256": "8861c86c1c4e2bd1b819358fa4e36291a0b99e71cf7d57e4b3ea167e51c92469",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Postgres for the billing service\", \"statement\": \"The billing service will use Postgres as its database.\", \"rationale\": \"Postgres is already the database in use, so no additional infrastructure is required.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "894db5f5763ed92065a4d61e0768b0b8cf43c5c02ce8abf0b00a918a8f6dc761",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt OpenTofu for new infrastructure\", \"statement\": \"All new infrastructure will be written in OpenTofu instead of Terraform due to the license change.\", \"rationale\": \"The decision is driven by the license change of Terraform, prompting a switch to OpenTofu for new infrastructure.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "895790329360b897788e538d4b34c2b20a430aa842f41b8638d35f8c3aa84d9b",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "8a8c4f9f7b97a7a942350b0c61bc9adfe8988035db282697a4892dcc97685ba1",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"ROOTED: Adopt Go as the primary language\", \"statement\": \"The system will be built using Go as the primary programming language.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "8c9702b9b2fd2c3440a899465542e90c751dcb97f5ec1eb244de8509e96a308a",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny have path exactly equal to 'package-lock.json'.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"equals\", \"value\": \"package-lock.json\"}], \"message\": \"Lockfiles change only through the package manager.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \"-lock.json\"}], \"message\": \"Lockfiles change only through the package manager.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "8d53003a3c46eb14f57e101a82d78269441cd3e5de243fb2767f7855f748eaef",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "8da1b2a424fa7f4fe3cae74c0854427d95e838da09ed6c44cd73826cad4270f9",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Replace Kafka with NATS for simple queue needs\", \"statement\": \"Kafka will be replaced by NATS as the messaging system because only simple queues are required.\", \"rationale\": \"NATS is sufficient for the use case of simple queues, making Kafka unnecessary.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "8e22e5efbb57bebeaca65e92d44730b4743ad3a0b2a7e2d3a2ce42662953c8f2",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny modify files with the suffix .pb.go.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \".pb.go\"}], \"message\": \"Generated protobuf code is not edited.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"regex\", \"value\": \"\\\\.pb\\\\.go$\"}], \"message\": \"Generated protobuf code is not edited.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "8e822f401ea805a0987686fa3a6bf1c698abe41e2567e172d7df9638a1527d3a",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Helm for third-party charts and Kustomize for own services\", \"statement\": \"Helm will be used for deploying third-party charts, while Kustomize will be used for managing the deployment of in-house services.\", \"rationale\": \"\", \"confidence\": 0.95}]}"
+  },
+  {
+    "prompt_sha256": "91373b00d52f4382505bd1b3eda1c60508f8ee585785fbea84cf61124321bd2f",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "913e9cda9628052d9cee9f42000e79829109faf31cb3416d348a5206d8ff4853",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"azure/storage-min-tls-1-2\"}"
+  },
+  {
+    "prompt_sha256": "92c0abd316e046484c23759ffc6c9ecf2e79f353ec971186ff515e13ac0bf423",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Standardize on Renovate for dependency updates\", \"statement\": \"Renovate is the chosen tool for dependency updates, with Dependabot disabled across all repositories.\", \"rationale\": \"Standardization decision to use Renovate instead of Dependabot.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "94427f322fb4979f544d803b79ab7f6d4e29058fa3dcb969c1723f3df97647d2",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt NATS for messaging\", \"statement\": \"The system will use NATS as the messaging technology.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "980c43e76602c71436a8dca7c803b42430ae47ba0dc38cfcea186dae79a6b430",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"go/http-client-timeout\"}"
+  },
+  {
+    "prompt_sha256": "9b882f719b9fa902a5fd64a0e97c2c850e67f93b137b7e16e14feec61c52ab3f",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt Vite for frontend builds\", \"statement\": \"All frontend builds will use Vite, and existing webpack configurations will be removed.\", \"rationale\": \"The decision to standardize on Vite for frontend builds.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "9e77a06ce0e22cddf0aa2456ffee6915821db20e2be2d0e5c134288b5aa51234",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"terraform/postgres-only\"}"
+  },
+  {
+    "prompt_sha256": "a0110fd9d54d50bb63c1670735f041deaba6d3c062f380f5a7f1f62f26a5c5d0",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny have a path that starts with 'vendor/'.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"prefix\", \"value\": \"vendor/\"}], \"message\": \"Vendored code is not edited by hand.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"glob\", \"value\": \"vendor/**\"}], \"message\": \"Vendored code is not edited by hand.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "a04e857cdbebbbdc75a712a1231aba0a43aaddad7824b6ec8445004f1cfea8fe",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "a0bbbc46ae12997b75544c0c00da20ea09c5ea99b1325272a0fe02b8b2704451",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt RFC 9457 Problem Details for error responses\", \"statement\": \"All error responses will now follow the RFC 9457 Problem Details format, retiring the previous ad-hoc {error: string} shape.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "a31069cd755df054a39a5da81ced63e782a8e111859541dba23dc5c892b03bed",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny are shell commands that contain 'npm install'.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"tool\", \"op\": \"equals\", \"value\": \"shell\"}, {\"field\": \"command\", \"op\": \"contains\", \"value\": \"npm install\"}], \"message\": \"Agents run pnpm, never npm install.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"tool\", \"op\": \"equals\", \"value\": \"shell\"}, {\"field\": \"command\", \"op\": \"regex\", \"value\": \"npm\\\\s+install\"}], \"message\": \"Agents run pnpm, never npm install.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "a6a43c24d5f2824f929c690584bb620d87a2b38bd76a28fa854401c4b34d0382",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny have a shell command that pipes curl output into sh or bash.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"tool\", \"op\": \"equals\", \"value\": \"shell\"}, {\"field\": \"command\", \"op\": \"regex\", \"value\": \"curl.*\\\\|\\\\s*(sh|bash)\"}], \"message\": \"Scripts are not piped from the network into a shell.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"tool\", \"op\": \"equals\", \"value\": \"shell\"}, {\"field\": \"command\", \"op\": \"contains\", \"value\": \"curl\"}, {\"field\": \"command\", \"op\": \"contains\", \"value\": \"| sh\"}, {\"field\": \"command\", \"op\": \"contains\", \"value\": \"| bash\", \"not\": true}], \"message\": \"Scripts are not piped from the network into a shell.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "a71a2882c1ee98896246885856be511b11c6a72cb8dda2a6c00d802c9700132d",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": null}"
+  },
+  {
+    "prompt_sha256": "a7a8f578de4c12bbce0155be2051c96f3992d9692497dcea9548e8b677ee9f80",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Go as the programming language\", \"statement\": \"The system will be implemented using Go.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "aad58b2c5075476358434fd1e9f33c563817f68f0daf6cca00b3812b5fbcf85e",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"aws/ec2-imdsv2-required\"}"
+  },
+  {
+    "prompt_sha256": "ab68ca0ed83eaf3eb15af9ce25d7d92196417587d36f119c9eba5728857d94af",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use PostgreSQL full-text search over Elasticsearch\", \"statement\": \"PostgreSQL full-text search is chosen as the search solution instead of Elasticsearch.\", \"rationale\": \"Reduces operational overhead by eliminating the need for an additional cluster, with a plan to revisit if p95 latency exceeds 200 ms.\", \"confidence\": 0.98}]}"
+  },
+  {
+    "prompt_sha256": "abf68e8512abf1be1badc6e520af5ecad9535cacfcd62299c9ad4ceb9f3c005c",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Mandate Idempotency-Key header for payment endpoints\", \"statement\": \"Every payment endpoint must require an Idempotency-Key header, and requests without it will receive a 400 response.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "adb6725ca4032d2de613e614e3216118fbf582c54f58a7d2c0cd6175b88276b7",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Flutter for the new customer app\", \"statement\": \"The team has decided to use Flutter as the technology for the new customer application.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "b09bbbcdde74a1f4eba240139e2b3708fcce3d50974b7d7053d3b84257266d9a",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny add a TODO comment without an issue key in parentheses.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"added\", \"op\": \"regex\", \"value\": \"TODO[^(\\\\w+-\\\\d+)]\"}, {\"field\": \"added\", \"op\": \"regex\", \"value\": \"TODO\", \"not\": true}], \"message\": \"Every TODO must name its issue, e.g., TODO(IPSO-123).\"}]}, {\"rules\": [{\"when\": [{\"field\": \"added\", \"op\": \"regex\", \"value\": \"TODO\\\\s*(?!\\\\([A-Z]+-\\\\d+\\\\))\"}], \"message\": \"Every TODO must name its issue, e.g., TODO(IPSO-123).\"}]}]}"
+  },
+  {
+    "prompt_sha256": "b24c4ee5331c0b0d6b57297f74b6ccfe9186b832bdaa10a585c63c1044424840",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": \"aws/rds-storage-encrypted\"}"
+  },
+  {
+    "prompt_sha256": "b30335e61e67f41c7eac2fdaf378e0755b9ba6bb92301270f1ba0baddcb835f9",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt NATS for messaging\", \"statement\": \"The system will use NATS as the messaging technology.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "b51e4791a6df4eff2bc5bb039624ca2a1503e1791f804009acaca2a93c5aa082",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Helm for deployment\", \"statement\": \"Helm is chosen as the deployment tool for the system.\", \"rationale\": \"\", \"confidence\": 0.9}]}"
+  },
+  {
+    "prompt_sha256": "b69051b558a04a2b8ca25439631470c569bca91b94c4232e58c26d1254d0136c",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "b79d6c1c68206c4448d3307d7e613050926b79eb721a66b3e60a7c7546449c94",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny add a TODO comment without an issue key in parentheses, while allowed edits include a TODO with an issue key like TODO(IPSO-123).\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"added\", \"op\": \"regex\", \"value\": \"TODO[^\\\\()]*$\"}], \"message\": \"Every TODO must name its issue, e.g., TODO(IPSO-123).\"}]}, {\"rules\": [{\"when\": [{\"field\": \"added\", \"op\": \"regex\", \"value\": \"TODO(?!\\\\s*\\\\([A-Z]+-\\\\d+\\\\))\"}], \"message\": \"Every TODO must name its issue, e.g., TODO(IPSO-123).\"}]}]}"
+  },
+  {
+    "prompt_sha256": "bb25b53bb6b837da9b338524c1b269e09ed0591399305b1f2635a498dddeac5f",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Kotlin Multiplatform for shared networking layer\", \"statement\": \"Kotlin Multiplatform is selected for the shared networking layer, while Swift and Kotlin UIs remain native.\", \"rationale\": \"\", \"confidence\": 1.0}, {\"source\": 1, \"title\": \"Adopt Ktor as the HTTP client\", \"statement\": \"Ktor is chosen as the HTTP client for both platforms.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "bbe6cd2b81b87a0e9ca59d2c0e027de9c7ba0a240ab49d5cc8f560b603d5e6bc",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt Playwright for end-to-end tests and deprecate Cypress\", \"statement\": \"End-to-end tests will use Playwright, and the Cypress suite will be removed after the checkout flow is ported.\", \"rationale\": \"Team agreement to standardize on Playwright for end-to-end testing.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "bbf814d66f74267bfb738cfdaa801cdc64cb5d90aa0db01f406229650033f19f",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Standardize Prometheus metrics port to 9090\", \"statement\": \"Every service will expose Prometheus metrics on port 9090.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "bea52e8ff0d1d89f1739c0c48437ed4d7650c82aeed60366e924adf34c9d87a1",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Ship from main behind feature flags\", \"statement\": \"The system will ship directly from the main branch using feature flags instead of release branches.\", \"rationale\": \"This was decided at the retro.\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "c1f1f659cafde63a738db0c040e5a88240c5f88c600cffe96bb59afd6a40add6",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "ca16613764c922ebdf18f24aaaeb2842fd04a0d35712960afd51901f22687f73",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Postgres as the database\", \"statement\": \"The system will use Postgres as its database technology.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "d2ec8a119e42a8d76651bfbfb9c2498a8e2d43464ecadf2516d9454174d91cfe",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Redis for query caching with 5-minute TTL\", \"statement\": \"Redis is selected as the caching solution for query results with a time-to-live of 5 minutes.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "d3b114bb66e5602100d8280343e3d49c3049f862e3a4af077685b1b6b80274cb",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt Linkerd for service mesh\", \"statement\": \"The system will use Linkerd as its service mesh technology.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "d542c8df6e4e3407a57c7761868f4528bd2fdc0c474f2d4fe182144d3da3d846",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\": null}"
+  },
+  {
+    "prompt_sha256": "d68e834d806ec37fbe793bfda2a3f63f3aa941ccc4cb4b7b843033430a495ea5",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "d8684794956fbcca2184ee6a6d47fbdb0e18dbdc4f4294c35dee41bae861cdc3",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny add a line containing console.log in a .ts file.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \".ts\"}, {\"field\": \"added\", \"op\": \"contains\", \"value\": \"console.log\"}], \"message\": \"No console.log in TypeScript sources.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \".ts\"}, {\"field\": \"added\", \"op\": \"regex\", \"value\": \"console\\\\.log\\\\s*\\\\(\"}], \"message\": \"No console.log in TypeScript sources.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "dcc2de3031a9a4a89ebeb6bed04a5524c40e4ae9465dcd8e2840c3c8cc6c2c92",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Terraform for infrastructure management\", \"statement\": \"The system will use Terraform as the infrastructure-as-code tool.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "e0e67b28bc150e5883386aeccab3fe0771556af240d68af4bacc132d7e288ddd",
+    "model": "mistral-medium-latest",
+    "text": "{\"template\":null}"
+  },
+  {
+    "prompt_sha256": "e7bee9731c30a90dfe9a962c0aec3a9e0711e979be832dfe2e08e6bed6382154",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": []}"
+  },
+  {
+    "prompt_sha256": "ea07ec9308f71c10a50a0990b5d0c3752a726cd73a7cdf4bbafc02d3a5208039",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Use Postgres as the database\", \"statement\": \"The system will use Postgres as its database.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "eff8e8e07308aee3ee9969874becfe83795bd2356d1c4a25337da912f1008d2a",
+    "model": "mistral-medium-latest",
+    "text": "{\"fits\": true}"
+  },
+  {
+    "prompt_sha256": "f227390d572bd6948dd043a1eb66c32ace629085e7db75146e002d499d078420",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny add an import of the plain \\\"log\\\" package in a .go file.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \".go\"}, {\"field\": \"added\", \"op\": \"contains\", \"value\": \"\\\"log\\\"\"}], \"message\": \"Go code must use log/slog, not the plain log package.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \".go\"}, {\"field\": \"added\", \"op\": \"regex\", \"value\": \"\\\"log\\\"(?!/slog)\"}], \"message\": \"Go code must use log/slog, not the plain log package.\"}]}]}"
+  },
+  {
+    "prompt_sha256": "f305473314353e6688107f8641ee094c0a04742f2177e06cb5576524513cef05",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"Adopt OpenTelemetry for tracing and deprecate Jaeger agents\", \"statement\": \"The system will use OpenTelemetry for tracing, and Jaeger agents will be removed.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "f921c39c1353ac40a111c204e902824bff31cba8d9808dc7dfde3a3d357caba7",
+    "model": "mistral-medium-latest",
+    "text": "{\"candidates\": [{\"source\": 0, \"title\": \"No direct database access between services\", \"statement\": \"Services must not read another service's database directly; they must use the API instead.\", \"rationale\": \"\", \"confidence\": 1.0}]}"
+  },
+  {
+    "prompt_sha256": "fdf2deef01454b158727325970db2b4bc6986eaa5b48fa7b713d3b7706e25541",
+    "model": "mistral-medium-latest",
+    "text": "{\"difference\": \"The edits to deny add or contain a region value starting with 'us-' in a .tf file.\", \"candidates\": [{\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \".tf\"}, {\"field\": \"added\", \"op\": \"regex\", \"value\": \"region\\\\s*=\\\\s*\\\"us-\"}], \"message\": \"Terraform files never name a US region.\"}]}, {\"rules\": [{\"when\": [{\"field\": \"path\", \"op\": \"suffix\", \"value\": \".tf\"}, {\"field\": \"content\", \"op\": \"regex\", \"value\": \"region\\\\s*=\\\\s*\\\"us-\"}], \"message\": \"Terraform files never name a US region.\"}]}]}"
+  }
+]
