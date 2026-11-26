@@ -172,8 +172,7 @@ var (
 	ErrConflict  = errors.New("conflict")
 )
 
-// Directory is the identity operations SCIM and the admin routes call. The server installs one
-// bound to the process tenant and the one SAML issuer.
+// Directory is the identity operations SCIM and the admin routes call for one verified tenant.
 type Directory interface {
 	Provision(ctx context.Context, externalID, userName, name string) (User, bool, error)
 	SetActive(ctx context.Context, externalID string, active bool) error
@@ -190,7 +189,6 @@ type Directory interface {
 	Members(ctx context.Context, id uuid.UUID) ([]uuid.UUID, error)
 	DeleteGroup(ctx context.Context, id uuid.UUID) error
 	PutToken(ctx context.Context, actor uuid.UUID, hash []byte) error
-	TokenOK(ctx context.Context, token []byte) (bool, error)
 	PutGroupRole(ctx context.Context, actor uuid.UUID, groupRef, role string, scope uuid.UUID) (GroupRole, error)
 	ListGroupRoles(ctx context.Context) ([]GroupRole, error)
 	DeleteGroupRole(ctx context.Context, actor, id uuid.UUID) error
@@ -199,28 +197,35 @@ type Directory interface {
 	DeleteGroupOwner(ctx context.Context, actor, id uuid.UUID) error
 }
 
-var directory Directory
+// DirectoryStore authenticates SCIM bearer tokens to their owning tenant and returns a tenant-scoped
+// Directory for each verified tenant (ADR-0170).
+type DirectoryStore interface {
+	Authenticate(ctx context.Context, token []byte) (uuid.UUID, bool, error)
+	For(tenant uuid.UUID) Directory
+}
 
-// SetDirectory installs the directory. A nil directory clears it.
-func SetDirectory(d Directory) {
+var directoryStore DirectoryStore
+
+// SetDirectoryStore installs the directory store. A nil store clears it.
+func SetDirectoryStore(d DirectoryStore) {
 	mu.Lock()
 	defer mu.Unlock()
-	directory = d
+	directoryStore = d
 }
 
-// CurrentDirectory returns the installed directory, or nil.
-func CurrentDirectory() Directory {
+// CurrentDirectoryStore returns the installed directory store, or nil.
+func CurrentDirectoryStore() DirectoryStore {
 	mu.RLock()
 	defer mu.RUnlock()
-	return directory
+	return directoryStore
 }
 
-// GuardedRoute is one API route mounted only when sso.saml is allowed. The guard asks
-// principal.manage before Serve runs. principal is the caller.
+// GuardedRoute is one API route mounted only when its enterprise feature is allowed. The guard asks
+// principal.manage before Serve runs. tenant and principal are the authenticated caller.
 type GuardedRoute struct {
 	Pattern string
 	Op      string
-	Serve   func(http.ResponseWriter, *http.Request, uuid.UUID)
+	Serve   func(http.ResponseWriter, *http.Request, uuid.UUID, uuid.UUID)
 }
 
 var guarded []GuardedRoute
@@ -243,10 +248,12 @@ func Guarded() []GuardedRoute {
 
 // MountContext is what an enterprise mount may attach to the control plane.
 type MountContext struct {
-	Mux    *http.ServeMux
-	Log    *slog.Logger
-	DB     *sql.DB
-	Tenant uuid.UUID
+	Mux         *http.ServeMux
+	Log         *slog.Logger
+	DB          *sql.DB
+	Tenant      uuid.UUID
+	MultiTenant bool
+	SetTenant   func(context.Context, uuid.UUID)
 }
 
 // MountFunc attaches routes. SAML mounts run when sso.saml is allowed.
@@ -264,10 +271,10 @@ func RegisterMount(fn MountFunc) {
 	}
 }
 
-// Mount runs the registered mounts. SAML mounts run when sso.saml is allowed and a directory is
-// installed. Tracker mounts run when connectors.trackers is allowed.
+// Mount runs the registered mounts. SAML mounts run when sso.saml is allowed and a directory store
+// is installed. Tracker mounts run when connectors.trackers is allowed.
 func Mount(ctx MountContext) {
-	if Allow(FeatureSAML) && ctx.Mux != nil && CurrentDirectory() != nil {
+	if Allow(FeatureSAML) && ctx.Mux != nil && CurrentDirectoryStore() != nil {
 		mu.RLock()
 		fns := append([]MountFunc(nil), mounts...)
 		mu.RUnlock()
@@ -285,9 +292,9 @@ func Mount(ctx MountContext) {
 	}
 }
 
-// TrackerAdmin replaces one tracker binding. The enterprise route calls it.
+// TrackerAdmin replaces one tracker binding for a tenant. The enterprise route calls it.
 type TrackerAdmin interface {
-	Put(ctx context.Context, actor uuid.UUID, connector, account, label, token, webhook string) (uuid.UUID, error)
+	Put(ctx context.Context, tenant, actor uuid.UUID, connector, account, label, token, webhook string) (uuid.UUID, error)
 }
 
 // WaiverTicket is a ticket a tracker created before the waiver row is inserted.
@@ -312,11 +319,11 @@ type ChatDestination struct {
 	URL       string
 }
 
-// ChatAdmin replaces and lists chat destinations. The enterprise routes call it.
+// ChatAdmin replaces and lists chat destinations for a tenant. The enterprise routes call it.
 type ChatAdmin interface {
-	Put(ctx context.Context, actor uuid.UUID, connector, webhookURL string) (uuid.UUID, error)
-	Delete(ctx context.Context, actor uuid.UUID, connector string) error
-	List(ctx context.Context) ([]ChatDestination, error)
+	Put(ctx context.Context, tenant, actor uuid.UUID, connector, webhookURL string) (uuid.UUID, error)
+	Delete(ctx context.Context, tenant, actor uuid.UUID, connector string) error
+	List(ctx context.Context, tenant uuid.UUID) ([]ChatDestination, error)
 }
 
 // DeliverChatFunc posts the digests that are due. A denied feature does not call it.
@@ -515,7 +522,7 @@ func ResetForTest() {
 	gate = denyAll{}
 	kinds = map[string]KindFactory{}
 	commands = map[string]CommandFunc{}
-	directory = nil
+	directoryStore = nil
 	guarded = nil
 	mounts = nil
 	trackerGuarded = nil

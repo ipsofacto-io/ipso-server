@@ -821,3 +821,66 @@ func TestRoleWorkerNeverPrintsThePassword(t *testing.T) {
 		t.Errorf("stderr shows the password: %q", stderr)
 	}
 }
+
+func TestRoleAPIMultiTenantFlag(t *testing.T) {
+	t.Run("multi-tenant enabled without tenant id", func(t *testing.T) {
+		var got controlplane.Config
+		code, _, stderr := invoke(t, apiDeps(apiEnv(map[string]string{
+			"IPSO_TENANT_ID":    "",
+			"IPSO_MULTI_TENANT": "true",
+		}), &got), "--role=api")
+		if code != 0 {
+			t.Fatalf("exit code = %d: %s", code, stderr)
+		}
+		if !got.MultiTenant || got.Tenant != uuid.Nil {
+			t.Fatalf("got MultiTenant=%v Tenant=%v, want true and nil", got.MultiTenant, got.Tenant)
+		}
+	})
+
+	t.Run("multi-tenant false with tenant id", func(t *testing.T) {
+		var got controlplane.Config
+		code, _, stderr := invoke(t, apiDeps(apiEnv(map[string]string{
+			"IPSO_MULTI_TENANT": "false",
+		}), &got), "--role=api")
+		if code != 0 {
+			t.Fatalf("exit code = %d: %s", code, stderr)
+		}
+		if got.MultiTenant || got.Tenant.String() != testTenant {
+			t.Fatalf("got MultiTenant=%v Tenant=%v, want false and %s", got.MultiTenant, got.Tenant, testTenant)
+		}
+	})
+
+	for _, tc := range []struct {
+		name    string
+		extra   map[string]string
+		wantErr string
+	}{
+		{"invalid value", map[string]string{"IPSO_MULTI_TENANT": "1"}, "IPSO_MULTI_TENANT must be true, false, or unset"},
+		{"both set", map[string]string{"IPSO_MULTI_TENANT": "true"}, "cannot both be set"},
+		{"neither set", map[string]string{"IPSO_TENANT_ID": "", "IPSO_MULTI_TENANT": ""}, "IPSO_TENANT_ID is not set"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got controlplane.Config
+			code, _, stderr := invoke(t, apiDeps(apiEnv(tc.extra), &got), "--role=api")
+			if code != 1 || !strings.Contains(stderr, tc.wantErr) {
+				t.Fatalf("code=%d stderr=%q, want 1 containing %q", code, stderr, tc.wantErr)
+			}
+			if got.DB != nil {
+				t.Fatal("control plane started despite invalid config")
+			}
+		})
+	}
+
+	t.Run("worker refuses IPSO_MULTI_TENANT=true", func(t *testing.T) {
+		var got worker.Config
+		code, _, stderr := invoke(t, workerDeps(workerEnv(map[string]string{
+			"IPSO_MULTI_TENANT": "true",
+		}), &got), "--role=worker")
+		if code != 1 || !strings.Contains(stderr, "IPSO_MULTI_TENANT is not supported for --role=worker") {
+			t.Fatalf("code=%d stderr=%q", code, stderr)
+		}
+		if got.Pool != nil {
+			t.Fatal("worker started despite IPSO_MULTI_TENANT=true")
+		}
+	})
+}

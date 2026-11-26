@@ -14,11 +14,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
 	"github.com/ipsofacto-io/ipso-server/internal/authn"
 	"github.com/ipsofacto-io/ipso-server/internal/identity"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
+	"github.com/ipsofacto-io/ipso-server/internal/telemetry"
 )
 
 // The error codes of /auth. They are a closed set, like the API's. None carries what a provider sent.
@@ -221,7 +223,8 @@ func (s *Service) invite(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, codeUnknownInvitation)
 		return
 	}
-	switch err := s.store.check(r.Context(), hash); {
+	tenant, err := s.store.check(r.Context(), hash)
+	switch {
 	case errors.Is(err, identity.ErrUnknownInvitation):
 		s.log.Info("an invitation link named an invitation the tenant holds no open one for", "provider", id)
 		writeJSON(w, http.StatusForbidden, codeUnknownInvitation)
@@ -231,6 +234,7 @@ func (s *Service) invite(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, codeInternal)
 		return
 	}
+	telemetry.SetTenant(r.Context(), tenant)
 	location, ok := s.begin(w, r, id, p, req.Token)
 	if !ok {
 		return
@@ -386,7 +390,7 @@ func (s *Service) finishSignIn(w http.ResponseWriter, r *http.Request, ctx conte
 		s.writeCallbackRefusal(w, r, http.StatusInternalServerError, codeInternal, nil)
 		return
 	}
-	expires, err := s.store.start(ctx, who.issuer, who.subject, authn.SessionHash(token), previous, invitation)
+	tenant, expires, err := s.store.start(ctx, who.issuer, who.subject, authn.SessionHash(token), previous, invitation)
 	switch {
 	case errors.Is(err, identity.ErrUnknownInvitation):
 		s.log.Info("a sign-in carried an invitation the tenant holds no open one for", "provider", id)
@@ -396,7 +400,7 @@ func (s *Service) finishSignIn(w http.ResponseWriter, r *http.Request, ctx conte
 		s.log.Info("a sign-in named a login the tenant never bound", "provider", id)
 		s.writeCallbackRefusal(w, r, http.StatusForbidden, codeUnknownLogin, &who)
 		return
-	case errors.Is(err, identity.ErrNotHuman):
+	case errors.Is(err, identity.ErrNotHuman), errors.Is(err, identity.ErrAmbiguousLogin):
 		s.writeCallbackRefusal(w, r, http.StatusForbidden, codeForbidden, nil)
 		return
 	case err != nil:
@@ -404,8 +408,9 @@ func (s *Service) finishSignIn(w http.ResponseWriter, r *http.Request, ctx conte
 		s.writeCallbackRefusal(w, r, http.StatusInternalServerError, codeInternal, nil)
 		return
 	}
+	telemetry.SetTenant(r.Context(), tenant)
 	if previous != nil {
-		s.known.remove(previous)
+		s.known.remove(s.tenant, previous)
 	}
 	http.SetCookie(w, authn.NewSessionCookie(token, expires, now))
 	w.Header().Set("Location", "/")
@@ -468,19 +473,23 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	hash := authn.SessionHash(token)
 	now := s.now()
-	if _, kept := s.known.get(hash, now); !kept {
+	if _, _, kept := s.known.get(s.tenant, hash, now); !kept {
 		if wait, ok := s.misses.Allow(s.tenant, now); !ok {
 			w.Header().Set("Retry-After", ratelimit.RetryAfter(wait))
 			writeJSON(w, http.StatusTooManyRequests, codeRateLimited)
 			return
 		}
 	}
-	if err := s.store.end(r.Context(), hash); err != nil {
+	tenant, err := s.store.end(r.Context(), hash)
+	if err != nil {
 		s.log.Warn("a session could not be ended", "tenant", s.tenant)
 		writeJSON(w, http.StatusInternalServerError, codeInternal)
 		return
 	}
-	s.known.remove(hash)
+	if tenant != uuid.Nil {
+		telemetry.SetTenant(r.Context(), tenant)
+	}
+	s.known.remove(s.tenant, hash)
 	http.SetCookie(w, authn.ClearedSessionCookie())
 	w.WriteHeader(http.StatusNoContent)
 }

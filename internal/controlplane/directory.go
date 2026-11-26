@@ -13,20 +13,55 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/login"
 )
 
-// installDirectory binds SCIM to the process tenant and the one SAML issuer. Anything else clears
-// it, so a denied key or a second provider leaves the routes unmounted (ADR-0131).
+// installDirectory binds SCIM to the one SAML issuer (and fixed tenant in single-tenant mode, or
+// every tenant in multi-tenant mode). Anything else clears it, so a denied key or a second provider
+// leaves the routes unmounted (ADR-0131, ADR-0170).
 func installDirectory(cfg Config, signIn *login.Service) {
 	if signIn == nil || !eehooks.Allow(eehooks.FeatureSAML) {
-		eehooks.SetDirectory(nil)
+		eehooks.SetDirectoryStore(nil)
 		return
 	}
 	issuer, ok := signIn.EnterpriseIssuer()
 	if !ok {
 		cfg.Log.Warn("sso.saml is granted but there is not exactly one SAML provider, so SCIM is not mounted")
-		eehooks.SetDirectory(nil)
+		eehooks.SetDirectoryStore(nil)
 		return
 	}
-	eehooks.SetDirectory(scimDirectory{db: cfg.DB, tenant: cfg.Tenant, issuer: issuer, log: cfg.Log})
+	eehooks.SetDirectoryStore(scimDirectoryStore{db: cfg.DB, fixedTenant: cfg.Tenant, issuer: issuer, log: cfg.Log})
+}
+
+type scimDirectoryStore struct {
+	db          *sql.DB
+	fixedTenant uuid.UUID
+	issuer      string
+	log         *slog.Logger
+}
+
+func (s scimDirectoryStore) Authenticate(ctx context.Context, token []byte) (uuid.UUID, bool, error) {
+	if s.fixedTenant != uuid.Nil {
+		ok, err := identity.SCIMTokenOK(ctx, s.db, s.fixedTenant, token)
+		if err != nil {
+			s.log.Warn("the scim token could not be read", "tenant", s.fixedTenant)
+			return uuid.Nil, false, err
+		}
+		if !ok {
+			return uuid.Nil, false, nil
+		}
+		return s.fixedTenant, true, nil
+	}
+	tenant, ok, err := identity.AuthenticateSCIMToken(ctx, s.db, token)
+	if err != nil {
+		s.log.Warn("the scim token could not be read")
+		return uuid.Nil, false, err
+	}
+	return tenant, ok, nil
+}
+
+func (s scimDirectoryStore) For(tenant uuid.UUID) eehooks.Directory {
+	if tenant == uuid.Nil || (s.fixedTenant != uuid.Nil && tenant != s.fixedTenant) {
+		return nil
+	}
+	return scimDirectory{db: s.db, tenant: tenant, issuer: s.issuer, log: s.log}
 }
 
 type scimDirectory struct {
@@ -102,14 +137,6 @@ func (d scimDirectory) DeleteGroup(ctx context.Context, id uuid.UUID) error {
 
 func (d scimDirectory) PutToken(ctx context.Context, actor uuid.UUID, hash []byte) error {
 	return mapSCIM(identity.PutSCIMToken(ctx, d.db, d.tenant, actor, hash))
-}
-
-func (d scimDirectory) TokenOK(ctx context.Context, token []byte) (bool, error) {
-	ok, err := identity.SCIMTokenOK(ctx, d.db, d.tenant, token)
-	if err != nil {
-		d.log.Warn("the scim token could not be read", "tenant", d.tenant)
-	}
-	return ok, err
 }
 
 func (d scimDirectory) PutGroupRole(ctx context.Context, actor uuid.UUID, groupRef, role string, scope uuid.UUID) (eehooks.GroupRole, error) {

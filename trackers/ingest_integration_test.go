@@ -53,7 +53,7 @@ func TestALabeledTicketStaysPendingAndAStatusDoesNotApproveIt(t *testing.T) {
 	for i := range key {
 		key[i] = byte(i + 1)
 	}
-	binding, err := NewAdmin(app, tenant, key).Put(t.Context(), person, Linear, "acme/11111111-1111-4111-8111-111111111111", "", "token-value", "hook-secret")
+	binding, err := NewAdmin(app, tenant, key).Put(t.Context(), tenant, person, Linear, "acme/11111111-1111-4111-8111-111111111111", "", "token-value", "hook-secret")
 	if err != nil {
 		t.Fatal(err)
 	}

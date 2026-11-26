@@ -98,8 +98,8 @@ func TestASignInEndsInASessionForABoundPerson(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if principal, status := r.svc.Lookup(t.Context(), token); status != Found || principal != personID {
-				t.Errorf("Lookup = %v, %v", principal, status)
+			if gotTenant, principal, status := r.svc.Lookup(t.Context(), token); status != Found || gotTenant != tenant || principal != personID {
+				t.Errorf("Lookup = %v, %v, %v", gotTenant, principal, status)
 			}
 		})
 	}
@@ -431,7 +431,7 @@ func TestASignInEndsTheSessionTheBrowserSent(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(&http.Cookie{Name: first.Name, Value: first.Value})
 	token, _ := authn.SessionToken(req)
-	if _, status := r.svc.Lookup(t.Context(), token); status != Found {
+	if _, _, status := r.svc.Lookup(t.Context(), token); status != Found {
 		t.Fatalf("first session: %v", status)
 	}
 
@@ -447,7 +447,7 @@ func TestASignInEndsTheSessionTheBrowserSent(t *testing.T) {
 	if r.store.sessionCount() != 1 {
 		t.Errorf("%d sessions, want 1", r.store.sessionCount())
 	}
-	if _, status := r.svc.Lookup(t.Context(), token); status != Unknown {
+	if _, _, status := r.svc.Lookup(t.Context(), token); status != Unknown {
 		t.Errorf("the old session is %v, want Unknown (and not served from the cache)", status)
 	}
 }
@@ -464,7 +464,7 @@ func TestASignInEndsTheSessionTheBrowserHeldWhenItBegan(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(held)
 	token, _ := authn.SessionToken(req)
-	if _, status := r.svc.Lookup(t.Context(), token); status != Found {
+	if _, _, status := r.svc.Lookup(t.Context(), token); status != Found {
 		t.Fatalf("first session: %v", status)
 	}
 
@@ -481,7 +481,7 @@ func TestASignInEndsTheSessionTheBrowserHeldWhenItBegan(t *testing.T) {
 	if r.store.sessionCount() != 1 {
 		t.Errorf("%d sessions, want 1", r.store.sessionCount())
 	}
-	if _, status := r.svc.Lookup(t.Context(), token); status != Unknown {
+	if _, _, status := r.svc.Lookup(t.Context(), token); status != Unknown {
 		t.Errorf("the replaced session is %v, want Unknown", status)
 	}
 }
@@ -543,7 +543,7 @@ func TestLogoutEndsTheSessionAndClearsTheCookie(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(cookie)
 	token, _ := authn.SessionToken(req)
-	if _, status := r.svc.Lookup(t.Context(), token); status != Found {
+	if _, _, status := r.svc.Lookup(t.Context(), token); status != Found {
 		t.Fatal("not found")
 	}
 
@@ -580,7 +580,7 @@ func TestLogoutEndsTheSessionAndClearsTheCookie(t *testing.T) {
 	if c := cookieNamed(rec.Result().Cookies(), authn.SessionCookieName); c == nil || c.MaxAge >= 0 || !c.Secure || c.Path != "/" {
 		t.Errorf("the cookie was not cleared: %v", rec.Header()["Set-Cookie"])
 	}
-	if _, status := r.svc.Lookup(t.Context(), token); status != Unknown {
+	if _, _, status := r.svc.Lookup(t.Context(), token); status != Unknown {
 		t.Errorf("a logged-out session is %v, want Unknown", status)
 	}
 	// An Origin the proxy dropped the port from is still the public origin.
@@ -623,23 +623,23 @@ func TestLookupKeepsASessionForAMinuteAndNeverPastItsEnd(t *testing.T) {
 	r.store.bind(r.auth.Server.URL, subjectOne, identity.KindHuman)
 	token, _ := authn.NewSessionToken()
 	hash := authn.SessionHash(token)
-	r.store.sessions[string(hash)] = r.now.Add(90 * time.Second)
+	r.store.sessions[string(hash)] = fakeSession{tenant: tenant, principal: personID, expires: r.now.Add(90 * time.Second)}
 
 	for range 3 {
-		if principal, status := r.svc.Lookup(t.Context(), token); status != Found || principal != personID {
-			t.Fatalf("%v %v", principal, status)
+		if gotTenant, principal, status := r.svc.Lookup(t.Context(), token); status != Found || gotTenant != tenant || principal != personID {
+			t.Fatalf("%v %v %v", gotTenant, principal, status)
 		}
 	}
 	if r.store.lookups != 1 {
 		t.Errorf("%d database lookups for 3 calls, want 1", r.store.lookups)
 	}
 	r.now = r.now.Add(61 * time.Second)
-	if _, status := r.svc.Lookup(t.Context(), token); status != Found || r.store.lookups != 2 {
+	if _, _, status := r.svc.Lookup(t.Context(), token); status != Found || r.store.lookups != 2 {
 		t.Errorf("after a minute: %v, %d lookups", status, r.store.lookups)
 	}
 	// The session ends 29 seconds from now, so it is kept for 29 seconds and not for a minute.
 	r.now = r.now.Add(30 * time.Second)
-	if _, status := r.svc.Lookup(t.Context(), token); status != Unknown {
+	if _, _, status := r.svc.Lookup(t.Context(), token); status != Unknown {
 		t.Errorf("after the session ended: %v, want Unknown", status)
 	}
 }
@@ -649,7 +649,7 @@ func TestLookupNeverKeepsAMissAndLimitsTheDatabase(t *testing.T) {
 	var statuses []Status
 	for range 5 {
 		token, _ := authn.NewSessionToken()
-		_, status := r.svc.Lookup(t.Context(), token)
+		_, _, status := r.svc.Lookup(t.Context(), token)
 		statuses = append(statuses, status)
 	}
 	want := []Status{Unknown, Unknown, Unknown, Busy, Busy}
@@ -664,15 +664,15 @@ func TestLookupNeverKeepsAMissAndLimitsTheDatabase(t *testing.T) {
 	// A session the process already keeps is served while the bucket is empty.
 	token, _ := authn.NewSessionToken()
 	r.now = r.now.Add(time.Minute)
-	r.store.sessions[string(authn.SessionHash(token))] = r.now.Add(time.Hour)
-	if _, status := r.svc.Lookup(t.Context(), token); status != Found {
+	r.store.sessions[string(authn.SessionHash(token))] = fakeSession{tenant: tenant, principal: personID, expires: r.now.Add(time.Hour)}
+	if _, _, status := r.svc.Lookup(t.Context(), token); status != Found {
 		t.Fatalf("a valid session: %v", status)
 	}
 	for range 5 {
 		other, _ := authn.NewSessionToken()
 		r.svc.Lookup(t.Context(), other)
 	}
-	if _, status := r.svc.Lookup(t.Context(), token); status != Found {
+	if _, _, status := r.svc.Lookup(t.Context(), token); status != Found {
 		t.Errorf("a kept session with an empty bucket: %v", status)
 	}
 }
@@ -910,7 +910,7 @@ func TestLookupSaysFailedWhenTheDatabaseDoes(t *testing.T) {
 	r := newRig(t)
 	r.store.err = errBoom
 	token, _ := authn.NewSessionToken()
-	if _, status := r.svc.Lookup(t.Context(), token); status != Failed {
+	if _, _, status := r.svc.Lookup(t.Context(), token); status != Failed {
 		t.Fatalf("status %v", status)
 	}
 	if contains(r.logs.String(), "hunter2") {

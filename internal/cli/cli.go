@@ -83,6 +83,7 @@ const (
 const (
 	databaseEnv    = "IPSO_DATABASE_URL"
 	tenantEnv      = "IPSO_TENANT_ID"
+	multiTenantEnv = "IPSO_MULTI_TENANT"
 	oidcIssuerEnv  = "IPSO_OIDC_ISSUER"
 	apiAudienceEnv = "IPSO_API_AUDIENCE"
 	mcpIssuerEnv   = "IPSO_MCP_ISSUER"
@@ -370,6 +371,19 @@ func apiCmd(ctx context.Context, stderr io.Writer, d deps) int {
 	return 0
 }
 
+// parseMultiTenant reads IPSO_MULTI_TENANT strictly. Only "", "false", and "true" are accepted
+// (ADR-0170).
+func parseMultiTenant(getenv func(string) string) (bool, error) {
+	switch getenv(multiTenantEnv) {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	default:
+		return false, fmt.Errorf("%s must be true, false, or unset", multiTenantEnv)
+	}
+}
+
 // tenantSettings reads what a role that serves one tenant needs before it connects: the database URL and
 // the tenant, then the settings only that role has. It refuses the migration credential, so such a process
 // cannot be started with the role that owns the tables.
@@ -391,15 +405,35 @@ func tenantSettings(getenv func(string) string, role string, own ...string) (uui
 
 // apiConfig reads the settings of the api role that need no connection.
 func apiConfig(getenv func(string) string) (controlplane.Config, error) {
-	tenant, err := tenantSettings(getenv, "api", oidcIssuerEnv, apiAudienceEnv)
+	if getenv(migrateDatabaseEnv) != "" {
+		return controlplane.Config{}, fmt.Errorf("%s is set: the api role must not hold the migration credential", migrateDatabaseEnv)
+	}
+	multiTenant, err := parseMultiTenant(getenv)
 	if err != nil {
 		return controlplane.Config{}, err
+	}
+	var tenant uuid.UUID
+	if multiTenant {
+		if getenv(tenantEnv) != "" {
+			return controlplane.Config{}, fmt.Errorf("%s and %s cannot both be set", multiTenantEnv, tenantEnv)
+		}
+		for _, name := range []string{databaseEnv, oidcIssuerEnv, apiAudienceEnv} {
+			if getenv(name) == "" {
+				return controlplane.Config{}, fmt.Errorf("%s is not set", name)
+			}
+		}
+	} else {
+		tenant, err = tenantSettings(getenv, "api", oidcIssuerEnv, apiAudienceEnv)
+		if err != nil {
+			return controlplane.Config{}, err
+		}
 	}
 	if (getenv(mcpIssuerEnv) == "") != (getenv(mcpResourceEnv) == "") {
 		return controlplane.Config{}, errors.New(mcpIssuerEnv + " and " + mcpResourceEnv + " are set together or not at all")
 	}
 	cfg := controlplane.Config{
 		Tenant:         tenant,
+		MultiTenant:    multiTenant,
 		Issuer:         getenv(oidcIssuerEnv),
 		Audience:       getenv(apiAudienceEnv),
 		MCPIssuer:      getenv(mcpIssuerEnv),
@@ -438,6 +472,15 @@ func apiConfig(getenv func(string) string) (controlplane.Config, error) {
 // workerCmd works the jobs for the one tenant of IPSO_TENANT_ID until the process is told to stop. The
 // start gates run in worker.Run, after the connection opens.
 func workerCmd(ctx context.Context, stderr io.Writer, d deps) int {
+	multiTenant, err := parseMultiTenant(d.getenv)
+	if err != nil {
+		fprintf(stderr, "worker: %v\n", err)
+		return 1
+	}
+	if multiTenant {
+		fprintf(stderr, "worker: %s is not supported for --role=worker\n", multiTenantEnv)
+		return 1
+	}
 	tenant, err := tenantSettings(d.getenv, "worker")
 	if err != nil {
 		fprintf(stderr, "worker: %v\n", err)
