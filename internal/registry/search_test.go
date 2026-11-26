@@ -80,7 +80,7 @@ func TestSearchTermsTokenizesAndBoundsPrefixes(t *testing.T) {
 				if !utf8.ValidString(tr.lo) || !utf8.ValidString(tr.hi) {
 					t.Fatalf("invalid UTF-8 bound: %+v", tr)
 				}
-				if tr.hi != "" && !(tr.lo < tr.hi) {
+				if tr.hi != "" && tr.lo >= tr.hi {
 					t.Fatalf("expected lo < hi in byte order: %+v", tr)
 				}
 			}
@@ -137,7 +137,7 @@ func TestNextUTF8PrefixEdgeCases(t *testing.T) {
 		}
 		if got != "" {
 			// Every string starting with tc.in must be strictly less than got in byte order.
-			if !(tc.in < got) || !(tc.in+"z" < got) || !(tc.in+string(utf8.MaxRune) < got) {
+			if tc.in >= got || tc.in+"z" >= got || tc.in+string(utf8.MaxRune) >= got {
 				t.Errorf("bytewise bound violated for %q -> %q", tc.in, got)
 			}
 		}
