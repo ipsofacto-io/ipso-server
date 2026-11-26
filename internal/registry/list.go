@@ -119,11 +119,7 @@ func Decisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, validAt, known
 	return decisions, nil
 }
 
-func escapeILIKE(s string) string {
-	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
-}
-
-// SearchDecisions returns one page of decisions in force matching an optional full-text query q (ADR-0163).
+// SearchDecisions returns one page of decisions in force matching an optional keyword query q (ADR-0163, ADR-0169).
 func SearchDecisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, q string, validAt, knownAt time.Time, page Page) ([]Decision, error) {
 	q = strings.TrimSpace(q)
 	if q == "" {
@@ -135,32 +131,17 @@ func SearchDecisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, q string
 	if err := checkList(tenant, page, validAt, knownAt); err != nil {
 		return nil, err
 	}
-	escapedQ := escapeILIKE(q)
+	terms, err := searchTerms(q)
+	if err != nil {
+		return nil, err
+	}
+	if len(terms) == 0 {
+		return []Decision{}, nil
+	}
+	stmt, args := searchDecisionsQuery(terms, validAt, knownAt, page.before(), page.Limit)
 	decisions := []Decision{}
-	err := readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT DISTINCT ON (d.decision_id) d.decision_id, d.version, d.body
-			FROM registry.decision_version_all d
-			WHERE d.tenant_id = ipso.current_tenant()
-			  AND d.valid_period @> $1::timestamptz
-			  AND d.sys_period @> $2::timestamptz
-			  AND ($3::uuid IS NULL OR d.decision_id < $3::uuid)
-			  AND (
-			      (
-			          NOT (coalesce(d.body->'tags', '[]'::jsonb) ? 'sensitive')
-			          AND NOT coalesce((d.body->>'sensitive')::boolean, false)
-			          AND (
-			              to_tsvector('simple',
-			                  coalesce(d.body->>'title', '') || ' ' ||
-			                  coalesce(d.body->>'slug', '') || ' ' ||
-			                  coalesce(d.body->>'statement', '')) @@ plainto_tsquery('simple', $5)
-			              OR coalesce(d.body->>'title', '') ILIKE '%' || $6 || '%' ESCAPE '\'
-			          )
-			      )
-			      OR coalesce(d.body->>'slug', '') ILIKE '%' || $6 || '%' ESCAPE '\'
-			  )
-			ORDER BY d.decision_id DESC, d.version DESC
-			LIMIT $4`, validAt, knownAt, page.before(), page.Limit, q, escapedQ)
+	err = readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, stmt, args...)
 		if err != nil {
 			return fmt.Errorf("search decisions: %w", err)
 		}
