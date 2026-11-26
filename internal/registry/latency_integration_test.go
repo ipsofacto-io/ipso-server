@@ -103,6 +103,11 @@ func TestResolveP95UnderBudgetAt10kDecisions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// TEMPORARY (IPSO-193 proof, reverted before merge): drop the index that keeps the history read
+	// off a scan of every tenant. The test must fail without it.
+	if _, err := r.admin.ExecContext(t.Context(), `DROP INDEX registry.decision_version_history_tenant`); err != nil {
+		t.Fatal(err)
+	}
 	var current, history int
 	if err := r.admin.QueryRowContext(t.Context(), `
 		SELECT (SELECT count(*) FROM registry.decision_version WHERE tenant_id = $1),
