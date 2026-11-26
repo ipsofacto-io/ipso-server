@@ -152,7 +152,7 @@ func TestLoginChoiceLifecycleExpiryAndConcurrentSingleUse(t *testing.T) {
 		Subject:      "person-cli",
 		CLIRedirect:  "http://127.0.0.1:54321/callback",
 		CLIState:     "state-1",
-		CLIChallenge: "challenge-1",
+		CLIChallenge: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
 	}); err != nil {
 		t.Fatalf("CreateLoginChoice CLI: %v", err)
 	}

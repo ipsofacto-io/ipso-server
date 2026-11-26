@@ -78,13 +78,6 @@ func (f *fakeStore) setTenantName(t uuid.UUID, name string) {
 	f.tenantNames[t] = name
 }
 
-func (f *fakeStore) unbindIn(t uuid.UUID, issuer, subject string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	key := [2]string{issuer, subject}
-	f.logins[key] = slices.DeleteFunc(f.logins[key], func(l fakeLogin) bool { return l.tenant == t })
-}
-
 // open makes an invitation with this token open in the default tenant.
 func (f *fakeStore) open(token string) {
 	f.openIn(tenant, token)
@@ -304,12 +297,6 @@ func (f *fakeStore) cliSessionCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.cliSessions)
-}
-
-func (f *fakeStore) choiceCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.choices)
 }
 
 func (f *fakeStore) humanTenants(_ context.Context, issuer, subject string) ([]identity.TenantOption, error) {
