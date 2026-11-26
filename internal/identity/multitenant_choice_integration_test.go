@@ -206,7 +206,7 @@ func TestLoginChoiceLifecycleExpiryAndConcurrentSingleUse(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.ExecContext(t.Context(), `UPDATE identity.login_choice SET expires_at = clock_timestamp() - interval '1 second' WHERE token_sha256 = $1`, expHash); err != nil {
+	if _, err := admin.ExecContext(t.Context(), `UPDATE identity.login_choice SET created_at = clock_timestamp() - interval '10 minutes', expires_at = clock_timestamp() - interval '1 second' WHERE token_sha256 = $1`, expHash); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := identity.ReadLoginChoice(t.Context(), app, expHash); !errors.Is(err, identity.ErrUnknownChoice) {
