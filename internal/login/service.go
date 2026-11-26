@@ -71,11 +71,21 @@ type store interface {
 	// invitation the sign-in carries, or nil: with one, a login that is not bound yet is bound to the
 	// person the invitation names (ADR-0127).
 	start(ctx context.Context, issuer, subject string, hash, previous, invitation []byte) (uuid.UUID, time.Time, error)
+	// startForTenant opens a browser session in a specific chosen tenant under forced RLS (ADR-0171).
+	startForTenant(ctx context.Context, target uuid.UUID, issuer, subject string, hash, previous []byte) (time.Time, error)
+	// humanTenants lists every tenant where issuer and subject hold an open human login (ADR-0171).
+	humanTenants(ctx context.Context, issuer, subject string) ([]identity.TenantOption, error)
+	// createChoice, readChoice, consumeChoice, and cancelChoice manage pending tenant choices (ADR-0171).
+	createChoice(ctx context.Context, hash []byte, choice identity.LoginChoice) (time.Time, error)
+	readChoice(ctx context.Context, hash []byte) (identity.LoginChoice, error)
+	consumeChoice(ctx context.Context, hash []byte) (identity.LoginChoice, error)
+	cancelChoice(ctx context.Context, hash []byte) error
 	// check says whether an open invitation with this hash exists and returns its tenant, changing nothing.
 	check(ctx context.Context, invitation []byte) (uuid.UUID, error)
 	principal(ctx context.Context, hash []byte) (uuid.UUID, uuid.UUID, time.Time, error)
 	end(ctx context.Context, hash []byte) (uuid.UUID, error)
 	cliCheck(ctx context.Context, issuer, subject string) (uuid.UUID, error)
+	cliCheckForTenant(ctx context.Context, target uuid.UUID, issuer, subject string) error
 	cliStart(ctx context.Context, tenant uuid.UUID, issuer, subject string, hash []byte) (time.Time, error)
 	cliPrincipal(ctx context.Context, hash []byte) (uuid.UUID, uuid.UUID, time.Time, error)
 	cliEnd(ctx context.Context, hash []byte) (uuid.UUID, error)
@@ -153,6 +163,56 @@ func (s dbStore) start(ctx context.Context, issuer, subject string, hash, previo
 	return target, expires, nil
 }
 
+func (s dbStore) startForTenant(ctx context.Context, target uuid.UUID, issuer, subject string, hash, previous []byte) (time.Time, error) {
+	if !s.multiTenant && target != s.tenant {
+		return time.Time{}, fmt.Errorf("%w: tenant mismatch", identity.ErrInvalidQuery)
+	}
+	sameTenantPrevious := previous
+	var crossTenant uuid.UUID
+	if previous != nil && s.multiTenant {
+		prevTenant, ok, err := identity.SessionTenant(ctx, s.db, previous)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if ok && prevTenant != target {
+			sameTenantPrevious = nil
+			crossTenant = prevTenant
+		} else if !ok {
+			sameTenantPrevious = nil
+		}
+	}
+	expires, err := identity.StartSession(ctx, s.db, target, issuer, subject, hash, sameTenantPrevious)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if crossTenant != uuid.Nil {
+		if err := identity.EndSession(ctx, s.db, crossTenant, previous); err != nil && s.log != nil {
+			s.log.Warn("a previous session in another tenant could not be ended after sign-in", "tenant", crossTenant)
+		}
+	}
+	return expires, nil
+}
+
+func (s dbStore) humanTenants(ctx context.Context, issuer, subject string) ([]identity.TenantOption, error) {
+	return identity.HumanLoginTenants(ctx, s.db, issuer, subject)
+}
+
+func (s dbStore) createChoice(ctx context.Context, hash []byte, choice identity.LoginChoice) (time.Time, error) {
+	return identity.CreateLoginChoice(ctx, s.db, hash, choice)
+}
+
+func (s dbStore) readChoice(ctx context.Context, hash []byte) (identity.LoginChoice, error) {
+	return identity.ReadLoginChoice(ctx, s.db, hash)
+}
+
+func (s dbStore) consumeChoice(ctx context.Context, hash []byte) (identity.LoginChoice, error) {
+	return identity.ConsumeLoginChoice(ctx, s.db, hash)
+}
+
+func (s dbStore) cancelChoice(ctx context.Context, hash []byte) error {
+	return identity.CancelLoginChoice(ctx, s.db, hash)
+}
+
 func (s dbStore) check(ctx context.Context, invitation []byte) (uuid.UUID, error) {
 	if !s.multiTenant {
 		if err := identity.CheckInvitation(ctx, s.db, s.tenant, invitation); err != nil {
@@ -225,6 +285,13 @@ func (s dbStore) cliCheck(ctx context.Context, issuer, subject string) (uuid.UUI
 		return uuid.Nil, err
 	}
 	return tenant, nil
+}
+
+func (s dbStore) cliCheckForTenant(ctx context.Context, target uuid.UUID, issuer, subject string) error {
+	if !s.multiTenant && target != s.tenant {
+		return fmt.Errorf("%w: tenant mismatch", identity.ErrInvalidQuery)
+	}
+	return identity.CheckHumanLogin(ctx, s.db, target, issuer, subject)
 }
 
 func (s dbStore) cliStart(ctx context.Context, tenant uuid.UUID, issuer, subject string, hash []byte) (time.Time, error) {
@@ -305,6 +372,9 @@ type Service struct {
 	// invitations charges POST /auth/invitation/{provider}, which needs no session and reads the database for
 	// each token it is given, in a bucket of its own so that guessing tokens cannot stop people signing in.
 	invitations *ratelimit.Limiter
+	// choices charges GET, POST, and DELETE /auth/tenants in multi-tenant mode in a bucket of its own so
+	// polling or guessing pending choice cookies cannot starve callbacks or session lookups (ADR-0171).
+	choices *ratelimit.Limiter
 }
 
 // New validates the configuration, discovers every OpenID Connect provider, and returns the service.
@@ -409,6 +479,7 @@ func New(ctx context.Context, opts Options) (*Service, error) {
 		callbacks:   ratelimit.New(opts.Rate, opts.Burst),
 		lists:       ratelimit.New(opts.Rate, opts.Burst),
 		invitations: ratelimit.New(opts.Rate, opts.Burst),
+		choices:     ratelimit.New(opts.Rate, opts.Burst),
 	}, nil
 }
 

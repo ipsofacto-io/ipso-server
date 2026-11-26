@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { ids } from '../../fixtures/data.ts';
+import { FIXTURE_TENANTS } from '../../fixtures/server.ts';
 import { NOW, renderApp, stubFetch } from '../test/render';
 
 // jsdom applies no stylesheet, so color-contrast cannot see a paint. contrast.test.ts holds those pairs.
@@ -144,6 +145,18 @@ describe('WCAG 2.2 A and AA on each route', () => {
     stubFetch({ signedIn: false });
     renderApp('/invitation');
     expect(await screen.findByRole('alert')).toHaveTextContent('This invitation link is not complete.');
+    await expectClean();
+  });
+
+  it('has no violation on the tenant choice page', async () => {
+    stubFetch({
+      signedIn: false,
+      override: ({ method, url }) =>
+        method === 'GET' && url === '/auth/tenants' ? { status: 200, headers: {}, body: { tenants: FIXTURE_TENANTS, flow: 'browser' } } : undefined,
+    });
+    renderApp('/signin/tenant');
+    await screen.findByRole('heading', { level: 2, name: 'Choose an organization' });
+    await screen.findByRole('button', { name: 'Acme Europe' });
     await expectClean();
   });
 });

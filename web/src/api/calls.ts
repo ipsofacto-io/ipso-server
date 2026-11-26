@@ -29,6 +29,7 @@ import type {
   InvitationPage,
   InvitationRequest,
   InvitationStart,
+  PendingTenants,
   RoleBinding,
   RoleBindingPage,
   RoleBindingRequest,
@@ -41,6 +42,7 @@ import type {
   StoredVerdict,
   Supersession,
   SupersessionRequest,
+  TenantChoiceStart,
   VerifiabilityDiagnosis,
   VerifiabilityRequest,
   Waiver,
@@ -145,6 +147,12 @@ export function makeCalls(api: Api) {
      */
     startInvitation: (provider: string, token: string, signal?: AbortSignal) =>
       api.postJSON<InvitationStart>(`/auth/invitation/${encodeURIComponent(provider)}`, { token }, signal),
+    /** Lists the verified person's eligible human tenants for an active pending choice (ADR-0171). */
+    pendingTenants: (signal?: AbortSignal) => api.getJSON<PendingTenants>('/auth/tenants', {}, signal),
+    /** Completes the pending tenant choice and answers where to send the browser (ADR-0171). */
+    chooseTenant: (tenantId: string, signal?: AbortSignal) => api.postJSON<TenantChoiceStart>('/auth/tenants', { tenant_id: tenantId }, signal),
+    /** Cancels the pending tenant choice and clears its cookie without starting a session (ADR-0171). */
+    cancelTenantChoice: (signal?: AbortSignal) => api.delete('/auth/tenants', signal),
     logout: (signal?: AbortSignal) => api.post('/auth/logout', signal),
   };
 }

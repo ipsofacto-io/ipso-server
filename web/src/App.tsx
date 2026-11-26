@@ -25,6 +25,7 @@ import { RecordBaselineView } from './views/RecordBaseline';
 import { RecordSupersessionView } from './views/RecordSupersession';
 import { RecordWaiverView } from './views/RecordWaiver';
 import { ScopesView } from './views/Scopes';
+import { ChooseTenantView } from './views/ChooseTenant';
 import { SignInView } from './views/SignIn';
 import { WaiversView } from './views/Waivers';
 
@@ -62,6 +63,7 @@ export function AppRoutes() {
         <Route path="audit/supersessions" element={<AuditSupersessionsView />} />
         <Route path="audit/waivers" element={<AuditWaiversView />} />
         <Route path="signin" element={<SignInView />} />
+        <Route path="signin/tenant" element={<ChooseTenantView />} />
         <Route path="invitation" element={<InvitationView />} />
         <Route path="*" element={<NotFoundView />} />
       </Route>

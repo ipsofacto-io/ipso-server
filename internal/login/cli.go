@@ -221,6 +221,9 @@ func (s *Service) cliStart(w http.ResponseWriter, r *http.Request) {
 		begun.Verifier = "saml"
 		begun.Request = "post"
 	}
+	if len(r.CookiesNamed(choiceCookieName)) > 0 {
+		http.SetCookie(w, clearedChoiceCookie())
+	}
 	http.SetCookie(w, begun.cookie())
 	location := p.authorizeURL(s.redirectURI(providerID), state, nonce, verifier)
 	if isPosted {
@@ -274,25 +277,73 @@ func (s *Service) finishCLISignIn(w http.ResponseWriter, r *http.Request, ctx co
 		s.writeCallbackRefusal(w, r, http.StatusBadRequest, codeInvalidLogin, nil)
 		return
 	}
-	tenant, err := s.store.cliCheck(ctx, who.issuer, who.subject)
-	switch {
-	case errors.Is(err, identity.ErrUnknownLogin):
-		s.log.Info("a CLI sign-in named a login the tenant never bound", "provider", id)
-		s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "unknown_login")
-		return
-	case errors.Is(err, identity.ErrNotHuman), errors.Is(err, identity.ErrAmbiguousLogin):
-		s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "forbidden")
-		return
-	case err != nil:
-		s.log.Warn("a CLI login could not be verified", "provider", id)
-		s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "server_error")
-		return
+	var tenant uuid.UUID
+	if s.multiTenant {
+		tenants, err := s.store.humanTenants(ctx, who.issuer, who.subject)
+		switch {
+		case errors.Is(err, identity.ErrUnknownLogin):
+			s.log.Info("a CLI sign-in named a login the tenant never bound", "provider", id)
+			s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "unknown_login")
+			return
+		case errors.Is(err, identity.ErrNotHuman):
+			s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "forbidden")
+			return
+		case err != nil:
+			s.log.Warn("a CLI login could not list tenants", "provider", id)
+			s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "server_error")
+			return
+		}
+		if len(tenants) >= 2 {
+			s.beginTenantChoice(w, r, ctx, id, tenants, identity.LoginChoice{
+				Issuer:       who.issuer,
+				Subject:      who.subject,
+				CLIRedirect:  a.CLIRedirect,
+				CLIState:     a.CLIState,
+				CLIChallenge: a.CLIChallenge,
+				IsCLI:        true,
+			})
+			return
+		}
+		tenant = tenants[0].ID
+		err = s.store.cliCheckForTenant(ctx, tenant, who.issuer, who.subject)
+		switch {
+		case errors.Is(err, identity.ErrUnknownLogin):
+			s.log.Info("a CLI sign-in named a login the tenant never bound", "provider", id)
+			s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "unknown_login")
+			return
+		case errors.Is(err, identity.ErrNotHuman):
+			s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "forbidden")
+			return
+		case err != nil:
+			s.log.Warn("a CLI login could not be verified", "provider", id)
+			s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "server_error")
+			return
+		}
+	} else {
+		var err error
+		tenant, err = s.store.cliCheck(ctx, who.issuer, who.subject)
+		switch {
+		case errors.Is(err, identity.ErrUnknownLogin):
+			s.log.Info("a CLI sign-in named a login the tenant never bound", "provider", id)
+			s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "unknown_login")
+			return
+		case errors.Is(err, identity.ErrNotHuman), errors.Is(err, identity.ErrAmbiguousLogin):
+			s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "forbidden")
+			return
+		case err != nil:
+			s.log.Warn("a CLI login could not be verified", "provider", id)
+			s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "server_error")
+			return
+		}
 	}
 	telemetry.SetTenant(r.Context(), tenant)
 	code, err := randomText(32)
 	if err != nil {
 		s.redirectCLIError(w, a.CLIRedirect, a.CLIState, "server_error")
 		return
+	}
+	if len(r.CookiesNamed(choiceCookieName)) > 0 {
+		http.SetCookie(w, clearedChoiceCookie())
 	}
 	s.cliCodes.put(code, cliCodeEntry{
 		tenant:      tenant,

@@ -17,15 +17,23 @@ func TestMultiTenantLookupsAreDefinerFunctionsOnlyAppMayCall(t *testing.T) {
 	db := migrated(t)
 	admin := db.Open(t, pgtest.Admin)
 
-	functions := []string{
-		"identity.login_tenants(text,text)",
-		"identity.session_tenant(bytea)",
-		"identity.cli_session_tenant(bytea)",
-		"identity.invitation_tenant(bytea)",
-		"identity.scim_token_tenant(bytea)",
-		"verification.agent_pin_tenant(bytea)",
+	functions := []struct {
+		sig        string
+		volatility string
+	}{
+		{"identity.login_tenants(text,text)", "s"},
+		{"identity.human_login_tenants(text,text)", "s"},
+		{"identity.session_tenant(bytea)", "s"},
+		{"identity.cli_session_tenant(bytea)", "s"},
+		{"identity.invitation_tenant(bytea)", "s"},
+		{"identity.scim_token_tenant(bytea)", "s"},
+		{"verification.agent_pin_tenant(bytea)", "s"},
+		{"identity.create_login_choice(bytea,text,text,bytea,text,text,text)", "v"},
+		{"identity.read_login_choice(bytea)", "s"},
+		{"identity.consume_login_choice(bytea)", "v"},
+		{"identity.cancel_login_choice(bytea)", "v"},
 	}
-	for _, sig := range functions {
+	for _, fn := range functions {
 		var definer, appMay, bypassMay, publicMay bool
 		var owner, config, volatility string
 		err := admin.QueryRowContext(t.Context(), `
@@ -34,22 +42,35 @@ func TestMultiTenantLookupsAreDefinerFunctionsOnlyAppMayCall(t *testing.T) {
 			       has_function_privilege('ipso_bypass', p.oid, 'execute'),
 			       has_function_privilege('public', p.oid, 'execute')
 			FROM pg_catalog.pg_proc AS p
-			WHERE p.oid = $1::regprocedure`, sig).
+			WHERE p.oid = $1::regprocedure`, fn.sig).
 			Scan(&definer, &owner, &config, &volatility, &appMay, &bypassMay, &publicMay)
 		if err != nil {
-			t.Fatalf("%s: %v", sig, err)
+			t.Fatalf("%s: %v", fn.sig, err)
 		}
 		if !definer || owner != pgtest.Migrate {
-			t.Errorf("%s: SECURITY DEFINER = %v, owner %s; want definer owned by %s", sig, definer, owner, pgtest.Migrate)
+			t.Errorf("%s: SECURITY DEFINER = %v, owner %s; want definer owned by %s", fn.sig, definer, owner, pgtest.Migrate)
 		}
 		if !strings.Contains(config, "search_path=pg_catalog, pg_temp") {
-			t.Errorf("%s: config = %q, want pinned search_path", sig, config)
+			t.Errorf("%s: config = %q, want pinned search_path", fn.sig, config)
 		}
-		if volatility != "s" {
-			t.Errorf("%s: volatility = %q, want stable ('s')", sig, volatility)
+		if volatility != fn.volatility {
+			t.Errorf("%s: volatility = %q, want %q", fn.sig, volatility, fn.volatility)
 		}
 		if !appMay || bypassMay || publicMay {
-			t.Errorf("%s: EXECUTE app=%v bypass=%v public=%v; want true, false, false", sig, appMay, bypassMay, publicMay)
+			t.Errorf("%s: EXECUTE app=%v bypass=%v public=%v; want true, false, false", fn.sig, appMay, bypassMay, publicMay)
+		}
+	}
+
+	// ipso_app and public have zero direct table privileges on identity.login_choice.
+	for _, role := range []string{pgtest.App, pgtest.Bypass, "public"} {
+		for _, priv := range []string{"SELECT", "INSERT", "UPDATE", "DELETE"} {
+			var allowed bool
+			if err := admin.QueryRowContext(t.Context(), `SELECT has_table_privilege($1, 'identity.login_choice', $2)`, role, priv).Scan(&allowed); err != nil {
+				t.Fatalf("has_table_privilege(%s, %s): %v", role, priv, err)
+			}
+			if allowed {
+				t.Errorf("role %s has direct %s on identity.login_choice, want false", role, priv)
+			}
 		}
 	}
 }
@@ -267,6 +288,42 @@ func TestMigrationRoleDeleteStaysSingleTenantOnMultiTenantLookupTables(t *testin
 		var remainingB int
 		if err := pgtest.Scan(t.Context(), migrator, tenantB, `SELECT count(*) FROM `+table, nil, &remainingB); err != nil || remainingB == 0 {
 			t.Errorf("%s: tenantB lost rows after tenantA delete: remaining %d (%v)", table, remainingB, err)
+		}
+	}
+
+	// tenancy.tenant and identity.principal also allow migrator cross-tenant SELECT for human_login_tenants,
+	// while keeping migrator DELETE strictly single-tenant.
+	for _, table := range []string{"identity.principal", "tenancy.tenant"} {
+		var total int
+		if err := migrator.QueryRowContext(t.Context(), `SELECT count(*) FROM `+table).Scan(&total); err != nil || total < 2 {
+			t.Errorf("%s: migrator with no tenant saw %d rows (%v), want >= 2", table, total, err)
+		}
+		res, err := migrator.ExecContext(t.Context(), `DELETE FROM `+table)
+		if err != nil {
+			t.Fatalf("%s delete with no tenant: %v", table, err)
+		}
+		if deleted, _ := res.RowsAffected(); deleted != 0 {
+			t.Errorf("%s: migrator DELETE with no tenant removed %d rows, want 0", table, deleted)
+		}
+	}
+	const tenantSolo = "00000000-0000-4000-8000-00000000000d"
+	if _, err := pgtest.Exec(t.Context(), app, tenantSolo, `INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1::uuid, 'Solo')`, tenantSolo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pgtest.Exec(t.Context(), app, tenantSolo, `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1::uuid, 'human', 'Solo Person')`, tenantSolo); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"identity.principal", "tenancy.tenant"} {
+		res, err := pgtest.Exec(t.Context(), migrator, tenantSolo, `DELETE FROM `+table)
+		if err != nil {
+			t.Fatalf("%s delete in tenantSolo: %v", table, err)
+		}
+		if deleted, _ := res.RowsAffected(); deleted != 1 {
+			t.Errorf("%s: migrator DELETE in tenantSolo removed %d rows, want 1", table, deleted)
+		}
+		var remainingB int
+		if err := pgtest.Scan(t.Context(), migrator, tenantB, `SELECT count(*) FROM `+table, nil, &remainingB); err != nil || remainingB == 0 {
+			t.Errorf("%s: tenantB lost rows after tenantSolo delete: remaining %d (%v)", table, remainingB, err)
 		}
 	}
 }

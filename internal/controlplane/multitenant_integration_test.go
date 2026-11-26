@@ -389,10 +389,13 @@ func TestMultiTenantAPIIsolatesTwoTenantsAcrossEveryCredentialPath(t *testing.T)
 	if rec := request(handler, http.MethodGet, "/v1/scopes", nil, cookieA); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("previous Tenant A cookie after cross-tenant replacement: %d, want 401", rec.Code)
 	}
-	// Plain non-invitation sign-in for user-a now fails closed with 403 (bound in both A and B).
+	// Plain non-invitation sign-in for user-a now starts a tenant choice (bound in both A and B)
+	// rather than issuing a session directly.
 	attemptAmbig, stateAmbig := oidc.beginBrowser(t, handler)
-	if rec := request(handler, http.MethodGet, "/auth/callback/idp?code=good-code&state="+stateAmbig, nil, attemptAmbig); rec.Code != http.StatusForbidden {
-		t.Fatalf("plain sign-in for ambiguous user-a: %d %s, want 403", rec.Code, rec.Body)
+	ambigRec := request(handler, http.MethodGet, "/auth/callback/idp?code=good-code&state="+stateAmbig, nil, attemptAmbig)
+	if ambigRec.Code != http.StatusOK || cookieOf(ambigRec, "__Host-ipso-session") != nil || cookieOf(ambigRec, "__Host-ipso-choice") == nil {
+		t.Fatalf("plain sign-in for multi-tenant user-a: %d %s (session=%v choice=%v)",
+			ambigRec.Code, ambigRec.Body, cookieOf(ambigRec, "__Host-ipso-session"), cookieOf(ambigRec, "__Host-ipso-choice"))
 	}
 
 	// 4. CLI sessions (ipsocli_): Tenant B user signs in, reads Tenant B only, and logs out.
@@ -521,4 +524,209 @@ func TestMultiTenantStartRefusesUnmigratedDatabase(t *testing.T) {
 	// Sanity check: verification.RequireAgentPinLookup is still present when login_tenants is gone,
 	// and dropping verification.agent_pin_tenant is also caught when login_tenants exists.
 	_ = verification.RequireAgentPinLookup
+}
+
+func TestMultiTenantSignInTenantChoiceBrowserAndCLI(t *testing.T) {
+	database := server.NewDatabase(t)
+	if _, err := migrate.Run(t.Context(), database.DSN(pgtest.Migrate)); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	app := database.Open(t, pgtest.App)
+	admin := database.Open(t, pgtest.Admin)
+
+	tenantA := uuid.MustParse("00000000-0000-4000-8000-00000000010a")
+	tenantB := uuid.MustParse("00000000-0000-4000-8000-00000000010b")
+	tenantC := uuid.MustParse("00000000-0000-4000-8000-00000000010c")
+
+	apiAuth := authntest.NewServer(t)
+	oidc := newMultiTenantOIDC(t)
+	oidc.setSubject("multi-person")
+
+	execIn := func(tid uuid.UUID, query string, args ...any) {
+		t.Helper()
+		if _, err := pgtest.Exec(t.Context(), app, tid.String(), query, args...); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+	}
+	scanIn := func(tid uuid.UUID, query string, args ...any) uuid.UUID {
+		t.Helper()
+		var id uuid.UUID
+		if err := pgtest.Scan(t.Context(), app, tid.String(), query, args, &id); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		return id
+	}
+
+	execIn(tenantA, `INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1, 'Acme Europe')`, tenantA)
+	execIn(tenantB, `INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1, 'Beta Platform')`, tenantB)
+	execIn(tenantC, `INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1, 'Gamma Secret')`, tenantC)
+
+	execIn(tenantA, `INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1, NULL, 'org', 'alpha-org')`, tenantA)
+	execIn(tenantB, `INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1, NULL, 'org', 'beta-org')`, tenantB)
+	execIn(tenantC, `INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1, NULL, 'org', 'gamma-org')`, tenantC)
+
+	personA := scanIn(tenantA, `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'Alice A') RETURNING id`, tenantA)
+	personB := scanIn(tenantB, `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'Alice B') RETURNING id`, tenantB)
+	personC := scanIn(tenantC, `INSERT INTO identity.principal (tenant_id, kind, name) VALUES ($1, 'human', 'Carol C') RETURNING id`, tenantC)
+	agentC := scanIn(tenantC, `INSERT INTO identity.principal (tenant_id, kind, name, sponsor_id) VALUES ($1, 'agent', 'Bot C', $2) RETURNING id`, tenantC, personC)
+
+	execIn(tenantA, `INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ($1, $2, 'viewer')`, tenantA, personA)
+	execIn(tenantB, `INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ($1, $2, 'viewer')`, tenantB, personB)
+	execIn(tenantC, `INSERT INTO identity.role_binding (tenant_id, principal_id, role) VALUES ($1, $2, 'agent')`, tenantC, agentC)
+
+	// Bind multi-person as human in A and B, and as agent-only in C.
+	execIn(tenantA, `INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1, $2, $3, 'multi-person')`, tenantA, personA, oidc.idp.Server.URL)
+	execIn(tenantB, `INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1, $2, $3, 'multi-person')`, tenantB, personB, oidc.idp.Server.URL)
+	execIn(tenantC, `INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1, $2, $3, 'multi-person')`, tenantC, agentC, oidc.idp.Server.URL)
+
+	handler, err := New(t.Context(), Config{
+		DB:          app,
+		MultiTenant: true,
+		Issuer:      apiAuth.Server.URL,
+		Audience:    apiAudience,
+		PublicURL:   "https://ipso.example.test",
+		Providers: []login.ProviderConfig{{
+			ID: "idp", Kind: login.KindOIDC, Issuer: oidc.idp.Server.URL, ClientID: "ipso-login", ClientSecretEnv: "IPSO_LOGIN_IDP_SECRET",
+		}},
+		Secrets: func(string) string { return "client-secret" },
+		Client:  apiAuth.Server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("New multi-tenant: %v", err)
+	}
+
+	sessionCount := func() int {
+		var n int
+		if err := admin.QueryRowContext(t.Context(), `SELECT count(*) FROM identity.session`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	// 1. HTML callback redirects to /signin/tenant with __Host-ipso-choice and zero sessions.
+	attempt1, state1 := oidc.beginBrowser(t, handler)
+	cb1 := request(handler, http.MethodGet, "/auth/callback/idp?code=good-code&state="+state1, map[string]string{"Accept": "text/html"}, attempt1)
+	if cb1.Code != http.StatusSeeOther || cb1.Header().Get("Location") != "/signin/tenant" {
+		t.Fatalf("browser HTML callback = %d %q, want 303 /signin/tenant", cb1.Code, cb1.Header().Get("Location"))
+	}
+	choice1 := cookieOf(cb1, "__Host-ipso-choice")
+	if choice1 == nil || cookieOf(cb1, "__Host-ipso-session") != nil || sessionCount() != 0 {
+		t.Fatalf("after callback: choice=%v session=%v count=%d", choice1, cookieOf(cb1, "__Host-ipso-session"), sessionCount())
+	}
+
+	// 2. GET /auth/tenants lists ONLY A and B, never C.
+	listRec := request(handler, http.MethodGet, "/auth/tenants", nil, choice1)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("GET /auth/tenants = %d %s", listRec.Code, listRec.Body)
+	}
+	var listed struct {
+		Flow    string `json:"flow"`
+		Tenants []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"tenants"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if listed.Flow != "browser" || len(listed.Tenants) != 2 ||
+		listed.Tenants[0].ID != tenantA.String() || listed.Tenants[0].Name != "Acme Europe" ||
+		listed.Tenants[1].ID != tenantB.String() || listed.Tenants[1].Name != "Beta Platform" {
+		t.Fatalf("GET /auth/tenants = %+v, want [Acme Europe, Beta Platform]", listed)
+	}
+
+	// 3. Choosing unauthorized Tenant C fails 403, consumes the choice, and creates no session.
+	badChoose := postJSON(handler, "/auth/tenants", `{"tenant_id":"`+tenantC.String()+`"}`, choice1)
+	if badChoose.Code != http.StatusForbidden || sessionCount() != 0 {
+		t.Fatalf("unauthorized Tenant C = %d %s sessions=%d", badChoose.Code, badChoose.Body, sessionCount())
+	}
+	if replay := postJSON(handler, "/auth/tenants", `{"tenant_id":"`+tenantB.String()+`"}`, choice1); replay.Code != http.StatusUnauthorized {
+		t.Fatalf("replay after failed choice = %d %s, want 401", replay.Code, replay.Body)
+	}
+
+	// 4. Abandoned choice leaves zero sessions.
+	attemptAbandon, stateAbandon := oidc.beginBrowser(t, handler)
+	abandoned := request(handler, http.MethodGet, "/auth/callback/idp?code=good-code&state="+stateAbandon, map[string]string{"Accept": "text/html"}, attemptAbandon)
+	if abandoned.Code != http.StatusSeeOther || sessionCount() != 0 {
+		t.Fatalf("abandoned callback = %d sessions=%d", abandoned.Code, sessionCount())
+	}
+
+	// 5. Choosing Tenant B issues a browser session strictly scoped to Tenant B.
+	attempt2, state2 := oidc.beginBrowser(t, handler)
+	cb2 := request(handler, http.MethodGet, "/auth/callback/idp?code=good-code&state="+state2, map[string]string{"Accept": "text/html"}, attempt2)
+	choice2 := cookieOf(cb2, "__Host-ipso-choice")
+	okChoose := postJSON(handler, "/auth/tenants", `{"tenant_id":"`+tenantB.String()+`"}`, choice2)
+	if okChoose.Code != http.StatusOK {
+		t.Fatalf("choose Tenant B = %d %s", okChoose.Code, okChoose.Body)
+	}
+	sessionB := cookieOf(okChoose, "__Host-ipso-session")
+	if sessionB == nil {
+		t.Fatal("missing session cookie after choosing Tenant B")
+	}
+	scopesB := request(handler, http.MethodGet, "/v1/scopes", nil, sessionB)
+	if scopesB.Code != http.StatusOK || !strings.Contains(scopesB.Body.String(), "beta-org") || strings.Contains(scopesB.Body.String(), "alpha-org") || strings.Contains(scopesB.Body.String(), "gamma-org") {
+		t.Fatalf("scopes for chosen Tenant B = %d %s", scopesB.Code, scopesB.Body)
+	}
+
+	// 6. CLI loopback PKCE choice: select Tenant A and verify ipsocli_ token is strictly scoped to Tenant A.
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk_choice_cli"
+	sum := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
+	redirectURI := "http://127.0.0.1:54322/callback"
+	q := url.Values{
+		"redirect_uri":          {redirectURI},
+		"state":                 {"cli-choice-state"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}
+	cliStart := request(handler, http.MethodGet, "/auth/cli/start?"+q.Encode(), nil)
+	cliAttempt := cookieOf(cliStart, "__Host-ipso-login")
+	cliLoc, _ := url.Parse(cliStart.Header().Get("Location"))
+	oidc.mu.Lock()
+	oidc.challenge = cliLoc.Query().Get("code_challenge")
+	oidc.nonce = cliLoc.Query().Get("nonce")
+	oidc.mu.Unlock()
+
+	cliCB := request(handler, http.MethodGet, "/auth/callback/idp?code=good-code&state="+url.QueryEscape(cliLoc.Query().Get("state")), map[string]string{"Accept": "text/html"}, cliAttempt)
+	if cliCB.Code != http.StatusSeeOther || cliCB.Header().Get("Location") != "/signin/tenant" {
+		t.Fatalf("cli choice callback = %d %q", cliCB.Code, cliCB.Header().Get("Location"))
+	}
+	cliChoice := cookieOf(cliCB, "__Host-ipso-choice")
+	cliChoose := postJSON(handler, "/auth/tenants", `{"tenant_id":"`+tenantA.String()+`"}`, cliChoice)
+	if cliChoose.Code != http.StatusOK {
+		t.Fatalf("cli choose Tenant A = %d %s", cliChoose.Code, cliChoose.Body)
+	}
+	var cliAns struct {
+		Location string `json:"location"`
+	}
+	if err := json.Unmarshal(cliChoose.Body.Bytes(), &cliAns); err != nil {
+		t.Fatal(err)
+	}
+	loopLoc, err := url.Parse(cliAns.Location)
+	if err != nil || loopLoc.Host != "127.0.0.1:54322" || loopLoc.Query().Get("state") != "cli-choice-state" || loopLoc.Query().Get("code") == "" {
+		t.Fatalf("cli choose location = %q (%v)", cliAns.Location, err)
+	}
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {loopLoc.Query().Get("code")},
+		"code_verifier": {verifier},
+		"redirect_uri":  {redirectURI},
+	}
+	tokReq := httptest.NewRequest(http.MethodPost, "/auth/cli/token", strings.NewReader(form.Encode()))
+	tokReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokRec := httptest.NewRecorder()
+	handler.ServeHTTP(tokRec, tokReq)
+	if tokRec.Code != http.StatusOK {
+		t.Fatalf("cli token = %d %s", tokRec.Code, tokRec.Body)
+	}
+	var tokBody struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(tokRec.Body.Bytes(), &tokBody); err != nil {
+		t.Fatal(err)
+	}
+	scopesA := get(handler, "/v1/scopes", tokBody.AccessToken)
+	if scopesA.Code != http.StatusOK || !strings.Contains(scopesA.Body.String(), "alpha-org") || strings.Contains(scopesA.Body.String(), "beta-org") || strings.Contains(scopesA.Body.String(), "gamma-org") {
+		t.Fatalf("CLI scopes for chosen Tenant A = %d %s", scopesA.Code, scopesA.Body)
+	}
 }
