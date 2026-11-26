@@ -237,6 +237,9 @@ func ConsumeLoginChoice(ctx context.Context, db *sql.DB, hash []byte) (LoginChoi
 		hash,
 	).Scan(&out.Issuer, &out.Subject, &out.Previous, &out.CLIRedirect, &out.CLIState, &out.CLIChallenge)
 	if errors.Is(err, sql.ErrNoRows) {
+		if cerr := tx.Commit(); cerr != nil {
+			return LoginChoice{}, fmt.Errorf("consume login choice: %w", cerr)
+		}
 		return LoginChoice{}, ErrUnknownChoice
 	}
 	if err != nil {
