@@ -123,6 +123,8 @@ cd web && npm ci && npm test && npm run build
 
 The smoke test of the Compose stack runs in CI with `-tags compose`, against a running stack.
 
+The full integration run includes `TestResolveP95UnderBudgetAt10kDecisions`, a timed test that can fail when the other packages load the machine. CI skips it there and runs it alone after them ([ADR-0167](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0167-resolve-latency-budget-on-an-unloaded-runner.md)). To run it the same way: `go test -tags integration -count=1 -v -run '^TestResolveP95UnderBudgetAt10kDecisions$' ./internal/registry`.
+
 The integration tests start PostgreSQL 18 with Testcontainers, so they need a Docker-compatible socket. They use synthetic rows only.
 
 The web app writes the pact with its own tests, and the Go provider test verifies it. The provider test links the Pact FFI 0.5 (`libpact_ffi`), so it needs it on the linker path. `ci / pact` installs a pinned release and runs both:
