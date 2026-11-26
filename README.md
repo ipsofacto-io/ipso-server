@@ -2,112 +2,87 @@
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/ipsofacto-io/ipso-server/badge)](https://scorecard.dev/viewer/?uri=github.com/ipsofacto-io/ipso-server)
 
-Source-available ipso control plane: bitemporal decision registry, API, web app and PR checks.
+Source-available control plane for [ipso](https://github.com/ipsofacto-io/ipso): a bitemporal engineering decision registry, HTTP API, web app, remote MCP server, background worker, and PR/Terraform enforcement services.
 
-> Status: early. The binary has five commands. `ipso-server --role=api` serves the control plane API ([ADR-0094](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0094-the-api-role.md)), `ipso-server --role=worker` works its jobs on River, starting with the hourly waiver notice sweep and the premise sweep ([ADR-0097](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0097-the-worker-role.md)), and [docs/local-stack.md](docs/local-stack.md) runs both on a laptop with one Compose command. `ipso-server migrate` applies the PostgreSQL 18 schema. `ipso-server webhooks` serves the GitHub App webhook and asks the database which tenant owns the installation of a delivery ([ADR-0101](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0101-installation-tenant-mapping.md), which keeps the rest of [ADR-0061](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0061-github-app.md)). When an LLM gateway is configured it also turns the discussion of a merged pull request into pending decision proposals for that tenant ([ADR-0103](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0103-pr-proposals-in-the-webhooks-process.md)). `ipso-server runtasks` serves an HCP Terraform run task on the same terms ([ADR-0065](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0065-hcp-terraform-run-task.md)).
+> Status: early release. One Go modular monolith ships the API, embedded web SPA, background worker, GitHub App webhooks, HCP Terraform run tasks, Helm chart, and Docker Compose bundle. The combined `all` role is not built yet.
 
-One Go modular monolith ships the registry API, the web SPA, the entitlement contract, the Helm chart and the Compose bundle, plus a separate Python worker for LLM extraction. The binary is `ipso-server`. `--role=api` starts the control plane and `--role=worker` works its jobs today, and the `all` role is not built yet.
+## Quick start (local stack)
 
-Module rule: `go.mod` may require `ipso`. Enterprise features register from `ipso-ee` through the `ee` build tag. Each release converts to Apache-2.0 two years after publication. Enterprise builds use the same version number: EE vX.Y.Z matches server vX.Y.Z.
+Run the full control plane locally (PostgreSQL 18, migrations, seeded tenant, Dex OIDC provider, API, worker, and rate-limited nginx front) with Docker Compose:
 
-## Local stack
+```sh
+cp .env.example .env
+docker compose up --build
+```
 
-`cp .env.example .env && docker compose up --build` starts PostgreSQL 18, applies the migrations, seeds a tenant, serves the control plane with Dex as the OIDC provider behind a front that limits each client, and runs the worker. [docs/local-stack.md](docs/local-stack.md) shows how to get a token and call the API. `ci / compose` starts the stack from a clean checkout and runs a smoke test against it ([ADR-0095](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0095-local-compose-stack.md)). The supported install is the chart and the Compose bundle in [docs/install.md](docs/install.md) ([ADR-0140](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0140-self-hosted-chart-and-bundle.md)).
+- See [docs/local-stack.md](docs/local-stack.md) for obtaining a token, calling the API, and signing in via browser (`ci / compose` smoke-tests this stack on every change).
+- For production deployments, use the supported Helm chart or Compose bundle in [docs/install.md](docs/install.md).
+
+## Commands and runtime roles
+
+| Command | Role / purpose |
+| --- | --- |
+| `ipso-server --role=api` | Serves the control-plane HTTP API ([OpenAPI 3.1](api/openapi.yaml)), embedded web app, browser OIDC login, and optional remote MCP server |
+| `ipso-server --role=worker` | Runs background jobs on PostgreSQL via River: hourly waiver expiry notices, premise probes, tenant export sweeps/exports, and Slack/Teams digests |
+| `ipso-server migrate` | Applies embedded goose PostgreSQL 18 migrations using `IPSO_MIGRATE_DATABASE_URL` |
+| `ipso-server webhooks` | Handles GitHub App `pull_request` and `push` checks (`ipso / decisions`) and optional LLM decision extraction on merged PRs |
+| `ipso-server runtasks` | Evaluates HCP Terraform / Terraform Enterprise run tasks against a signed policy bundle |
+| `ipso-server probe` | Health probe for the worker heartbeat file (used by the Helm chart) |
+| `ipso-server tenant ...` | Tenant administration (`create`, `export`, `restore`, `offboard`, `bind-installation`; see [docs/tenants.md](docs/tenants.md)) |
+| `ipso-server audit-log verify` | Verifies the per-tenant hash-chained action log ([docs/audit-log.md](docs/audit-log.md)) |
+| `ipso-server proposals acceptance` | Reports proposal approval rates by prompt version and model (never by person) |
+
+## Core capabilities
+
+- **Bitemporal decision registry:** Stores decision versions, hierarchical scopes, supersessions, baselines, and time-bounded waivers (up to 90 days) in PostgreSQL 18 with forced row-level security.
+- **Control-plane API and web app:** OpenAPI 3.1 HTTP API paired with an embedded React/Vite/TypeScript SPA ([web/](web), [docs/web-app.md](docs/web-app.md)) protected by OIDC bearer tokens or `__Host-ipso-session` browser cookies and embedded Rego RBAC ([docs/roles.md](docs/roles.md)).
+- **Agent identities and hash-chained audit log:** AI coding agents require a human sponsor in the same tenant, cannot approve waivers or proposals, and every agent call or write is recorded transactionally in a tamper-evident hash chain ([docs/audit-log.md](docs/audit-log.md)).
+- **Remote MCP server:** Stateless Streamable HTTP OAuth 2.1 resource server sharing the `pkg/mcptools` contract from `ipso` (mounted when `IPSO_MCP_ISSUER` and `IPSO_MCP_RESOURCE_URL` are set).
+- **Automated PR and Terraform checks:** GitHub App check runs ([docs/github-app.md](docs/github-app.md)) and HCP Terraform run tasks ([docs/hcp-terraform-run-task.md](docs/hcp-terraform-run-task.md)).
+- **EU-first LLM gateway and evals:** Optional proposal extraction from merged PR discussions and agent-edit check drafting behind an EU-resident default LLM gateway with secret redaction, monthly token budgets, prompt-injection screening, and golden/red-team eval suites ([docs/evals.md](docs/evals.md)).
+- **OpenTelemetry:** Optional OTLP/HTTP traces and metrics (enabled only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set) with strict attribute allowlists and Grafana dashboards in `deploy/telemetry` ([docs/telemetry.md](docs/telemetry.md)).
+
+See [docs/architecture.md](docs/architecture.md) for the component architecture, security invariants, and ADR map.
 
 ## Database schema
 
-The primary store is PostgreSQL 18 ([ADR-0003](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0003-bitemporal-store-on-postgresql-18.md)). Migrations are goose v3.29.0 files embedded in the binary and applied by one command ([ADR-0050](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0050-schema-migrations-with-goose.md)):
+`ipso-server` requires PostgreSQL 18 with strict role separation and forced row-level security (no superuser, no `BYPASSRLS`, no transaction-mode pooler):
 
-```sh
-IPSO_MIGRATE_DATABASE_URL=postgres://ipso_migrate:...@db.example/ipso ipso-server migrate
-```
+- `ipso_migrate`: non-superuser login role (no `BYPASSRLS`, no `CREATEROLE`) that owns the database, schemas, tables, and migrations.
+- `ipso_app`: non-superuser login role that owns nothing and holds only least-privilege grants written by migrations.
+- `ipso.current_tenant()`: leakproof helper function created once by a superuser so RLS policies can use indexes.
 
-The command reads the connection string from the `IPSO_MIGRATE_DATABASE_URL` environment variable only, applies the pending versions, and exits. Migrations have an Up section and no Down section: a bad migration is fixed by a new version. The command connects to the database directly, never through a transaction-mode pooler, because goose holds a session advisory lock.
+See [docs/database.md](docs/database.md) for the exact bootstrap SQL, `btree_gist` and `session_replication_role` requirements, and migration rules.
 
-An administrator prepares the database once, before the first run, because creating a role needs `CREATEROLE` and neither role has it:
+## Documentation
 
-- `ipso_migrate`: a login role that is not a superuser and has neither `BYPASSRLS` nor `CREATEROLE`. It owns the database, the schemas, the tables, the views and the `SECURITY DEFINER` functions.
-- `ipso_app`: a login role with the same restrictions. It owns nothing and holds only the grants the migrations write.
-- An empty database owned by `ipso_migrate`.
-- `GRANT SET ON PARAMETER session_replication_role TO ipso_migrate;` (PostgreSQL 15 or later). Only `ipso-server tenant restore` and `tenant offboard` use it, to skip triggers and foreign keys for one transaction ([ADR-0100](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0100-tenant-lifecycle-and-crypto-shredding.md)). The role owns every table and could already disable a trigger, so the grant adds no power over the schema. `ipso_app` does not get it. A provider that refuses the grant can still run everything except those two commands.
-- `ipso.current_tenant()`, created by that same superuser. Only a superuser can mark a function leakproof, and the migration role is not one. The policies call it so the planner can use indexes. Its body is `nullif(current_setting('ipso.tenant', true), '')::uuid`.
+| Guide | Topic |
+| --- | --- |
+| [docs/local-stack.md](docs/local-stack.md) | Running and calling the local Docker Compose stack |
+| [docs/install.md](docs/install.md) | Production Helm chart and Docker Compose bundle install |
+| [docs/database.md](docs/database.md) | PostgreSQL 18 role bootstrap SQL, RLS checks, and goose migrations |
+| [docs/architecture.md](docs/architecture.md) | Internal package architecture, security invariants, and ADR map |
+| [docs/login.md](docs/login.md) | OIDC/GitHub browser sign-in and user invitations |
+| [docs/roles.md](docs/roles.md) | Roles and route permissions |
+| [docs/tenants.md](docs/tenants.md) | Tenant lifecycle, export, restore, offboarding, and crypto-shredding |
+| [docs/audit-log.md](docs/audit-log.md) | Hash-chained action log and verification |
+| [docs/verdicts.md](docs/verdicts.md) | CI verdict uploads and baseline reads |
+| [docs/web-app.md](docs/web-app.md) | Embedded React web SPA |
+| [docs/github-app.md](docs/github-app.md) | GitHub App registration, permissions, and PR checks |
+| [docs/hcp-terraform-run-task.md](docs/hcp-terraform-run-task.md) | HCP Terraform / Terraform Enterprise run tasks |
+| [docs/evals.md](docs/evals.md) | LLM extraction, red-team, and check-drafting eval suites |
+| [docs/telemetry.md](docs/telemetry.md) | OpenTelemetry metrics, traces, and local Grafana stack |
+| [api/openapi.yaml](api/openapi.yaml) | OpenAPI 3.1 HTTP API specification |
 
-```sql
-CREATE SCHEMA ipso;
-CREATE FUNCTION ipso.current_tenant() RETURNS uuid
-    LANGUAGE sql STABLE LEAKPROOF
-    SET search_path = pg_catalog, pg_temp
-AS $$ SELECT nullif(current_setting('ipso.tenant', true), '')::uuid $$;
-REVOKE ALL ON FUNCTION ipso.current_tenant() FROM PUBLIC;
-GRANT USAGE ON SCHEMA ipso TO ipso_app, ipso_migrate;
-GRANT EXECUTE ON FUNCTION ipso.current_tenant() TO ipso_app, ipso_migrate;
-```
+## Module boundary and enterprise builds
 
-`ipso-server migrate` exits non-zero before it runs a statement when its session role or its current role is a superuser or has `BYPASSRLS`. PostgreSQL providers must allow `btree_gist` for the database owner. If yours does not, an administrator creates the extension before the first run.
+- `go.mod` may require `ipso` (`pkg/*` shared libraries).
+- Enterprise features register from `ipso-ee` via the `ee` build tag; community builds never depend on `ipso-ee`.
+- Enterprise versions stay in lockstep with `ipso-server` (`EE vX.Y.Z` matches server `vX.Y.Z`).
 
-The registry schema holds the bitemporal decision tables, the scope tree and its closure table. `internal/registry` resolves the decisions in force for a repo, path and environment from them ([ADR-0051](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0051-scope-model-and-resolution.md)). It also records a supersession, which closes the prior decision, and applies a baseline of violation fingerprints for one decision and repository ([ADR-0052](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0052-supersession-and-grandfathering.md)). It records a scoped waiver of at most 90 days and turns a fail into waived while the waiver and the decision both cover the valid time. `Notify` writes a `ticket_ref` notice at 14, 3, and 0 days before the waiver ends ([ADR-0054](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0054-waivers-with-expiry.md)). `internal/audit` answers the five audit questions as `GET /v1/audit/*`, which the control plane API mounts with the tenant from the token ([ADR-0055](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0055-audit-query-api.md)).
+## Development and testing
 
-## Agent identities
-
-`identity.principal` holds people and AI coding agents, and an agent must have a person in the same tenant as its sponsor. The database refuses an agent as the approver of a waiver or a proposal, so no route can forget the rule. `identity.action_log` records what a principal did, and the database writes the person responsible, whatever the caller sent ([ADR-0076](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0076-agent-identities.md)). It is also a hash chain per tenant that the database keeps and no role can rewrite without the chain showing it, an auditor or an admin reads it as JSON lines on `GET /v1/audit-log`, and `ipso-server audit-log verify` checks it ([ADR-0126](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0126-hash-chained-action-log.md), [docs/audit-log.md](docs/audit-log.md)). `internal/identity` reads and writes these, and it trusts the tenant it is given. `identity.login` binds the subject of an OIDC issuer to a principal, and `identity.PrincipalFor` is the one way a verified token becomes a principal ([ADR-0093](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0093-single-tenant-token-mapping.md)). The API and the remote MCP handler call it. The only writer of a person after the first is the sign-in of a person who comes with an invitation, which an admin makes with `POST /v1/invitations` ([ADR-0127](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0127-invitations.md), [docs/login.md](docs/login.md#invite-a-person)). `identity.session` holds the browser sessions of people who signed in through a provider ([ADR-0099](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0099-browser-login-sessions.md)). `identity.role_binding` gives a principal one of seven roles, over the whole tenant or on one scope and the scopes below it, and the database refuses an agent any role but `agent` ([ADR-0108](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0108-role-policy.md), [docs/roles.md](docs/roles.md)).
-
-## Control plane API
-
-`internal/api` is the control plane HTTP API, and [api/openapi.yaml](api/openapi.yaml) describes it in OpenAPI 3.1 ([ADR-0090](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0090-control-plane-api.md)). Most routes read. `POST /v1/resolve` answers a check request with each decision in force once, and names that decision by id on each changed path ([ADR-0092](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0092-resolve-answer-once.md)). `GET /v1/decisions`, `/v1/decisions/{ref}`, `/v1/scopes`, and `/v1/waivers` read the registry as in force at `valid` and as known at `known`, which default to now and are echoed in the answer. `GET /v1/premise-reasons` and `GET /v1/premise-hosts` read the present: the open premise review reasons, and the latest row of each host of the premise allowlist ([ADR-0117](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0117-premise-reads.md)). The three review queues list pending proposals, and the five audit routes answer section 2.3. `POST /v1/verdicts` is the write a CI job calls with its own GitHub Actions token to store the verdicts of a run under the tenant that owns the repository, and `GET /v1/verdicts` lists them as known at a time, and reads the digests that a version 2 report carries against the baseline recorded for the decision and repository ([ADR-0102](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0102-signed-verdict-uploads.md), [ADR-0122](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0122-baseline-on-verdict-reads.md), [docs/verdicts.md](docs/verdicts.md)). Every other write is a person's and sits behind a role ([ADR-0109](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0109-control-plane-write-routes.md)): create, move and retire a scope, record a supersession, a grandfather period, a baseline and a waiver, approve or reject a proposal and write the decision it carries, approve or reject a check an LLM drafted for a decision ([ADR-0116](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0116-check-proposal-approval.md)), clear a premise review reason, and edit the premise allowlist. [docs/roles.md](docs/roles.md) lists who may take each.
-
-A request needs a bearer token in the `Authorization` header, or, when sign-in is configured and no such header is sent, a session cookie ([ADR-0099](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0099-browser-login-sessions.md)). `internal/authn` checks its signature, issuer, audience, and expiry, the same checks remote MCP makes. The tenant and the principal come from the token only, so a query key `tenant` or `tenant_id` is 400. A token that speaks for no principal of the tenant is 403. Then `internal/authz`, an embedded Rego policy with no network, decides whether the principal's roles allow the route, and a refusal is the same 403 and the route does not run. An unknown route is 404 only to a principal with a role, so routes cannot be listed without one. The guard is the API's only handler and looks the matched route up in one table, so a handler mounted without a route and an action is refused. An agent's call is logged with its human sponsor before it runs, and a call that cannot be logged does not run. A write is one transaction with its entry in the action log, so a write that cannot be logged does not run either, and an agent is refused every write. The guard reads a scoped write's body only for a principal who could take the action somewhere, reads the scopes the body names, and asks the policy to cover every one. A write answers 201, 200 or 204, a value the registry refuses is 400, an id the tenant does not have is 404, a decision body over 1 MiB in the text form the database stores is 413, and every other refusal of what the registry holds, such as a repeat or a scope that still has a child, is 409 `conflict` and says nothing more. `GET /v1/audit-log` answers JSON lines, a page of at most 1000 lines and about 1 MiB, and the reader continues from the `seq` of its last line. Each request has a 10 second deadline, a 1 MiB body cap, and a 4 MiB answer cap. An answer over the cap is refused whole with 500 and never sent cut short. Each tenant may make 10 requests a second, with a burst of 20, on each process.
-
-`ipso-server --role=api` serves it ([ADR-0094](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0094-the-api-role.md)). Row-level security is forced on every tenant table, and `internal/rls.Check` refuses a superuser, a `BYPASSRLS` role, the owner of a table, or a `tenant_id` table that is not forced (IPSO-61, ADR-0050). The role runs that check, then looks for the tenant's row in `tenancy.tenant`, then reads the issuer's metadata over https, and serves nothing before all three pass. It also refuses to start when `IPSO_MIGRATE_DATABASE_URL` is in its environment. The API connection, like `migrate`, has to be a session connection and not a transaction-mode pooler, because `ipso.tenant` is set for one transaction. A token maps to a tenant and a principal only through a stored login for its issuer and subject, and the tenant is the one the process was started for (`IPSO_TENANT_ID`). `GET /healthz` answers 204 when the database answers, outside the guard and outside the OpenAPI document. A request limit per client belongs to the front of a deployment, as ADR-0090 says, and the Compose stack has one.
-
-Browser sign-in turns on when `IPSO_PUBLIC_URL` and `IPSO_LOGIN_PROVIDERS` are set ([ADR-0099](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0099-browser-login-sessions.md), [docs/login.md](docs/login.md)). `internal/login` is a relying party for Google, Microsoft, a self-hosted OpenID Connect provider, and GitHub, which has its own adapter because it returns no ID token. It runs the authorization code flow with PKCE, `state`, and a nonce, binds the provider's issuer and subject to a principal only through `identity.login`, and creates a person only from an open invitation of the tenant, so a person the tenant never bound and who has no invitation gets 403 and the two values to bind. A session is a row of `identity.session` behind the cookie `__Host-ipso-session`, which is HttpOnly, Secure, and SameSite=Strict, ends after 8 hours, and is read by the API only when no `Authorization` header is sent. A request that could change state and comes from another origin is refused before the cookie is looked up, and the lookups of cookies a process has not kept are limited. ipso stores no password, so MFA is the provider's policy.
-
-The contract tests check that the document is valid OpenAPI 3.1, that it lists exactly the routes `internal/api` mounts, that every route that is not a read names an action only a person takes, and that every request and answer of the integration tests matches it. [api/pacts/ipso-web-ipso-server.json](api/pacts/ipso-web-ipso-server.json) is the pact of the web app, consumer `ipso-web`. The pact-js tests of the web app write it (`npm run test:pact` in `web/`), and `ci / pact` verifies it against the handler on PostgreSQL and fails when the committed file differs ([ADR-0091](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0091-api-contract-tests-and-pact.md)).
-
-## Web app
-
-[web/](web) is the web app of the control plane: a React, Vite and TypeScript single-page app for the registry, the review queues, the waivers and the audit questions, in the ipso brand ([ADR-0106](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0106-web-app-stack-and-serving.md), [ADR-0107](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0107-brand-kit-visual-system.md), [docs/web-app.md](docs/web-app.md)). `npm run build` in `web/` writes it to `internal/webapp/dist/app`, `go build` embeds it, and `--role=api` serves it at every path that is not the API's or the sign-in's, with a content security policy that lets a page load only its own files. It signs in with the session cookie above, holds no token, and a person takes the write actions in it: answer a draft or a drafted check, record a waiver, record a supersession, clear a premise review reason, and, for an admin, change the premise allowlist and start and download the export.
-
-## Remote MCP
-
-`internal/mcpremote` serves the MCP tools over Streamable HTTP as an OAuth 2.1 resource server, with the tool contract from `ipso`'s `pkg/mcptools`. It answers MCP 2026-07-28 statelessly, publishes Protected Resource Metadata (RFC 9728), checks a signed token's issuer, audience, and expiry, and asks for separate scopes to read and to propose. At start it refuses an authorization server that does not offer PKCE with S256 and Client ID Metadata Documents, because registering a client is that server's job. Every call asks the role policy after the token's scope, so proposing needs a role that may propose. Every call writes an action log entry that names the agent's human sponsor, and a call that cannot be logged does not run. `checks.evaluate` refuses here, because code stays on the client's machine ([ADR-0006](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0006-local-first-evaluation.md)). `--role=api` mounts it when `IPSO_MCP_ISSUER` and `IPSO_MCP_RESOURCE_URL` are both set, after the same start checks as the API, with the principal of the login for the token's issuer and subject. It answers within 10 seconds and lets one tenant make 10 calls a second with a burst of 20 on each process, and the API keeps a bucket of its own. A token that names both audiences is refused by both handlers, so a token minted for one is refused by the other ([ADR-0077](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0077-remote-mcp.md), [ADR-0094](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0094-the-api-role.md)). The Compose stack leaves it off, because Dex offers no Client ID Metadata Documents.
-
-## Worker
-
-`ipso-server --role=worker` works the jobs of the control plane on River, in the registry's PostgreSQL, with no queue or workflow service of its own ([ADR-0096](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0096-river-job-runtime.md), [ADR-0097](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0097-the-worker-role.md)). `internal/worker` starts it under the checks of the api role: `internal/rls.Check` refuses a superuser, a `BYPASSRLS` role, or the owner of a table, the tenant of `IPSO_TENANT_ID` needs a row, River's tables have to exist, and the process refuses to start when `IPSO_MIGRATE_DATABASE_URL` is in its environment. It opens no listener. The chart runs `ipso-server probe`, which exits 0 when the heartbeat file the process writes is fresh ([docs/install.md](docs/install.md)). It serves one tenant, and a job that names another tenant is cancelled before it runs. A job carries the tenant id and nothing else, and a failure is stored as an operation and an SQLSTATE class, so no row content reaches `river.river_job`. Like the API connection, the worker's has to be a session connection, because River listens for notifications.
-
-The first job is `waiver_notices`. It runs every hour and once when a worker starts, is unique for its tenant while it waits or runs, and calls `registry.Notify`, which records each due 14, 3, and 0 day notice once ([ADR-0054](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0054-waivers-with-expiry.md)). Two workers, or a restart, record nothing twice. River's tables are in schema `river`, made by migrations 00015 to 00021 from River's own SQL for the pinned version, and `ipso_app` can read and write only `river_job`, `river_leader`, and `river_queue` there. A River upgrade adds a migration file, and a test fails until it does. The application role owns nothing, so River's reindexer is off, and reindexing and vacuuming `river_job` are operations work. River is MPL-2.0 and is used as an unmodified module. `ci / licenses` allows that license for River alone.
-
-The premise jobs re-check the facts a decision rests on ([ADR-0053](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0053-decision-premises.md), [ADR-0098](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0098-the-premise-sweep.md)). `premise_sweep` runs every hour and once when a worker starts. It reads the decisions in force and queues one `premise_probe` job for each premise with no evaluation, or whose latest evaluation is older than its `every` days. A probe job asks again whether the premise is still due, checks the host against the tenant allowlist, runs the probe of `ipso premise check` through `pkg/premisecheck`, and records an evaluation. A host that is not on the allowlist, an empty allowlist, a revoked host, a redirect, a private address, and any other probe error are recorded as `error` and open no reason. A `fail` opens one review reason when none is open, and a `pass` clears nothing. The worker sends no `Authorization` header and no cookie, stores the observed value and the digest of the body and never the body, and changes no decision version, so `valid_period` and the stored status stay as they were. Probes run in their own queue with four workers. A person edits the allowlist with `POST /v1/premise-hosts` and clears an open reason with `POST /v1/decisions/{decisionID}/premises/{premiseID}/clearance` ([ADR-0109](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0109-control-plane-write-routes.md)), and finds the open reasons and the allowlist with `GET /v1/premise-reasons` and `GET /v1/premise-hosts`, which show what the evaluation stored and never the body of a response ([ADR-0117](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0117-premise-reads.md)). No route runs a probe or records an evaluation or a reason.
-
-`chat_digests` runs every hour and once when a worker starts. When outbound Slack and Teams are allowed, it posts a digest of waiver notices and open premise reasons to the tenant's allow-listed webhooks and records each one after the post succeeds ([ADR-0138](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0138-slack-and-teams-notifications.md)). A community worker, or an enterprise worker with the feature denied, completes the job without a network call. The message names a decision, an offset or a premise, and a ticket reference. It does not name a person, and the job error does not carry the webhook URL.
-
-## Telemetry
-
-The api, the worker, the webhooks service and the run task service can send OpenTelemetry traces and metrics over OTLP/HTTP, with the tenant id as an attribute and no personal data ([ADR-0155](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0155-opentelemetry-over-otlp-with-an-attribute-allowlist.md)). Nothing is sent until `OTEL_EXPORTER_OTLP_ENDPOINT` is set. [docs/telemetry.md](docs/telemetry.md) lists what is sent and what never is, and `deploy/telemetry` has a Grafana dashboard for each role and a Compose overlay that runs a Collector, Prometheus, Tempo, Loki and Grafana on a laptop.
-
-## GitHub App
-
-`ipso-server webhooks` receives `pull_request` and `push` webhooks and validates the decision files of the change with the rules of `ipso check`. It reports a check run named `ipso / decisions` with an annotation on each invalid file. A delivery from an installation that no tenant owns is refused and starts nothing, so bind each installation to its tenant first with `ipso-server tenant bind-installation`. When an account uninstalls the App, the service asks GitHub whether the installation is gone and removes its binding ([ADR-0125](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0125-installation-unbind-on-uninstall.md)). At start it reads the registered App and refuses to run unless its permissions are exactly `checks:write`, `contents:read`, `metadata:read`, and `pull_requests:write`. When `IPSO_GATEWAY_CONFIG` names the configuration of the LLM gateway, a merged pull request also has its discussion read with a token limited to `pull_requests:read` and `metadata:read`, and the decision-like comments of its owners, members, and collaborators become pending proposals through the gateway, under the tenant of the installation ([ADR-0103](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0103-pr-proposals-in-the-webhooks-process.md)). Without it a merged pull request starts nothing. [docs/github-app.md](docs/github-app.md) covers registering the App and installing it in a sandbox organization.
-
-## HCP Terraform run task
-
-`ipso-server runtasks` receives run task requests from HCP Terraform or Terraform Enterprise, checks their signature, reads the plan, and evaluates it against one signed policy bundle with the rules of `ipso check plan`. A blocking violation reports `failed`, which stops the apply when the task's enforcement level is mandatory. A warning reports `passed` with an outcome that shows it. The plan stays in memory for that job, and the log holds only its hash and counts. [docs/hcp-terraform-run-task.md](docs/hcp-terraform-run-task.md) covers the bundle, the task settings, and a validation on a real workspace.
-
-## LLM gateway
-
-`internal/llmgw` is the one way ipso calls a model ([ADR-0081](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0081-llm-gateway.md)). It reads a JSON configuration of routes, each a provider and a model with its key in an `IPSO_LLM_*` environment variable. The operator's routes must be EU-resident: Mistral at `api.mistral.ai`, Amazon Bedrock in an EU region with a model id that is not a non-EU cross-region profile, or an Azure OpenAI resource in an EU region with a Standard or Data Zone deployment ([ADR-0014](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0014-eu-only-llm-routes-by-default.md)). A tenant can bring its own key (BYOK), including an OpenAI-compatible endpoint or an open-weight server on the same machine over plain http to loopback, and a route the gateway cannot place in the EU needs `allow_non_eu` on that tenant's route. Each call reserves its largest cost against the tenant's monthly token budget in `llm.usage` before anything is sent, and settles to what the provider reports. Secrets, email addresses, and the operator's own patterns are redacted from every prompt. Every prompt asks for one JSON object, so a chat completions route is asked for JSON mode; Bedrock has none, and the callers check every answer ([ADR-0087](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0087-json-mode-on-chat-routes.md)). Each pipeline bounds the tokens of its answer, and a route waits 90 seconds unless it sets `timeout_seconds`, up to 600, for a model served on CPU ([ADR-0088](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0088-answer-and-wait-bounds.md)). Routes are tried in order on a timeout, a rate limit, or a server error, and a redirect is never followed. The log holds the tenant, route, model, and token counts, never a prompt or an answer. `ipso-server webhooks` builds the gateway when `IPSO_GATEWAY_CONFIG` names the configuration file, and stops at start when the file is wrong or a route's key is missing ([ADR-0103](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0103-pr-proposals-in-the-webhooks-process.md)).
-
-## Decision proposals
-
-`internal/proposals` turns the discussion of a merged pull request into decision proposals in four stages: classify, extract, dedupe, propose. It sends only comments that read as a decision, keeps text from outsiders and text with an injection marker away from the LLM, redacts secrets before any call, puts a random canary in the system prompt, checks the answer strictly, refuses an answer that repeats the canary and a title that shares no word with its statement, drops a proposal that restates a decision in force for the repository or a pending proposal of the tenant, and stores rows that can only be `pending` ([ADR-0062](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0062-pr-decision-proposals.md), [ADR-0085](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0085-decision-extraction-pipeline.md)). `GET /v1/proposals` is the inbox, and `GET /v1/agent-proposals` lists what coding agents proposed over MCP. The control plane API mounts both. `ipso-server webhooks` runs the pipeline for a merged pull request when an LLM gateway is configured, for the tenant its installation is bound to, and a failed run is retried by redelivering the webhook, which sends the model only the comments not yet turned into proposals ([ADR-0103](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0103-pr-proposals-in-the-webhooks-process.md)).
-
-It also drafts an agent-edit check for a decision in force from edits a person wrote for it, some to deny and some to allow. The model answers with up to three candidate rules as data, the server writes the Rego of each and compiles it with `pkg/rulecheck` of ipso, the way `ipso compile` does, and the first candidate that passes every edit is proposed, after at most one repair. `proposals.check_proposal` refuses a rule that failed one, and `GET /v1/check-proposals` is its review queue ([ADR-0086](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0086-llm-drafted-agent-edit-checks.md)). `GET /v1/accepted-checks?repo=owner/name` serves the checks a person approved for the decisions in force for a repository, with the stored Rego and its digest, and holds back the Rego of a check approved for another version of its decision. It writes nothing: `ipso deliver` of the CLI reads the answer and writes the Rego and the `checks` entry into the repository ([ADR-0120](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0120-accepted-check-delivery.md)).
-
-## LLM evals
-
-`internal/evals` scores each LLM pipeline on synthetic golden datasets in `internal/evals/testdata` ([ADR-0082](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0082-go-eval-harness.md), [ADR-0164](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0164-one-case-eval-gate-and-deterministic-eval-markers.md), [ADR-0166](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0166-eval-scores-on-the-production-route.md)). `go test ./...` replays the recorded answers in `cassette.json` and fails when a score drops by more than one case below `baseline.json` or under its floor, such as the 0.8 precision and 0.6 recall that decision extraction must keep. The red-team suite runs the synthetic attacks of `redteam.json`, with benign controls, through the pull request pipeline and tracks how many the screen keeps from the model, how many benign comments it lets through, how many attacks the model resists, and whether it ever repeats the canary ([ADR-0084](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0084-prompt-injection-red-team.md)). The check suite drafts a rule for each decision of `check-decisions.json` and tracks the share proposed, which must stay at 0.9 or more, the share proposed without the repair, and the share that also passes edits the model never saw. The `evals` workflow records fresh answers through the gateway against a pinned open-weight model that llama.cpp serves on the runner, and keeps them as an artifact. The `evals-provider` workflow does the same against the route tenants use, on `main` only and with a key that no pull request can read. Each route keeps its own answers and baseline, and [docs/evals.md](docs/evals.md) shows their scores side by side and how to accept a run. `ipso-server proposals acceptance --tenant <id>` reads the share of proposals that reviewers approved, by prompt version and model and never by person.
-
-## Development
+Build and run unit and integration tests (integration tests start PostgreSQL 18 via Testcontainers and require a Docker-compatible socket):
 
 ```sh
 go build ./...
@@ -115,19 +90,17 @@ go test ./...
 go test -tags integration -count=1 ./...
 ```
 
-The web app needs Node 24. `go build` works without it and serves a sentence at `/`. To build it in:
+Build and test the embedded web app (requires Node 24; `go build` works without it and serves a placeholder at `/`):
 
 ```sh
 cd web && npm ci && npm test && npm run build
 ```
 
-The smoke test of the Compose stack runs in CI with `-tags compose`, against a running stack.
+Additional targeted suites:
 
-The full integration run includes `TestResolveP95UnderBudgetAt10kDecisions`, a timed test that can fail when the other packages load the machine. CI skips it there and runs it alone after them ([ADR-0167](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0167-resolve-latency-budget-on-an-unloaded-runner.md)). To run it the same way: `go test -tags integration -count=1 -v -run '^TestResolveP95UnderBudgetAt10kDecisions$' ./internal/registry`.
-
-The integration tests start PostgreSQL 18 with Testcontainers, so they need a Docker-compatible socket. They use synthetic rows only.
-
-The web app writes the pact with its own tests, and the Go provider test verifies it. The provider test links the Pact FFI 0.5 (`libpact_ffi`), so it needs it on the linker path. `ci / pact` installs a pinned release and runs both:
+- **Compose smoke test:** runs in CI with `-tags compose` against the running stack.
+- **Resolve latency budget (unloaded runner):** `go test -tags integration -count=1 -v -run '^TestResolveP95UnderBudgetAt10kDecisions$' ./internal/registry`
+- **Pact contract tests (requires `libpact_ffi` 0.5 on linker path):**
 
 ```sh
 (cd web && npm run test:pact)
@@ -136,10 +109,10 @@ go test -tags 'integration pact' -run TestPactProvider -count=1 ./internal/api
 
 ## License
 
-Functional Source License, Version 1.1, Apache 2.0 future license (FSL-1.1-ALv2). See [LICENSE](LICENSE).
+Functional Source License, Version 1.1, Apache 2.0 future license (FSL-1.1-ALv2). Each release converts to Apache-2.0 two years after publication. See [LICENSE](LICENSE).
 
 Copyright 2026 Luca Bertelli.
 
 ## Contributing
 
-Follow the contributor terms in [ipsofacto-io/.github](https://github.com/ipsofacto-io/.github/blob/main/CONTRIBUTING.md).
+Follow the contributor guidelines in [ipsofacto-io/.github](https://github.com/ipsofacto-io/.github/blob/main/CONTRIBUTING.md).
