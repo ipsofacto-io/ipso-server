@@ -65,10 +65,20 @@ WHERE tenant_id = ipso.current_tenant()
 
 	// decisionsInForce reads the decisions that name one of the given scopes, valid at V as
 	// known at T. A decision is returned once, at its highest version.
+	//
+	// The overlap operator is not leakproof, so under row-level security no index on scope_refs is a
+	// legal access path for ipso_app, and a read by overlap alone scans every row of the tenant.
+	// decision_scope_ref holds one row for each scope that any version of a decision has named, and
+	// equality on a uuid is leakproof, so the lookup finds the candidate decisions through a btree
+	// and the version rows are reached by decision id (ADR-0168). The overlap test stays: a lookup
+	// row for a scope that a later version dropped costs one read and never adds a decision.
 	decisionsInForce = `
 SELECT DISTINCT ON (d.decision_id) d.decision_id, d.version, d.body
 FROM registry.decision_version_all d
-WHERE d.scope_refs && $1::uuid[]
+WHERE d.decision_id IN (
+        SELECT r.decision_id FROM registry.decision_scope_ref r
+        WHERE r.tenant_id = ipso.current_tenant() AND r.scope_id = ANY($1::uuid[]))
+  AND d.scope_refs && $1::uuid[]
   AND d.valid_period @> $2::timestamptz
   AND d.sys_period @> $3::timestamptz
   AND d.tenant_id = ipso.current_tenant()
@@ -79,7 +89,10 @@ ORDER BY d.decision_id, d.version DESC`
 	decisionsInForceForScopes = `
 SELECT DISTINCT ON (d.decision_id) d.decision_id, d.version, d.body, d.scope_refs::text
 FROM registry.decision_version_all d
-WHERE d.scope_refs && $1::uuid[]
+WHERE d.decision_id IN (
+        SELECT r.decision_id FROM registry.decision_scope_ref r
+        WHERE r.tenant_id = ipso.current_tenant() AND r.scope_id = ANY($1::uuid[]))
+  AND d.scope_refs && $1::uuid[]
   AND d.valid_period @> $2::timestamptz
   AND d.sys_period @> $3::timestamptz
   AND d.tenant_id = ipso.current_tenant()
