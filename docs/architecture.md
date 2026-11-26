@@ -40,6 +40,7 @@ Overview of the internal packages, security boundaries, background jobs, and ADR
 - **Jobs:**
   - `waiver_notices`: hourly + startup, deduplicated per tenant, writes due 14/3/0-day waiver expiry notices ([ADR-0054](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0054-waivers-with-expiry.md)).
   - `premise_sweep` / `premise_probe`: hourly + startup, queues due probes (4 probe workers) via `pkg/premisecheck` against tenant-allowlisted hosts only; never sends auth/cookies, never stores response bodies, never mutates decision versions, and opens review reasons on `fail` ([ADR-0053](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0053-decision-premises.md), [ADR-0098](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0098-the-premise-sweep.md)).
+  - `tenant_export_sweep` / `tenant_export`: runs every minute to pick up queued tenant export requests and build encrypted export bundles ([ADR-0111](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0111-tenant-export-download-from-the-web-app.md)).
   - `chat_digests`: hourly + startup, posts waiver and premise digests to allowlisted Slack/Teams webhooks when licensed (no-op in community builds; never names people or logs webhook URLs) ([ADR-0138](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0138-slack-and-teams-notifications.md)).
 
 ## Webhooks and Terraform run tasks

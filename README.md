@@ -23,7 +23,7 @@ docker compose up --build
 | Command | Role / purpose |
 | --- | --- |
 | `ipso-server --role=api` | Serves the control-plane HTTP API ([OpenAPI 3.1](api/openapi.yaml)), embedded web app, browser OIDC login, and optional remote MCP server |
-| `ipso-server --role=worker` | Runs background jobs on PostgreSQL via River: hourly waiver expiry notices, premise probes, and Slack/Teams digests |
+| `ipso-server --role=worker` | Runs background jobs on PostgreSQL via River: hourly waiver expiry notices, premise probes, tenant export sweeps/exports, and Slack/Teams digests |
 | `ipso-server migrate` | Applies embedded goose PostgreSQL 18 migrations using `IPSO_MIGRATE_DATABASE_URL` |
 | `ipso-server webhooks` | Handles GitHub App `pull_request` and `push` checks (`ipso / decisions`) and optional LLM decision extraction on merged PRs |
 | `ipso-server runtasks` | Evaluates HCP Terraform / Terraform Enterprise run tasks against a signed policy bundle |
@@ -42,9 +42,9 @@ docker compose up --build
 - **EU-first LLM gateway and evals:** Optional proposal extraction from merged PR discussions and agent-edit check drafting behind an EU-resident default LLM gateway with secret redaction, monthly token budgets, prompt-injection screening, and golden/red-team eval suites ([docs/evals.md](docs/evals.md)).
 - **OpenTelemetry:** Optional OTLP/HTTP traces and metrics (enabled only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set) with strict attribute allowlists and Grafana dashboards in `deploy/telemetry` ([docs/telemetry.md](docs/telemetry.md)).
 
-See [docs/architecture.md](docs/architecture.md) for the full internal package guide and ADR map.
+See [docs/architecture.md](docs/architecture.md) for the component architecture, security invariants, and ADR map.
 
-## Database prerequisites
+## Database schema
 
 `ipso-server` requires PostgreSQL 18 with strict role separation and forced row-level security (no superuser, no `BYPASSRLS`, no transaction-mode pooler):
 
