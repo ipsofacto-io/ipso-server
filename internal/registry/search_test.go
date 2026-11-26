@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -68,7 +69,10 @@ func TestSearchTermsTokenizesAndBoundsPrefixes(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := searchTerms(tc.q)
+			got, err := searchTerms(tc.q)
+			if err != nil {
+				t.Fatalf("searchTerms(%q) unexpected error: %v", tc.q, err)
+			}
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("searchTerms(%q) = %+v, want %+v", tc.q, got, tc.want)
 			}
@@ -84,20 +88,30 @@ func TestSearchTermsTokenizesAndBoundsPrefixes(t *testing.T) {
 	}
 }
 
-func TestSearchTermsCapsLengthAndCount(t *testing.T) {
+func TestSearchTermsCapsLengthAndRejectsTooManyTerms(t *testing.T) {
 	longTok := strings.Repeat("a", 200)
-	got := searchTerms(longTok)
+	got, err := searchTerms(longTok)
+	if err != nil {
+		t.Fatalf("unexpected error on long token: %v", err)
+	}
 	if len(got) != 1 || utf8.RuneCountInString(got[0].lo) != maxSearchTermRunes {
 		t.Fatalf("expected single %d-rune term, got %+v", maxSearchTermRunes, got)
 	}
 
-	var many []string
-	for i := range 30 {
-		many = append(many, string(rune('a'+i%26))+strings.Repeat("x", i+1))
+	var exact []string
+	for i := range maxSearchTerms {
+		exact = append(exact, string(rune('a'+i%26))+strings.Repeat("x", i+1))
 	}
-	gotMany := searchTerms(strings.Join(many, " "))
-	if len(gotMany) != maxSearchTerms {
-		t.Fatalf("got %d terms, want cap %d", len(gotMany), maxSearchTerms)
+	// Repeating already-seen tokens does not exceed the distinct-term limit.
+	exactWithDup := append(exact, exact[0])
+	gotExact, err := searchTerms(strings.Join(exactWithDup, " "))
+	if err != nil || len(gotExact) != maxSearchTerms {
+		t.Fatalf("exact cap with duplicate: got (%d, %v), want (%d, nil)", len(gotExact), err, maxSearchTerms)
+	}
+
+	tooMany := append(exact, "overflowtoken")
+	if _, err := searchTerms(strings.Join(tooMany, " ")); !errors.Is(err, ErrInvalidQuery) {
+		t.Fatalf("expected ErrInvalidQuery when exceeding %d terms, got %v", maxSearchTerms, err)
 	}
 }
 

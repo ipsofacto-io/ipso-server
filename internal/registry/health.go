@@ -482,7 +482,11 @@ func ListDecisionHealth(ctx context.Context, db *sql.DB, tenant uuid.UUID, f Hea
 
 	var terms []termRange
 	if q != "" {
-		terms = searchTerms(q)
+		var err error
+		terms, err = searchTerms(q)
+		if err != nil {
+			return nil, err
+		}
 		if len(terms) == 0 {
 			return []mcptools.DecisionHealth{}, nil
 		}

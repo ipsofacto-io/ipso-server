@@ -185,9 +185,9 @@ func TestKeywordReadUsesTheSearchTermIndexUnderRowLevelSecurity(t *testing.T) {
 		}
 
 		for _, tc := range queries {
-			terms := searchTerms(tc.q)
-			if len(terms) == 0 {
-				t.Fatalf("%s: empty terms", tc.name)
+			terms, err := searchTerms(tc.q)
+			if err != nil || len(terms) == 0 {
+				t.Fatalf("%s: terms=%v err=%v", tc.name, terms, err)
 			}
 
 			searchStmt, searchArgs := searchDecisionsQuery(terms, valid, known, nil, 50)
@@ -233,7 +233,11 @@ func TestKeywordReadUsesTheSearchTermIndexUnderRowLevelSecurity(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		stmt, args := searchDecisionsQuery(searchTerms("fire"), valid, known, nil, 50)
+		fireTerms, err := searchTerms("fire")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stmt, args := searchDecisionsQuery(fireTerms, valid, known, nil, 50)
 		plan, _, _, err = explainAnalyzeBuffers(ctx, tx, stmt, args...)
 		if err != nil {
 			t.Fatal(err)

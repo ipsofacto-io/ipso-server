@@ -131,13 +131,16 @@ func SearchDecisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, q string
 	if err := checkList(tenant, page, validAt, knownAt); err != nil {
 		return nil, err
 	}
-	terms := searchTerms(q)
+	terms, err := searchTerms(q)
+	if err != nil {
+		return nil, err
+	}
 	if len(terms) == 0 {
 		return []Decision{}, nil
 	}
 	stmt, args := searchDecisionsQuery(terms, validAt, knownAt, page.before(), page.Limit)
 	decisions := []Decision{}
-	err := readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
+	err = readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, stmt, args...)
 		if err != nil {
 			return fmt.Errorf("search decisions: %w", err)

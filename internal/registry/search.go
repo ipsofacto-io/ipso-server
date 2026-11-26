@@ -23,15 +23,19 @@ type termRange struct {
 }
 
 // searchTerms extracts distinct lowercase searchable tokens from q and returns their exact UTF-8
-// prefix bounds for COLLATE "C" btree range scans (ADR-0169). Punctuation-only input returns nil.
-func searchTerms(q string) []termRange {
+// prefix bounds for COLLATE "C" btree range scans (ADR-0169). Punctuation-only input returns nil, nil.
+// Internal '-' and '.' are kept to match PostgreSQL's simple parser on hyphenated slugs, hosts,
+// IPs, and version numbers (for example deny-egress, vault.internal, 0.0.0.0, 1.3). Queries with
+// more than maxSearchTerms distinct tokens return ErrInvalidQuery rather than silently dropping terms.
+func searchTerms(q string) ([]termRange, error) {
 	q = strings.ToLower(strings.TrimSpace(q))
 	if q == "" {
-		return nil
+		return nil, nil
 	}
 	var out []termRange
 	seen := make(map[string]struct{})
 	var cur []rune
+	var overflow bool
 	flush := func() {
 		if len(cur) == 0 {
 			return
@@ -49,6 +53,7 @@ func searchTerms(q string) []termRange {
 			return
 		}
 		if len(out) >= maxSearchTerms {
+			overflow = true
 			return
 		}
 		seen[tok] = struct{}{}
@@ -60,9 +65,15 @@ func searchTerms(q string) []termRange {
 			continue
 		}
 		flush()
+		if overflow {
+			return nil, fmt.Errorf("%w: query exceeds %d search terms", ErrInvalidQuery, maxSearchTerms)
+		}
 	}
 	flush()
-	return out
+	if overflow {
+		return nil, fmt.Errorf("%w: query exceeds %d search terms", ErrInvalidQuery, maxSearchTerms)
+	}
+	return out, nil
 }
 
 // nextUTF8Prefix returns the smallest valid UTF-8 string strictly greater than every string with
