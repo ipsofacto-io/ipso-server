@@ -170,6 +170,24 @@ type shownDecision struct {
 	Statement string `json:"statement"`
 }
 
+// endWords are the words, beyond the change words of ADR-0085, that a proposal uses to say that an old
+// choice ends: the relation prompt names a choice "withdrawn", and the others say the same of a system.
+var endWords = map[string]bool{
+	"withdraw": true, "withdraws": true, "withdrawn": true, "withdrew": true, "shut": true, "shuts": true,
+	"decommission": true, "decommissions": true, "decommissioned": true, "discontinue": true,
+	"discontinues": true, "discontinued": true, "sunset": true, "sunsets": true,
+}
+
+// saysTheOldChoiceEnds reports whether text holds a change word of ADR-0085 or one of endWords.
+func saysTheOldChoiceEnds(text string) bool {
+	for _, word := range subjectWords(text) {
+		if changeWords[word] || endWords[word] {
+			return true
+		}
+	}
+	return false
+}
+
 // Relate asks the model how the proposal relates to each candidate. Each candidate goes under a ref of
 // this call, d1 to d5, and the answer must hold one of four words for each ref and nothing else. The
 // answer is checked here whatever schema the route applied: a ref that was not sent, a missing ref, a
@@ -177,11 +195,10 @@ type shownDecision struct {
 // candidates the caller passed, through the refs, so no answer can point at another decision. The
 // model writes no text that is kept. There is no repair round.
 //
-// A supersedes answer is kept only when the proposal, as the model read it, holds a change word of
-// ADR-0085 (replace, retire, remove, move, stop, no, and the others of changeWords), because a
-// proposal supersedes a decision only when it says, in its own words, that the old choice ends.
-// Without one the answer is dropped, so an injected order or a plain contradiction cannot make the
-// model name a decision as replaced (ADR-0172).
+// A supersedes answer is kept only when the proposal, as the model read it, says that an old choice
+// ends (saysTheOldChoiceEnds), because a proposal supersedes a decision only when it says so in its
+// own words. Without such a word the answer is dropped, so an injected order or a plain
+// contradiction cannot make the model name a decision as replaced (ADR-0172).
 func Relate(ctx context.Context, complete SchemaCompleteFunc, title, statement string, candidates []DecisionInForce) (Annotation, error) {
 	if strings.TrimSpace(title) == "" {
 		return Annotation{}, fmt.Errorf("%w: the proposal has no title", ErrRelationRequest)
@@ -222,7 +239,7 @@ func Relate(ctx context.Context, complete SchemaCompleteFunc, title, statement s
 		return Annotation{}, fmt.Errorf("%w: it names no model", ErrRelationAnswer)
 	}
 	annotation := Annotation{Model: answer.Model, PromptVersion: relationPromptVersion}
-	saysItEnds := subjectOf(truncate(Redact(title), maxRelationTitleRunes) + " " + truncate(Redact(statement), maxProposalStatementRunes)).changes
+	saysItEnds := saysTheOldChoiceEnds(truncate(Redact(title), maxRelationTitleRunes) + " " + truncate(Redact(statement), maxProposalStatementRunes))
 	for i, ref := range refs {
 		word := words[ref]
 		if word == string(RelationSupersedes) && !saysItEnds {
