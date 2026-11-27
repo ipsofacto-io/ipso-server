@@ -22,7 +22,7 @@ import (
 
 const (
 	// AdvisoryPromptVersion names the prompt an advisory verdict was made with (ADR-0173).
-	AdvisoryPromptVersion = "pr-advisory-v1"
+	AdvisoryPromptVersion = "pr-advisory-v2"
 	// maxAdvisoryTokens bounds an answer of three keys, ten hunk numbers and a reason of 300 runes.
 	maxAdvisoryTokens = 256
 	// MaxAdvisoryHunks is the most hunks one check sends. A check that would send more is skipped.
@@ -39,7 +39,7 @@ const (
 	maxModelIDBytes = 200
 )
 
-//go:embed prompts/pr-advisory-v1.txt
+//go:embed prompts/pr-advisory-v2.txt
 var advisoryPrompt string
 
 var (
@@ -321,22 +321,12 @@ func Advise(ctx context.Context, complete SchemaCompleteFunc, prepared PreparedA
 }
 
 // advisorySchema uses only type, enum, items, required and additionalProperties, which every route applies.
-var advisorySchema = func() json.RawMessage {
-	schema, err := json.Marshal(map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"assessment": map[string]any{"type": "string", "enum": []string{verification.Complies, verification.Deviates, verification.Unclear}},
-			"hunks":      map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
-			"reason":     map[string]any{"type": "string"},
-		},
-		"required":             []string{"assessment", "hunks", "reason"},
-		"additionalProperties": false,
-	})
-	if err != nil {
-		panic(err)
-	}
-	return schema
-}()
+// Its properties are in the order the prompt asks the model to write them: a model that writes the
+// assessment first decides before it has said why, and its reason then contradicts it. The text is written
+// out because a Go map would put the keys in alphabetical order.
+var advisorySchema = json.RawMessage(fmt.Sprintf(
+	`{"type":"object","properties":{"reason":{"type":"string"},"assessment":{"type":"string","enum":[%q,%q,%q]},"hunks":{"type":"array","items":{"type":"integer"}}},"required":["reason","assessment","hunks"],"additionalProperties":false}`,
+	verification.Complies, verification.Deviates, verification.Unclear))
 
 type advisoryParsed struct {
 	assessment string

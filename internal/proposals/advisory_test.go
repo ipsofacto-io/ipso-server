@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -334,5 +335,43 @@ func TestAdviseRefusesMoreThanTenPlaces(t *testing.T) {
 func TestTheAdvisoryPromptHoldsNoDash(t *testing.T) {
 	if strings.ContainsAny(advisoryPrompt, "\u2014\u2013") {
 		t.Fatal("the prompt holds an em or en dash")
+	}
+}
+
+// The schema asks for the reason before the assessment, the prompt shows the same order, and the example of
+// the prompt is an answer the parser accepts.
+func TestTheAdvisorySchemaAndPromptAskForTheReasonFirst(t *testing.T) {
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+		Required   []string                   `json:"required"`
+	}
+	if err := json.Unmarshal(advisorySchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	order := []string{"reason", "assessment", "hunks"}
+	if !slices.Equal(schema.Required, order) || len(schema.Properties) != len(order) {
+		t.Fatalf("required %v, %d properties", schema.Required, len(schema.Properties))
+	}
+	last := -1
+	for _, key := range order {
+		at := strings.Index(string(advisorySchema), `"`+key+`":{`)
+		if at <= last {
+			t.Fatalf("the schema does not list %s after the key before it: %s", key, advisorySchema)
+		}
+		last = at
+	}
+	example := advisoryPrompt[strings.Index(advisoryPrompt, `{"reason"`):]
+	example = strings.TrimSpace(example)
+	last = -1
+	for _, key := range order {
+		at := strings.Index(example, `"`+key+`"`)
+		if at <= last {
+			t.Fatalf("the example does not write %s after the key before it: %s", key, example)
+		}
+		last = at
+	}
+	parsed, err := parseAdvisory(example, 2)
+	if err != nil || parsed.assessment != verification.Deviates || !slices.Equal(parsed.hunks, []int{2}) {
+		t.Fatalf("%+v, %v", parsed, err)
 	}
 }
