@@ -41,6 +41,8 @@ const VERDICT_WAIVED = 'tenant A holds a verdict that a recorded waiver covers';
 // A merged commit whose failing verdict a waiver recorded for its decision covers, read on audit question Q3 (ADR-0124).
 const MERGED_COMMIT = 'tenant A holds a merged commit whose verdict a recorded waiver covers';
 const VIEWER = 'the session belongs to a viewer of tenant A';
+// The relation hints a model wrote about the proposals and the decisions in force (IPSO-159, ADR-0172).
+const ANNOTATED = 'tenant A holds proposals that a model related to decisions in force';
 // The states of the writes (ADR-0110). A write changes what the provider holds, so each of these states seeds
 // its own rows when it is set up and hands their ids back, and the interaction names them with
 // fromProviderState. The session is one of a person who may take the action: an approver or a decision owner.
@@ -345,6 +347,78 @@ describe('the web app and the control plane API', () => {
       },
       async (calls) => {
         expect((await calls.listAgentProposals({ limit: 25 })).agent_proposals).toHaveLength(1);
+      },
+    );
+  });
+
+  // A hint names a decision the server sent the model, by id, and one of three relations; it never changes the proposal.
+  const relations = {
+    model_id: like('relation-model'),
+    prompt_version: like('proposal-relation-v1'),
+    decisions: eachLike({
+      decision_id: uuid(),
+      decision_version: integer(1),
+      title: like('Use TLS'),
+      relation: regex('^(duplicates|supersedes|conflicts)$', 'supersedes'),
+    }),
+  };
+
+  it('lists a proposal from a pull request with the relations a model found', async () => {
+    await interact(
+      {
+        description: 'a request for the proposals from pull requests, one of them related to a decision in force',
+        state: ANNOTATED,
+        path: '/v1/proposals',
+        query: { limit: '25' },
+        status: 200,
+        body: {
+          proposals: arrayContaining({
+            id: uuid(),
+            kind: 'decision',
+            origin: 'llm',
+            status: 'pending',
+            trust_level: 'untrusted',
+            payload: like({ title: 'Use Postgres' }),
+            confidence: like(0.8),
+            model_id: like('m'),
+            prompt_version: like('p'),
+            repo: like('acme/api'),
+            pr_number: integer(8),
+            source_url: regex('^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+(#[A-Za-z0-9_-]+)?$', 'https://github.com/acme/api/pull/8'),
+            captured_at: timestamp(KNOWN),
+            relations,
+          }),
+        },
+      },
+      async (calls) => {
+        const related = (await calls.listProposals({ limit: 25 })).proposals.find((proposal) => proposal.relations);
+        expect(related?.relations?.decisions[0]?.relation).toBe('supersedes');
+      },
+    );
+  });
+
+  it('lists a proposal from a coding agent with the relations a model found', async () => {
+    await interact(
+      {
+        description: 'a request for the proposals from coding agents, one of them related to a decision in force',
+        state: ANNOTATED,
+        path: '/v1/agent-proposals',
+        query: { limit: '25' },
+        status: 200,
+        body: {
+          agent_proposals: arrayContaining({
+            id: uuid(),
+            principal_id: uuid(),
+            status: 'pending',
+            payload: like({ title: 'Require TLS 1.3' }),
+            captured_at: timestamp(KNOWN),
+            relations,
+          }),
+        },
+      },
+      async (calls) => {
+        const related = (await calls.listAgentProposals({ limit: 25 })).agent_proposals.find((proposal) => proposal.relations);
+        expect(related?.relations?.decisions[0]?.decision_version).toBe(1);
       },
     );
   });

@@ -148,6 +148,22 @@ func checkInboxLabel(t *testing.T, path string) {
 	if strings.Contains(agent, "ModelLabel") || strings.Contains(agent, "model_id") || strings.Contains(agent, "AI-generated") {
 		t.Errorf("a coding-agent proposal has no model id and must not carry the model label")
 	}
+	// A relation hint is model output about any proposal, an agent's included, so it carries its own label and says it
+	// changes nothing, and its link names the decision by the id the server stored (ADR-0152 decision 5, ADR-0172).
+	relations := functionSource(t, src, "Relations")
+	const hint = "A model compared this proposal with the decisions in force. The hint changes nothing: a person decides."
+	if !strings.Contains(relations, "<ModelLabel") || !strings.Contains(relations, "model_id") || !strings.Contains(relations, "prompt_version") ||
+		(!strings.Contains(relations, hint) && !strings.Contains(src, "const relationAdvisory = '"+hint+"'")) {
+		t.Errorf("Relations must label the hint with the model id and the prompt version and say it changes nothing")
+	}
+	if !strings.Contains(relations, "decisionPath(hint.decision_id)") {
+		t.Errorf("Relations must link a decision by its id")
+	}
+	for _, name := range []string{"PullRequest", "FromAgent"} {
+		if !strings.Contains(functionSource(t, src, name), "<Relations") {
+			t.Errorf("%s must show the relation hints", name)
+		}
+	}
 }
 
 func checkModelLabelComponent(t *testing.T, path string) {

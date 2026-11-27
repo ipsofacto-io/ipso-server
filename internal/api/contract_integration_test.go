@@ -202,13 +202,25 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 			}
 		}},
 		{"list_proposals", http.MethodGet, "/v1/proposals?limit=10", nil, func(t *testing.T, a map[string]any) {
-			if len(list(a, "proposals")) != 1 {
-				t.Errorf("%v", a)
+			proposals := list(a, "proposals")
+			if len(proposals) != 1 {
+				t.Fatalf("%v", a)
+			}
+			relations, _ := proposals[0].(map[string]any)["relations"].(map[string]any)
+			if hints := list(relations, "decisions"); len(hints) != 2 || hints[0].(map[string]any)["relation"] != "supersedes" ||
+				hints[0].(map[string]any)["decision_id"] != f.tls.String() || relations["model_id"] != "relation-model" {
+				t.Errorf("relations %v", relations)
 			}
 		}},
 		{"list_agent_proposals", http.MethodGet, "/v1/agent-proposals", nil, func(t *testing.T, a map[string]any) {
-			if len(list(a, "agent_proposals")) != 1 {
-				t.Errorf("%v", a)
+			proposals := list(a, "agent_proposals")
+			if len(proposals) != 1 {
+				t.Fatalf("%v", a)
+			}
+			relations, _ := proposals[0].(map[string]any)["relations"].(map[string]any)
+			if hints := list(relations, "decisions"); len(hints) != 1 || hints[0].(map[string]any)["relation"] != "duplicates" ||
+				relations["prompt_version"] != "proposal-relation-v1" {
+				t.Errorf("relations %v", relations)
 			}
 		}},
 		{"list_check_proposals", http.MethodGet, "/v1/check-proposals", nil, func(t *testing.T, a map[string]any) {
@@ -383,6 +395,11 @@ func TestATenantReadsOnlyItsOwnRows(t *testing.T) {
 		if tc.key != "scopes" && len(list(answerOf(t, w), tc.key)) != 0 {
 			t.Fatalf("%s: %s", tc.target, w.Body.String())
 		}
+	}
+	// Tenant B's own proposal carries none of the relations a model found for tenant A's (ADR-0172).
+	w = c.exchange(t, handler, http.MethodGet, "/v1/proposals", token, "", nil)
+	if p := list(answerOf(t, w), "proposals"); len(p) != 1 || p[0].(map[string]any)["id"] == f.proposal.String() || p[0].(map[string]any)["relations"] != nil {
+		t.Fatalf("tenant B proposals: %s", w.Body.String())
 	}
 }
 

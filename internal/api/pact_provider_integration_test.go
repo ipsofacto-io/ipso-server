@@ -51,6 +51,11 @@ const stateVerdictWaived = "tenant A holds a verdict that a recorded waiver cove
 // stateVerdictWaived seeds another and two decisions that hold one EDR id are ambiguous.
 const stateMergedCommit = "tenant A holds a merged commit whose verdict a recorded waiver covers"
 
+// stateAnnotated is the provider state of the relation hints (IPSO-159, ADR-0172): tenant A holds a pull request
+// proposal and an agent proposal that a model related to the decision use-tls. Each interaction seeds its own pair, so
+// the newest proposals of the queues carry relations whatever drafts the writes left.
+const stateAnnotated = "tenant A holds proposals that a model related to decisions in force"
+
 // stateViewer is the provider state of a refusal by the role policy: the session is a viewer's, and a
 // viewer may not read the audit routes (ADR-0108).
 const stateViewer = "the session belongs to a viewer of tenant A"
@@ -393,6 +398,30 @@ func TestPactProviderIpsoServer(t *testing.T) {
 		}
 		return models.ProviderStateResponse{"proposalId": proposal.String(), "agentProposalId": agent.String(), "scopeId": f.org.String()}, nil
 	}
+	annotated := func(ctx context.Context, n int64) (models.ProviderStateResponse, error) {
+		proposal, err := f.seedProposal(ctx, n)
+		if err != nil {
+			return nil, err
+		}
+		var agent uuid.UUID
+		if err := pgtest.Scan(ctx, f.db, tenantA.String(),
+			`INSERT INTO proposals.agent_proposal (tenant_id, principal_id, payload) VALUES ($1, $2, '{"title":"Require TLS 1.3"}') RETURNING id`,
+			[]any{tenantA, f.callers[agentA].Principal}, &agent); err != nil {
+			return nil, fmt.Errorf("seed an agent proposal: %w", err)
+		}
+		for column, id := range map[string]uuid.UUID{"proposal_id": proposal, "agent_proposal_id": agent} {
+			if _, err := pgtest.Exec(ctx, f.db, tenantA.String(), `
+				WITH annotation AS (
+					INSERT INTO proposals.relation_annotation (tenant_id, `+column+`, model_id, prompt_version)
+					VALUES ($1, $2, 'relation-model', 'proposal-relation-v1') RETURNING tenant_id, id
+				)
+				INSERT INTO proposals.relation_hint (tenant_id, annotation_id, decision_id, decision_version, title, relation)
+				SELECT tenant_id, id, $3, 1, 'Use TLS', 'supersedes' FROM annotation`, tenantA, id, f.tls); err != nil {
+				return nil, fmt.Errorf("annotate a proposal: %w", err)
+			}
+		}
+		return nil, nil
+	}
 	answered := func(ctx context.Context, n int64) (models.ProviderStateResponse, error) {
 		proposal, err := f.seedProposal(ctx, n)
 		if err != nil {
@@ -513,6 +542,7 @@ func TestPactProviderIpsoServer(t *testing.T) {
 			stateVerdictWaived:     seeds(personA, verdictWaived),
 			stateMergedCommit:      seeds(personA, mergedCommit),
 			stateViewer:            as(viewerA),
+			stateAnnotated:         seeds(personA, annotated),
 			stateUnanswered:        seeds(approverA, unanswered),
 			stateAnswered:          seeds(approverA, answered),
 			stateToWaive:           seeds(approverA, toWaive),

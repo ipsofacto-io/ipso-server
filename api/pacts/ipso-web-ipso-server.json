@@ -2911,6 +2911,207 @@
       "type": "Synchronous/HTTP"
     },
     {
+      "description": "a request for the proposals from coding agents, one of them related to a decision in force",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds proposals that a model related to decisions in force"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/agent-proposals",
+        "query": {
+          "limit": [
+            "25"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "agent_proposals": [
+              {
+                "captured_at": "2026-11-01T00:00:00Z",
+                "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "payload": {
+                  "title": "Require TLS 1.3"
+                },
+                "principal_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "relations": {
+                  "decisions": [
+                    {
+                      "decision_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                      "decision_version": 1,
+                      "relation": "supersedes",
+                      "title": "Use TLS"
+                    }
+                  ],
+                  "model_id": "relation-model",
+                  "prompt_version": "proposal-relation-v1"
+                },
+                "status": "pending"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.agent_proposals": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "arrayContains",
+                  "variants": [
+                    {
+                      "generators": {
+                        "$.id": {
+                          "type": "Uuid"
+                        },
+                        "$.principal_id": {
+                          "type": "Uuid"
+                        },
+                        "$.relations.decisions[*].decision_id": {
+                          "type": "Uuid"
+                        }
+                      },
+                      "index": 0,
+                      "rules": {
+                        "$.captured_at": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                            }
+                          ]
+                        },
+                        "$.id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                            }
+                          ]
+                        },
+                        "$.payload": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.principal_id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                            }
+                          ]
+                        },
+                        "$.relations.decisions": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type",
+                              "min": 1
+                            }
+                          ]
+                        },
+                        "$.relations.decisions[*].decision_id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                            }
+                          ]
+                        },
+                        "$.relations.decisions[*].decision_version": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "integer"
+                            }
+                          ]
+                        },
+                        "$.relations.decisions[*].relation": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "^(duplicates|supersedes|conflicts)$"
+                            }
+                          ]
+                        },
+                        "$.relations.decisions[*].title": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.relations.model_id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.relations.prompt_version": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
       "description": "a request for the proposals from pull requests",
       "pending": false,
       "providerStates": [
@@ -3069,6 +3270,252 @@
                 {
                   "match": "regex",
                   "regex": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+(#[A-Za-z0-9_-]+)?$"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the proposals from pull requests, one of them related to a decision in force",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds proposals that a model related to decisions in force"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/proposals",
+        "query": {
+          "limit": [
+            "25"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "proposals": [
+              {
+                "captured_at": "2026-11-01T00:00:00Z",
+                "confidence": 0.8,
+                "id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                "kind": "decision",
+                "model_id": "m",
+                "origin": "llm",
+                "payload": {
+                  "title": "Use Postgres"
+                },
+                "pr_number": 8,
+                "prompt_version": "p",
+                "relations": {
+                  "decisions": [
+                    {
+                      "decision_id": "e2490de5-5bd3-43d5-b7c4-526e33f71304",
+                      "decision_version": 1,
+                      "relation": "supersedes",
+                      "title": "Use TLS"
+                    }
+                  ],
+                  "model_id": "relation-model",
+                  "prompt_version": "proposal-relation-v1"
+                },
+                "repo": "acme/api",
+                "source_url": "https://github.com/acme/api/pull/8",
+                "status": "pending",
+                "trust_level": "untrusted"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.proposals": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "arrayContains",
+                  "variants": [
+                    {
+                      "generators": {
+                        "$.id": {
+                          "type": "Uuid"
+                        },
+                        "$.relations.decisions[*].decision_id": {
+                          "type": "Uuid"
+                        }
+                      },
+                      "index": 0,
+                      "rules": {
+                        "$.captured_at": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                            }
+                          ]
+                        },
+                        "$.confidence": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                            }
+                          ]
+                        },
+                        "$.model_id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.payload": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.pr_number": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "integer"
+                            }
+                          ]
+                        },
+                        "$.prompt_version": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.relations.decisions": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type",
+                              "min": 1
+                            }
+                          ]
+                        },
+                        "$.relations.decisions[*].decision_id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                            }
+                          ]
+                        },
+                        "$.relations.decisions[*].decision_version": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "integer"
+                            }
+                          ]
+                        },
+                        "$.relations.decisions[*].relation": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "^(duplicates|supersedes|conflicts)$"
+                            }
+                          ]
+                        },
+                        "$.relations.decisions[*].title": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.relations.model_id": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.relations.prompt_version": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.repo": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "type"
+                            }
+                          ]
+                        },
+                        "$.source_url": {
+                          "combine": "AND",
+                          "matchers": [
+                            {
+                              "match": "regex",
+                              "regex": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+(#[A-Za-z0-9_-]+)?$"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
                 }
               ]
             }

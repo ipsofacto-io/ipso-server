@@ -28,8 +28,10 @@ const (
 
 // Process runs one merged pull request end to end for one tenant. The tenant must be the one that
 // installed the App, because Process trusts it. A comment already turned into a proposal at the
-// same bytes is not sent again, so a redelivered webhook spends nothing.
-func Process(ctx context.Context, db *sql.DB, complete CompleteFunc, canWrite WriteAccess, tenant uuid.UUID, repo string, number int, comments []integrations.Comment) (int, Stats, error) {
+// same bytes is not sent again, so a redelivered webhook spends nothing. When relate is not nil, each
+// new proposal is then compared with the decisions in force for the repository, and what the model
+// found is stored beside it (ADR-0172). That step never fails Process and never changes a proposal.
+func Process(ctx context.Context, db *sql.DB, complete CompleteFunc, relate SchemaCompleteFunc, canWrite WriteAccess, tenant uuid.UUID, repo string, number int, comments []integrations.Comment) (int, Stats, error) {
 	if tenant == uuid.Nil {
 		return 0, Stats{}, errors.New("no tenant")
 	}
@@ -43,13 +45,19 @@ func Process(ctx context.Context, db *sql.DB, complete CompleteFunc, canWrite Wr
 	if err != nil || len(found) == 0 {
 		return 0, stats, err
 	}
-	decided, err := knownDecisions(ctx, db, tenant, repo)
+	decided, decisions, err := knownDecisions(ctx, db, tenant, repo)
 	if err != nil {
 		return 0, stats, err
 	}
 	found, stats.Duplicates = Dedupe(found, decided)
 	created, err := insert(ctx, db, tenant, found)
-	return created, stats, err
+	if err != nil {
+		return 0, stats, err
+	}
+	if relate != nil && len(created) > 0 {
+		stats.Related = annotate(ctx, db, relate, tenant, QueueProposals, created, InForce(decisions))
+	}
+	return len(created), stats, nil
 }
 
 // OnMerged returns the hook the webhooks service runs for a merged pull request (ADR-0103). It reads the
@@ -66,24 +74,26 @@ func OnMerged(db *sql.DB, gateway *llmgw.Gateway, log *slog.Logger) func(context
 		if err != nil {
 			return err
 		}
-		created, stats, err := Process(ctx, db, gateway.For(pr.Tenant), pr.Client.CanWrite, pr.Tenant, pr.Repo, pr.Number, comments)
+		created, stats, err := Process(ctx, db, gateway.For(pr.Tenant), SchemaCompleteFunc(gateway.ForSchema(pr.Tenant)), pr.Client.CanWrite, pr.Tenant, pr.Repo, pr.Number, comments)
 		if err != nil {
 			return err
 		}
 		log.InfoContext(ctx, "pull request discussion processed", "tenant", pr.Tenant.String(), "repository_id", pr.RepositoryID, "pull_request", pr.Number,
 			"created", created, "comments", stats.Comments, "untrusted", stats.Untrusted, "flagged", stats.Flagged,
-			"sent", stats.Sent, "refused", stats.Refused, "duplicates", stats.Duplicates)
+			"sent", stats.Sent, "refused", stats.Refused, "duplicates", stats.Duplicates,
+			"annotated", stats.Related.Annotated, "unrelated", stats.Related.Unrelated, "annotation_failed", stats.Related.Failed)
 		return nil
 	}
 }
 
 // knownDecisions returns the titles of the decisions in force for the repository, as the registry
-// resolves them, and the text of the tenant's latest pending proposals, for Dedupe.
-func knownDecisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo string) ([]string, error) {
+// resolves them, and the text of the tenant's latest pending proposals, for Dedupe. It also returns the
+// decisions, which the annotation of new proposals compares them with.
+func knownDecisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo string) ([]string, []registry.Decision, error) {
 	now := time.Now()
 	decisions, err := registry.Resolve(ctx, db, tenant, registry.Subject{Repo: repo}, now, now)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var texts []string
 	for _, decision := range decisions {
@@ -112,7 +122,7 @@ func knownDecisions(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo stri
 		}
 		return rows.Err()
 	})
-	return texts, err
+	return texts, decisions, err
 }
 
 func sourceKey(externalID string, digest []byte) string {
@@ -143,39 +153,40 @@ func existingSources(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo str
 }
 
 // insert writes only the fields below. status, kind, origin, and trust_level take their defaults,
-// and the table accepts no other value for them.
-func insert(ctx context.Context, db *sql.DB, tenant uuid.UUID, found []Proposal) (int, error) {
+// and the table accepts no other value for them. It returns the proposals it added, with their ids.
+func insert(ctx context.Context, db *sql.DB, tenant uuid.UUID, found []Proposal) ([]relatedProposal, error) {
 	if len(found) == 0 {
-		return 0, nil
+		return nil, nil
 	}
-	created := 0
+	var created []relatedProposal
 	err := tenantTx(ctx, db, tenant, false, func(tx *sql.Tx) error {
 		for _, proposal := range found {
 			payload, err := proposal.payload()
 			if err != nil {
 				return err
 			}
-			result, err := tx.ExecContext(ctx, `
+			var id uuid.UUID
+			err = tx.QueryRowContext(ctx, `
 				INSERT INTO proposals.proposal
 					(tenant_id, payload, confidence, model_id, prompt_version, repo, pr_number,
 					 external_id, source_url, source_sha256, candidate_index)
 				VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-				ON CONFLICT ON CONSTRAINT proposal_once DO NOTHING`,
+				ON CONFLICT ON CONSTRAINT proposal_once DO NOTHING
+				RETURNING id`,
 				tenant, string(payload), proposal.Confidence, proposal.Model, proposal.PromptVersion, proposal.Repo,
-				proposal.Number, proposal.ExternalID, proposal.SourceURL, proposal.SourceSHA256[:], proposal.CandidateIndex)
+				proposal.Number, proposal.ExternalID, proposal.SourceURL, proposal.SourceSHA256[:], proposal.CandidateIndex).Scan(&id)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
 			if err != nil {
 				return fmt.Errorf("insert a proposal: %w", err)
 			}
-			rows, err := result.RowsAffected()
-			if err != nil {
-				return err
-			}
-			created += int(rows)
+			created = append(created, relatedProposal{id: id, title: proposal.Title, statement: proposal.Statement})
 		}
 		return nil
 	})
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	return created, nil
 }
@@ -310,6 +321,8 @@ type inboxItem struct {
 	Number        int             `json:"pr_number"`
 	SourceURL     string          `json:"source_url"`
 	CapturedAt    time.Time       `json:"captured_at"`
+	// Relations is what a model found about the decisions in force, when it found anything (ADR-0172).
+	Relations *inboxRelations `json:"relations,omitempty"`
 }
 
 func inbox(ctx context.Context, db *sql.DB, tenant uuid.UUID, before any, limit int) ([]inboxItem, error) {
@@ -337,7 +350,23 @@ func inbox(ctx context.Context, db *sql.DB, tenant uuid.UUID, before any, limit 
 			item.Payload = payload
 			items = append(items, item)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		// The page is read, so the connection is free for the annotations of its rows.
+		_ = rows.Close()
+		ids := make([]uuid.UUID, 0, len(items))
+		for _, item := range items {
+			ids = append(ids, item.ID)
+		}
+		relations, err := readRelations(ctx, tx, tenant, QueueProposals, ids)
+		if err != nil {
+			return err
+		}
+		for i := range items {
+			items[i].Relations = relations[items[i].ID]
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -351,6 +380,8 @@ type agentInboxItem struct {
 	Status      string          `json:"status"`
 	Payload     json.RawMessage `json:"payload"`
 	CapturedAt  time.Time       `json:"captured_at"`
+	// Relations is what a model found about the decisions in force, when it found anything (ADR-0172).
+	Relations *inboxRelations `json:"relations,omitempty"`
 }
 
 // agentInbox reads what agents proposed. principal_id names the agent, and its sponsor is in
@@ -378,7 +409,23 @@ func agentInbox(ctx context.Context, db *sql.DB, tenant uuid.UUID, before any, l
 			item.Payload = payload
 			items = append(items, item)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		// The page is read, so the connection is free for the annotations of its rows.
+		_ = rows.Close()
+		ids := make([]uuid.UUID, 0, len(items))
+		for _, item := range items {
+			ids = append(ids, item.ID)
+		}
+		relations, err := readRelations(ctx, tx, tenant, QueueAgentProposals, ids)
+		if err != nil {
+			return err
+		}
+		for i := range items {
+			items[i].Relations = relations[items[i].ID]
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err

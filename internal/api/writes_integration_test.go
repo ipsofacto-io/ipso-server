@@ -230,9 +230,9 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 		t.Fatalf("the human proposal wrote no decision: %v", humanApproved)
 	}
 	llmPol := s.expect(http.StatusOK, personA, http.MethodPut, "/v1/llm-policy", map[string]any{
-		"allow_authoring_assist": true, "allow_check_eval": false,
+		"allow_authoring_assist": true, "allow_check_eval": false, "allow_agent_proposal_relations": true,
 	})
-	if llmPol["allow_authoring_assist"] != true {
+	if llmPol["allow_authoring_assist"] != true || llmPol["allow_agent_proposal_relations"] != true {
 		t.Fatalf("the llm policy answered %v", llmPol)
 	}
 	freshnessPol := s.expect(http.StatusOK, personA, http.MethodPut, "/v1/freshness-policies", map[string]any{
@@ -291,6 +291,14 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 	}
 	if len(s.logged()) != before+16 {
 		t.Errorf("%d entries after the clearance, host, approvals, export request, invitation, role binding, name erasure, human proposal+approval, policies and agent pin, from %d", len(s.logged()), before)
+	}
+
+	// A request written before ADR-0172 leaves the switch out, which turns it off.
+	llmPol = s.expect(http.StatusOK, personA, http.MethodPut, "/v1/llm-policy", map[string]any{
+		"allow_authoring_assist": true, "allow_check_eval": false,
+	})
+	if llmPol["allow_agent_proposal_relations"] != false {
+		t.Fatalf("the llm policy answered %v", llmPol)
 	}
 }
 

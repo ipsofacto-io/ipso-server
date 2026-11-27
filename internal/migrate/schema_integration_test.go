@@ -544,6 +544,7 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 		{"identity.principal_owner", "principal_owner_check", 1 | 2 | 4},
 		{"identity.principal_owner", "principal_owner_open_sys_period", 1 | 2 | 4},
 		{"proposals.proposal", "proposal_open_sys_period", 1 | 2 | 4},
+		{"proposals.relation_annotation", "relation_annotation_open_sys_period", 1 | 2 | 4},
 		{"identity.role_binding", "role_binding_check", 1 | 2 | 4},
 		{"identity.role_binding", "role_binding_open_sys_period", 1 | 2 | 4},
 		{"identity.scim_user", "scim_user_erase", 1 | 2 | 16},

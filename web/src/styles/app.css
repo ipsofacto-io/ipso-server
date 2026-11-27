@@ -49,6 +49,12 @@ p { margin: 0; }
 .meta dt { font-family: var(--font-mono); font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-muted); }
 .meta dd { margin: 2px 0 0; overflow-wrap: anywhere; }
 .successor { padding: var(--space-3) var(--space-4); background: var(--surface-sunken); border-radius: var(--radius-md); }
+/* The hint a model wrote about the decisions in force (ADR-0172): set apart from the draft, labeled, and plain text. */
+.relations { padding: var(--space-3) var(--space-4); background: var(--surface-sunken); border-radius: var(--radius-md); display: flex; flex-direction: column; gap: var(--space-3); }
+.relations-title { font-family: var(--font-mono); font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-muted); margin: 0; }
+.relations-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.relations-list li { overflow-wrap: anywhere; }
+.relations-word { font-weight: 600; }
 details > summary { cursor: pointer; padding: var(--space-1) 0; }
 details > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }
 details[open] > summary { margin-bottom: var(--space-3); }

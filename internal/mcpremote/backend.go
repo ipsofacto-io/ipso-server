@@ -35,6 +35,10 @@ type Backend struct {
 	Caller  Caller
 	Now     func() time.Time
 	Gateway *llmgw.Gateway
+	// Annotate asks, without waiting, for the comparison of a stored proposal with the decisions in force
+	// (ADR-0172). It is called only when the tenant opted in with allow_agent_proposal_relations. Nil
+	// compares nothing.
+	Annotate func(tenant, proposal uuid.UUID)
 }
 
 var _ mcptools.Backend = (*Backend)(nil)
@@ -161,6 +165,13 @@ func (b *Backend) Propose(ctx context.Context, in mcptools.ProposeInput) (mcptoo
 		VALUES ($1, $2, $3::jsonb) RETURNING id`, b.Caller.Tenant, b.Caller.Principal, payload).Scan(&id)
 	if err != nil || tx.Commit() != nil {
 		return mcptools.ProposeOutput{}, errors.New("the proposal could not be stored")
+	}
+	// The agent starts the annotation with text it wrote, so it runs only for a tenant that opted in, and a
+	// policy that cannot be read annotates nothing (ADR-0172).
+	if b.Annotate != nil {
+		if pol, err := llmgw.GetTenantPolicy(ctx, b.DB, b.Caller.Tenant); err == nil && pol.AllowAgentProposalRelations {
+			b.Annotate(b.Caller.Tenant, id)
+		}
 	}
 	return mcptools.ProposeOutput{ProposalID: id.String(), Status: "proposed", Location: proposalsLocation}, nil
 }

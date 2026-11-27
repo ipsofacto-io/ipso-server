@@ -240,3 +240,63 @@ func TestBackendAnotherTenantSeesNothing(t *testing.T) {
 		t.Fatal("a principal acted in another tenant")
 	}
 }
+
+// TestBackendAsksForAnAnnotationOnlyWhenTheTenantOptedIn holds the gate of ADR-0172: an agent writes the
+// text that starts the annotation of its proposal, so the lane gets the proposal only while the tenant's
+// llm.tenant_policy sets allow_agent_proposal_relations. Authoring assistance alone does not.
+func TestBackendAsksForAnAnnotationOnlyWhenTheTenantOptedIn(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	var asked []uuid.UUID
+	b := f.backend(testTenant, f.agent)
+	b.Annotate = func(tenant, proposal uuid.UUID) {
+		if tenant != testTenant {
+			t.Errorf("an annotation was asked for tenant %s", tenant)
+		}
+		// The lane reads the proposal on another connection, so it is asked for only after the commit.
+		var n int
+		if err := pgtest.Scan(ctx, f.db, testTenant.String(), `SELECT count(*) FROM proposals.agent_proposal WHERE tenant_id = $1 AND id = $2`,
+			[]any{testTenant, proposal}, &n); err != nil || n != 1 {
+			t.Errorf("an annotation was asked before the proposal was committed: %d rows, %v", n, err)
+		}
+		asked = append(asked, proposal)
+	}
+	propose := func() string {
+		t.Helper()
+		out, err := b.Propose(ctx, mcptools.ProposeInput{Title: "Use int64 for money", Statement: "Money is int64 cents.", Rationale: "Rounding."})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.ProposalID
+	}
+	setPolicy := func(assist, relations bool) {
+		t.Helper()
+		if _, err := pgtest.Exec(ctx, f.db, testTenant.String(), `
+			INSERT INTO llm.tenant_policy (tenant_id, allow_authoring_assist, allow_check_eval, allow_agent_proposal_relations)
+			VALUES ($1, $2, false, $3)
+			ON CONFLICT (tenant_id) DO UPDATE SET allow_authoring_assist = $2, allow_agent_proposal_relations = $3`,
+			testTenant, assist, relations); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	propose()
+	if _, err := pgtest.Exec(ctx, f.db, testTenant.String(), `INSERT INTO tenancy.tenant (tenant_id, name) VALUES ($1, 'synthetic tenant')`, testTenant); err != nil {
+		t.Fatal(err)
+	}
+	setPolicy(true, false)
+	propose()
+	if len(asked) != 0 {
+		t.Fatalf("an annotation was asked without the opt-in: %v", asked)
+	}
+	setPolicy(false, true)
+	id := propose()
+	if len(asked) != 1 || asked[0].String() != id {
+		t.Fatalf("asked %v, want the proposal %s", asked, id)
+	}
+	setPolicy(false, false)
+	propose()
+	if len(asked) != 1 {
+		t.Fatalf("an annotation was asked after the opt-out: %v", asked)
+	}
+}

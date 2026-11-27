@@ -87,6 +87,8 @@ type Stats struct {
 	Refused   int
 	// Duplicates counts proposals dropped because the tenant already has the decision.
 	Duplicates int
+	// Related counts what the annotation of the new proposals did (ADR-0172).
+	Related RelateStats
 }
 
 type selected struct {

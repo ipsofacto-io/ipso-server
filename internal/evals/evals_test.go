@@ -95,6 +95,18 @@ func TestEvals(t *testing.T) {
 	for name, metric := range chosen {
 		metrics[name] = metric
 	}
+	relationCases, err := LoadRelationCases("testdata/relation-proposals.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	related, err := RelationSuite(t, t.Context(), cassette.CompleteSchema, relationCases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("relations scores:\n%s", Table(related))
+	for name, metric := range related {
+		metrics[name] = metric
+	}
 	t.Logf("scores:\n%s", Table(metrics))
 
 	scores := metrics.Scores()

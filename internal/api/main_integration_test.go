@@ -207,6 +207,19 @@ func newFixture(t *testing.T) *fixture {
 		}
 	}
 	f.agentProposal = f.insert(t, `INSERT INTO proposals.agent_proposal (tenant_id, principal_id, payload) VALUES ($1, $2, '{"title":"Pin API versions"}') RETURNING id`, tenantA, agent)
+	// What a model found about the pending proposals of tenant A and the decisions in force (ADR-0172).
+	annotation := f.insert(t, `
+		INSERT INTO proposals.relation_annotation (tenant_id, proposal_id, model_id, prompt_version)
+		VALUES ($1, $2, 'relation-model', 'proposal-relation-v1') RETURNING id`, tenantA, f.proposal)
+	f.exec(t, `
+		INSERT INTO proposals.relation_hint (tenant_id, annotation_id, decision_id, decision_version, title, relation)
+		VALUES ($1, $2, $3, 1, 'Use TLS', 'supersedes'), ($1, $2, $4, 1, 'Version the API', 'conflicts')`, tenantA, annotation, f.tls, f.api)
+	annotation = f.insert(t, `
+		INSERT INTO proposals.relation_annotation (tenant_id, agent_proposal_id, model_id, prompt_version)
+		VALUES ($1, $2, 'relation-model', 'proposal-relation-v1') RETURNING id`, tenantA, f.agentProposal)
+	f.exec(t, `
+		INSERT INTO proposals.relation_hint (tenant_id, annotation_id, decision_id, decision_version, title, relation)
+		VALUES ($1, $2, $3, 1, 'Version the API', 'duplicates')`, tenantA, annotation, f.api)
 	f.uploads = map[uuid.UUID]uuid.UUID{}
 	for tenant, repo := range map[uuid.UUID]string{tenantA: "acme/api", tenantB: "globex/web"} {
 		upload := f.insert(t, `

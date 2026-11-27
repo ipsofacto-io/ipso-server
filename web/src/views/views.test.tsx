@@ -232,12 +232,16 @@ describe('the inbox', () => {
     expect(await screen.findByText('Public endpoints need rate limits')).toBeInTheDocument();
     expect(await screen.findByText('Check for decision 0194f2a0, version 2')).toBeInTheDocument();
     expect(screen.getAllByText('Pending approval')).toHaveLength(5);
-    expect(screen.getAllByText('AI-generated')).toHaveLength(4);
+    // Two model drafts, two drafted checks, and the two relation hints (ADR-0152, ADR-0172).
+    expect(screen.getAllByText('AI-generated')).toHaveLength(6);
     expect(screen.getAllByText('A person approves it, and it does not block a merge.')).toHaveLength(4);
     const queue = (name: string) => screen.getByRole('heading', { name }).closest('section') as HTMLElement;
-    expect(within(queue('Pull requests')).getAllByText('AI-generated')).toHaveLength(2);
+    expect(within(queue('Pull requests')).getAllByText('AI-generated')).toHaveLength(3);
     expect(within(queue('Drafted checks')).getAllByText('AI-generated')).toHaveLength(2);
-    expect(within(queue('Coding agents')).queryByText('AI-generated')).not.toBeInTheDocument();
+    // An agent's proposal has no model of ipso behind it: only the relation hint a model wrote carries the label.
+    const agents = queue('Coding agents');
+    expect(within(agents).getAllByText('AI-generated')).toHaveLength(1);
+    expect(within(within(agents).getByRole('region', { name: 'Decisions in force' })).getByText('AI-generated')).toBeInTheDocument();
     expect(screen.getAllByText('mistral-large-latest, prompt pr-decision-v3')).toHaveLength(2);
     expect(screen.getByText('mistral-large-latest, prompt check-draft-v2')).toBeInTheDocument();
     expect(screen.getByText(/Approving a drafted check records the answer only/)).toBeInTheDocument();
@@ -267,6 +271,95 @@ describe('the inbox', () => {
     // ADR-0012: nobody is a dimension of the views, and an agent proposal does not name its principal.
     expect(screen.queryByText(/0194f2a0-0000-7000-8000-000000000900/)).not.toBeInTheDocument();
     expect(screen.getByText('A coding agent')).toBeInTheDocument();
+  });
+});
+
+describe('relation hints in the inbox', () => {
+  const advisory = 'A model compared this proposal with the decisions in force. The hint changes nothing: a person decides.';
+
+  it('names each decision in force a model related, links it by id, and labels the hint', async () => {
+    renderAndStub('/inbox');
+    const card = (await screen.findByText('Services read secrets from the vault, not from environment files')).closest('li') as HTMLElement;
+    const hints = within(card).getByRole('region', { name: 'Decisions in force' });
+    const item = within(hints).getByRole('listitem');
+    expect(item).toHaveTextContent('Replaces Services read secrets from environment files');
+    expect(within(item).getByRole('link', { name: 'Services read secrets from environment files' })).toHaveAttribute('href', `/decisions/${ids.secretsInEnv}`);
+    expect(within(hints).getByText('AI-generated')).toBeInTheDocument();
+    expect(within(hints).getByText('mistral-large-latest, prompt proposal-relation-v1')).toBeInTheDocument();
+    expect(within(hints).getByText(advisory)).toBeInTheDocument();
+
+    const agent = (await screen.findByText('Public endpoints need rate limits')).closest('li') as HTMLElement;
+    const agentHints = within(agent).getByRole('region', { name: 'Decisions in force' });
+    expect(within(agentHints).getByRole('listitem')).toHaveTextContent('Restates Public endpoints are rate limited');
+    expect(within(agentHints).getByRole('link')).toHaveAttribute('href', `/decisions/${ids.publicRateLimits}`);
+    expect(within(agent).getByText('A coding agent')).toBeInTheDocument();
+
+    const unrelated = (await screen.findByText('retry-with-backoff')).closest('li') as HTMLElement;
+    expect(within(unrelated).queryByRole('region', { name: 'Decisions in force' })).not.toBeInTheDocument();
+  });
+
+  it('shows a hint title as text and leaves out a relation it does not know', async () => {
+    const decision = '0194f2a0-0000-7000-8000-000000000777';
+    const hostile = {
+      id: '0194f2a0-0000-7000-8000-000000000399',
+      kind: 'decision',
+      origin: 'llm',
+      status: 'pending',
+      trust_level: 'untrusted',
+      payload: { title: 'Use Postgres for new services' },
+      confidence: 0.7,
+      model_id: 'mistral-large-latest',
+      prompt_version: 'pr-decision-v3',
+      repo: 'acme/payments',
+      pr_number: 7,
+      source_url: 'https://github.com/acme/payments/pull/7',
+      captured_at: '2026-11-07T10:00:00Z',
+      relations: {
+        model_id: 'mistral-large-latest',
+        prompt_version: 'proposal-relation-v1',
+        decisions: [
+          { decision_id: decision, decision_version: 2, title: '<img src=x onerror=alert(1)>Use MySQL', relation: 'conflicts' },
+          { decision_id: '0194f2a0-0000-7000-8000-000000000778', decision_version: 1, title: 'Approved by the model', relation: 'approves' },
+        ],
+      },
+    };
+    stubFetch({ override: ({ method, url }) => (method === 'GET' && url.startsWith('/v1/proposals') ? { status: 200, headers: {}, body: { proposals: [hostile] } } : undefined) });
+    renderApp('/inbox');
+    const card = (await screen.findByText('Use Postgres for new services')).closest('li') as HTMLElement;
+    const hints = within(card).getByRole('region', { name: 'Decisions in force' });
+    expect(within(hints).getAllByRole('listitem')).toHaveLength(1);
+    expect(within(hints).getByRole('link', { name: '<img src=x onerror=alert(1)>Use MySQL' })).toHaveAttribute('href', `/decisions/${decision}`);
+    expect(within(hints).getByText('Conflicts with')).toBeInTheDocument();
+    expect(card.querySelector('img')).toBeNull();
+    expect(within(card).queryByText('Approved by the model')).not.toBeInTheDocument();
+  });
+
+  it('shows no hint section when every relation is unknown', async () => {
+    const proposal = {
+      id: '0194f2a0-0000-7000-8000-000000000398',
+      kind: 'decision',
+      origin: 'llm',
+      status: 'pending',
+      trust_level: 'untrusted',
+      payload: { title: 'Pin every base image' },
+      confidence: 0.7,
+      model_id: 'mistral-large-latest',
+      prompt_version: 'pr-decision-v3',
+      repo: 'acme/payments',
+      pr_number: 8,
+      source_url: 'https://github.com/acme/payments/pull/8',
+      captured_at: '2026-11-07T10:00:00Z',
+      relations: {
+        model_id: 'mistral-large-latest',
+        prompt_version: 'proposal-relation-v1',
+        decisions: [{ decision_id: '0194f2a0-0000-7000-8000-000000000779', decision_version: 1, title: 'Base images are pinned by digest', relation: 'approves' }],
+      },
+    };
+    stubFetch({ override: ({ method, url }) => (method === 'GET' && url.startsWith('/v1/proposals') ? { status: 200, headers: {}, body: { proposals: [proposal] } } : undefined) });
+    renderApp('/inbox');
+    const card = (await screen.findByText('Pin every base image')).closest('li') as HTMLElement;
+    expect(within(card).queryByRole('region', { name: 'Decisions in force' })).not.toBeInTheDocument();
+    expect(within(card).getAllByText('AI-generated')).toHaveLength(1);
   });
 });
 

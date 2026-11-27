@@ -13,6 +13,9 @@ export type Waiver = Schemas['Waiver'];
 export type WaiverPage = Schemas['WaiverPage'];
 export type Proposal = Omit<Schemas['Proposal'], 'payload'> & { payload: Json };
 export type AgentProposal = Omit<Schemas['AgentProposal'], 'payload'> & { payload: Json };
+// What a model found about a pending proposal and the decisions in force: a hint that changes nothing (ADR-0172).
+export type ProposalRelations = Schemas['ProposalRelations'];
+export type ProposalRelation = Schemas['ProposalRelation'];
 export type CheckProposal = Omit<Schemas['CheckProposal'], 'spec'> & { spec: Json };
 export type StoredVerdict = Omit<Schemas['StoredVerdict'], 'evidence'> & { evidence: Json };
 export type AuditDecisions = Omit<Schemas['AuditDecisions'], 'decisions'> & { decisions: Decision[] };

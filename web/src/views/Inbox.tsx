@@ -1,7 +1,7 @@
 import { Link } from 'react-router';
 
 import { calls } from '../api/calls';
-import type { AgentProposal, CheckProposal, Proposal } from '../api/types';
+import type { AgentProposal, CheckProposal, Proposal, ProposalRelation, ProposalRelations } from '../api/types';
 import { Code } from '../brand';
 import type { Report } from '../components/Confirm';
 import { DecisionStatus } from '../components/DecisionStatus';
@@ -29,6 +29,39 @@ function ModelLabel({ modelID, promptVersion }: { modelID: string; promptVersion
 
 function Advisory() {
   return <p className="muted">{advisory}</p>;
+}
+
+// The words a reviewer reads for each relation a model can find (ADR-0172).
+const relationWords: Record<ProposalRelation['relation'], string> = {
+  supersedes: 'Replaces',
+  conflicts: 'Conflicts with',
+  duplicates: 'Restates',
+};
+
+const relationAdvisory = 'A model compared this proposal with the decisions in force. The hint changes nothing: a person decides.';
+
+// How a model judged the proposal relates to decisions in force, with the AI label (ADR-0152, ADR-0172). A title is the one
+// the model read and shows as text. The link is built from the decision id the server stored, never from model output.
+function Relations({ relations }: { relations?: ProposalRelations }) {
+  const hints = (relations?.decisions ?? []).filter((hint) => Object.hasOwn(relationWords, hint.relation));
+  if (!relations || hints.length === 0) return null;
+  return (
+    <section className="relations" aria-label="Decisions in force">
+      <h4 className="relations-title">Decisions in force</h4>
+      <ul className="relations-list">
+        {hints.map((hint) => (
+          <li key={hint.decision_id}>
+            <span className="relations-word">{relationWords[hint.relation]}</span>{' '}
+            <Link to={decisionPath(hint.decision_id)}>{hint.title}</Link>
+          </li>
+        ))}
+      </ul>
+      <dl className="meta">
+        <ModelLabel modelID={relations.model_id} promptVersion={relations.prompt_version} />
+      </dl>
+      <p className="muted">{relationAdvisory}</p>
+    </section>
+  );
 }
 
 function Raw({ value, title }: { value: unknown; title: string }) {
@@ -65,6 +98,7 @@ function PullRequest({ proposal, report }: { proposal: Proposal; report: (report
         </div>
       </dl>
       <Advisory />
+      <Relations relations={proposal.relations} />
       <Raw value={proposal.payload} title="Draft" />
       <ReviewActions queue="proposals" id={proposal.id} payload={proposal.payload} sourceUrl={proposal.source_url} report={report} />
     </>
@@ -88,6 +122,7 @@ function FromAgent({ proposal, report }: { proposal: AgentProposal; report: (rep
           <dd className="mono">{formatTime(proposal.captured_at)}</dd>
         </div>
       </dl>
+      <Relations relations={proposal.relations} />
       <Raw value={proposal.payload} title="Draft" />
       <ReviewActions queue="agent-proposals" id={proposal.id} payload={proposal.payload} report={report} />
     </>
