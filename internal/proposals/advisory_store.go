@@ -99,9 +99,10 @@ func OnPullRequest(db *sql.DB, gateway *llmgw.Gateway, log *slog.Logger) func(co
 // installation mapping gave, because RunAdvisory trusts it. pr.Client is not used: gh reads GitHub.
 //
 // Nothing is sent unless every gate holds, in this order: the pull request is open, its head is still the one
-// the delivery named, it is not a draft, its head branch is in the repository itself and not a fork, and its
-// author is a person who can write to the repository now (ADR-0104). A pull request of more files than
-// integrations.MaxPatchFiles is skipped. A GitHub error fails the job, so a redelivery can retry it.
+// the delivery named, it is not a draft, its head branch is in the repository itself and not a fork, it targets
+// the default branch, whose base commit holds the check prompt, and its author is a person who can write to the
+// repository now (ADR-0104). A pull request of more files than integrations.MaxPatchFiles is skipped. A GitHub
+// error fails the job, so a redelivery can retry it.
 //
 // For each check, the hunks of the files in its scope are sent with the decision text and the prompt file its
 // ref names, read at the base commit so that the change cannot rewrite what judges it. A check that already has
