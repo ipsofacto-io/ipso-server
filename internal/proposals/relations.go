@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	relationPromptVersion = "proposal-relation-v2"
+	relationPromptVersion = "proposal-relation-v3"
 	// maxRelationTokens bounds an answer that holds one word for each of at most five refs.
 	maxRelationTokens = 128
 	// maxRelationCandidates is how many decisions in force one proposal is compared with (ADR-0172).
@@ -31,7 +31,7 @@ const (
 	relationNone = "none"
 )
 
-//go:embed prompts/proposal-relation-v2.txt
+//go:embed prompts/proposal-relation-v3.txt
 var relationPrompt string
 
 // Relation is how a pending proposal relates to one decision in force, as a model judged it. It is a
