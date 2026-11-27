@@ -69,8 +69,8 @@ func (f *fakePullRequest) CanWrite(_ context.Context, login string) (bool, error
 
 func openPull(head string) integrations.PullRequest {
 	return integrations.PullRequest{
-		Number: 7, State: "open", HeadSHA: head, BaseSHA: advisoryBase, HeadRepositoryID: advisoryRepoID, BaseRepositoryID: advisoryRepoID,
-		Author: "octocat", AuthorType: "User", ChangedFiles: 2,
+		Number: 7, State: "open", HeadSHA: head, BaseSHA: advisoryBase, BaseRef: "main", DefaultBranch: "main",
+		HeadRepositoryID: advisoryRepoID, BaseRepositoryID: advisoryRepoID, Author: "octocat", AuthorType: "User", ChangedFiles: 2,
 	}
 }
 
@@ -247,6 +247,8 @@ func TestRunAdvisorySendsNothingUnlessEveryGateHolds(t *testing.T) {
 		{"a fork", func(g *fakePullRequest) { g.pulls[0].HeadRepositoryID = 77 }, SkipFork, false},
 		{"a deleted fork", func(g *fakePullRequest) { g.pulls[0].HeadRepositoryID = 0 }, SkipFork, false},
 		{"another repository", func(g *fakePullRequest) { g.pulls[0].BaseRepositoryID, g.pulls[0].HeadRepositoryID = 43, 43 }, SkipFork, false},
+		{"a base that is not the default branch", func(g *fakePullRequest) { g.pulls[0].BaseRef = "prompt-edit" }, SkipBase, false},
+		{"a base repository with no default branch", func(g *fakePullRequest) { g.pulls[0].DefaultBranch = "" }, SkipBase, false},
 		{"a bot", func(g *fakePullRequest) { g.pulls[0].AuthorType = "Bot" }, SkipUntrusted, false},
 		{"an author who cannot write", func(g *fakePullRequest) { g.canWrite = false }, SkipUntrusted, false},
 		{"GitHub cannot say who can write", func(g *fakePullRequest) { g.canWriteErr = errors.New("status 502") }, "", true},

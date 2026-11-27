@@ -16,13 +16,16 @@ const (
 
 // PullRequest is what the advisory job reads of a pull request before it sends anything to a model
 // (ADR-0173). Author and AuthorType are untrusted until RepoClient.CanWrite says the login can write to
-// the repository. HeadRepositoryID is 0 when the head repository is gone, as for a deleted fork.
+// the repository. HeadRepositoryID is 0 when the head repository is gone, as for a deleted fork. BaseRef
+// is the branch the pull request targets, and DefaultBranch the default branch of the base repository.
 type PullRequest struct {
 	Number           int
 	State            string
 	Draft            bool
 	HeadSHA          string
 	BaseSHA          string
+	BaseRef          string
+	DefaultBranch    string
 	HeadRepositoryID int64
 	BaseRepositoryID int64
 	Author           string
@@ -45,8 +48,10 @@ type apiPullRequest struct {
 
 type apiBranch struct {
 	SHA  string `json:"sha"`
+	Ref  string `json:"ref"`
 	Repo *struct {
-		ID int64 `json:"id"`
+		ID            int64  `json:"id"`
+		DefaultBranch string `json:"default_branch"`
 	} `json:"repo"`
 }
 
@@ -55,6 +60,13 @@ func (b apiBranch) repositoryID() int64 {
 		return 0
 	}
 	return b.Repo.ID
+}
+
+func (b apiBranch) defaultBranch() string {
+	if b.Repo == nil {
+		return ""
+	}
+	return b.Repo.DefaultBranch
 }
 
 // PullRequest reads the pull request as it is now. An answer for another number, or with a head or a base
@@ -73,6 +85,8 @@ func (c *RepoClient) PullRequest(ctx context.Context, number int) (PullRequest, 
 		Draft:            pull.Draft,
 		HeadSHA:          pull.Head.SHA,
 		BaseSHA:          pull.Base.SHA,
+		BaseRef:          pull.Base.Ref,
+		DefaultBranch:    pull.Base.defaultBranch(),
 		HeadRepositoryID: pull.Head.repositoryID(),
 		BaseRepositoryID: pull.Base.repositoryID(),
 		Author:           pull.User.Login,

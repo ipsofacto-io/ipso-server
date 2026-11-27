@@ -12,9 +12,10 @@
 -- which holds CI reports, so health, audit and the merge gate never read an advisory verdict.
 --
 -- Unlike verification.verdict, a row names places in the change and holds a reason the model wrote:
--- the reviewer needs both, and IPSO-162 shows them with the AI label. It holds no diff text. The places
--- are built by the server from its own hunks, never from the answer, and the reason passed the plain
--- text filter. No row names a person. The decision id is not a foreign key, because the verification
+-- the reviewer needs both, and IPSO-162 shows them with the AI label. It holds no diff text beyond what
+-- the reason of at most 300 characters may quote. The places are built by the server from its own hunks,
+-- never from the answer, and the reason passed the plain text filter. No column names a person, though a
+-- reason may quote a name from a code comment. The decision id is not a foreign key, because the verification
 -- schema reads the registry only through its Go API.
 --
 -- The table is insert-only for ipso_app, with the policies of every other tenant table, so rls.Check,

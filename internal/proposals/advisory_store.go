@@ -31,6 +31,7 @@ const (
 	SkipStale        = "stale"
 	SkipDraft        = "draft"
 	SkipFork         = "fork"
+	SkipBase         = "base"
 	SkipUntrusted    = "untrusted"
 	SkipTooManyFiles = "too_many_files"
 )
@@ -275,6 +276,10 @@ func pullRequestGate(pull integrations.PullRequest, pr integrations.OpenPullRequ
 	case pull.HeadRepositoryID == 0 || pull.HeadRepositoryID != pull.BaseRepositoryID || pull.BaseRepositoryID != pr.RepositoryID:
 		// Every commit on a branch of the repository itself was pushed by someone who can write to it.
 		return SkipFork
+	case pull.DefaultBranch == "" || pull.BaseRef != pull.DefaultBranch:
+		// The check prompt is read at the base commit. Into another branch, the author would choose that
+		// commit, and with it the prompt that judges the change.
+		return SkipBase
 	}
 	return ""
 }

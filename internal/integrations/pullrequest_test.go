@@ -29,7 +29,7 @@ func pullAnswer(number int, head, base string) map[string]any {
 		"number": number, "state": "open", "draft": true, "changed_files": 3,
 		"user": map[string]any{"login": "octocat", "type": "User"},
 		"head": map[string]any{"sha": head, "repo": map[string]any{"id": 77}},
-		"base": map[string]any{"sha": base, "repo": map[string]any{"id": 42}},
+		"base": map[string]any{"sha": base, "ref": "main", "repo": map[string]any{"id": 42, "default_branch": "main"}},
 	}
 }
 
@@ -46,7 +46,7 @@ func TestPullRequestReadsTheCommitsAndTheAuthor(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := PullRequest{
-		Number: 7, State: "open", Draft: true, HeadSHA: head, BaseSHA: base,
+		Number: 7, State: "open", Draft: true, HeadSHA: head, BaseSHA: base, BaseRef: "main", DefaultBranch: "main",
 		HeadRepositoryID: 77, BaseRepositoryID: 42, Author: "octocat", AuthorType: "User", ChangedFiles: 3,
 	}
 	if pull != want {
