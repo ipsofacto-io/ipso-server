@@ -32,6 +32,7 @@ import (
 	"github.com/ipsofacto-io/ipso-server/internal/llmgw"
 	"github.com/ipsofacto-io/ipso-server/internal/login"
 	"github.com/ipsofacto-io/ipso-server/internal/mcpremote"
+	"github.com/ipsofacto-io/ipso-server/internal/proposals"
 	"github.com/ipsofacto-io/ipso-server/internal/ratelimit"
 	"github.com/ipsofacto-io/ipso-server/internal/rls"
 	"github.com/ipsofacto-io/ipso-server/internal/telemetry"
@@ -279,6 +280,14 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 	mux.Handle("/", web)
 
 	if mcpOn {
+		// An agent proposal is compared with the decisions in force after it is stored, on a lane of its
+		// own, when a gateway is configured (ADR-0172). The lane ends with ctx.
+		var annotate func(tenant, proposal uuid.UUID)
+		if cfg.Gateway != nil {
+			relater := proposals.NewRelater(cfg.DB, cfg.Gateway, cfg.Log)
+			go relater.Run(ctx)
+			annotate = func(tenant, proposal uuid.UUID) { relater.Enqueue(tenant, proposal) }
+		}
 		mcpVerifier, err := mcpremote.Discover(ctx, cfg.Client, cfg.MCPIssuer, cfg.MCPResourceURL)
 		if err != nil {
 			return nil, fmt.Errorf("the MCP authorization server: %w", err)
@@ -299,7 +308,7 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 				return mcpremote.Caller{Tenant: tenant, Principal: principal}, ok
 			},
 			func(caller mcpremote.Caller) mcptools.Backend {
-				return &mcpremote.Backend{DB: cfg.DB, Caller: caller, Now: time.Now, Gateway: cfg.Gateway}
+				return &mcpremote.Backend{DB: cfg.DB, Caller: caller, Now: time.Now, Gateway: cfg.Gateway, Annotate: annotate}
 			},
 			func(ctx context.Context, caller mcpremote.Caller, action authz.Action) (bool, error) {
 				return authorize(ctx, cfg.DB, policy, caller.Tenant, caller.Principal, action)

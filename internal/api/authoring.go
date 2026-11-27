@@ -133,9 +133,12 @@ func (h *authoringHandlers) getLLMPolicy(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, pol)
 }
 
+// llmPolicyRequest replaces the policy: a switch left out is off. allow_agent_proposal_relations is optional,
+// so a client written before ADR-0172 keeps working and turns it off.
 type llmPolicyRequest struct {
-	AllowAuthoringAssist bool `json:"allow_authoring_assist"`
-	AllowCheckEval       bool `json:"allow_check_eval"`
+	AllowAuthoringAssist        bool `json:"allow_authoring_assist"`
+	AllowCheckEval              bool `json:"allow_check_eval"`
+	AllowAgentProposalRelations bool `json:"allow_agent_proposal_relations"`
 }
 
 func (h *authoringHandlers) setLLMPolicy(w http.ResponseWriter, r *http.Request) {
@@ -145,11 +148,15 @@ func (h *authoringHandlers) setLLMPolicy(w http.ResponseWriter, r *http.Request)
 	}
 	wh := &writeHandlers{db: h.db, log: h.log}
 	wh.write(w, r, "set_llm_policy", http.StatusOK, func(ctx context.Context, tx *sql.Tx, caller Caller) (string, any, error) {
-		pol, err := llmgw.SetTenantPolicy(ctx, tx, caller.Tenant, req.AllowAuthoringAssist, req.AllowCheckEval)
+		pol, err := llmgw.SetTenantPolicy(ctx, tx, caller.Tenant, llmgw.TenantPolicy{
+			AllowAuthoringAssist:        req.AllowAuthoringAssist,
+			AllowCheckEval:              req.AllowCheckEval,
+			AllowAgentProposalRelations: req.AllowAgentProposalRelations,
+		})
 		if err != nil {
 			return "", nil, err
 		}
-		return fmt.Sprintf("llm_policy assist=%v eval=%v", pol.AllowAuthoringAssist, pol.AllowCheckEval), pol, nil
+		return fmt.Sprintf("llm_policy assist=%v eval=%v agent_relations=%v", pol.AllowAuthoringAssist, pol.AllowCheckEval, pol.AllowAgentProposalRelations), pol, nil
 	})
 }
 

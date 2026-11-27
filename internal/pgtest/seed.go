@@ -16,7 +16,7 @@ const (
 
 // SeedEveryTable writes a tenant with at least one row in every table the application role can write
 // and that the lifecycle commands treat: the tenant, its wrapped key and its installation binding, scopes and their history,
-// decisions and their history, supersession, waivers, premises, proposals, identity, role bindings, sessions, the action
+// decisions and their history, supersession, waivers, premises, proposals and their relation annotations, identity, role bindings, sessions, the action
 // log, usage, an uploaded verdict, and an export with its part. It runs as the application role under row-level security, so every trigger runs as it
 // does in production. The tombstone has no application insert and is not seeded here.
 func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
@@ -128,6 +128,17 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 	mustExec(`
 		INSERT INTO proposals.agent_approval (tenant_id, proposal_id, approver_id, outcome, decision_id)
 		VALUES ($1::uuid, $2::uuid, $3::uuid, 'approved', $4::uuid)`, tenant, agentProposal, person, DecisionTo)
+	var relationAnnotation string
+	mustScan(`
+		INSERT INTO proposals.relation_annotation (tenant_id, proposal_id, model_id, prompt_version)
+		VALUES ($1::uuid, $2::uuid, 'm', 'proposal-relation-v1')
+		RETURNING id`, []any{tenant, proposal}, &relationAnnotation)
+	mustExec(`
+		INSERT INTO proposals.relation_annotation (tenant_id, agent_proposal_id, model_id, prompt_version)
+		VALUES ($1::uuid, $2::uuid, 'm', 'proposal-relation-v1')`, tenant, agentProposal)
+	mustExec(`
+		INSERT INTO proposals.relation_hint (tenant_id, annotation_id, decision_id, decision_version, title, relation)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 1, 'Keep it', 'supersedes')`, tenant, relationAnnotation, DecisionKeep)
 	mustExec(`
 		INSERT INTO integrations.tracker_binding (tenant_id, connector, external_account, token_sealed, webhook_sealed)
 		VALUES ($1::uuid, 'jira', 'acct-' || $1::text, decode(repeat('ab', 29), 'hex'), decode(repeat('cd', 29), 'hex'))`, tenant)

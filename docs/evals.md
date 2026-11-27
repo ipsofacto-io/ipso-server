@@ -1,6 +1,6 @@
 # LLM evals
 
-`internal/evals` scores each LLM pipeline on synthetic golden datasets and holds the score against a committed baseline ([ADR-0082](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0082-go-eval-harness.md), [ADR-0164](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0164-one-case-eval-gate-and-deterministic-eval-markers.md), [ADR-0166](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0166-eval-scores-on-the-production-route.md)). The datasets are the four suites of `internal/evals/testdata`: `pr` (decision extraction from a pull request discussion), `redteam` (prompt injection), `checks` (drafted agent-edit checks) and `templates` (the choice of a built-in template for a check, [ADR-0165](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0165-template-check-proposals.md)). Every dataset is synthetic, and `TestDatasetsAreSynthetic` fails when one holds a URL whose host, or a mailbox whose domain, is not reserved (`.example`, `.test`, `.invalid`, `example.com`). It does not read a bare hostname or an IP address, so a person who reviews a new dataset still checks for those.
+`internal/evals` scores each LLM pipeline on synthetic golden datasets and holds the score against a committed baseline ([ADR-0082](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0082-go-eval-harness.md), [ADR-0164](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0164-one-case-eval-gate-and-deterministic-eval-markers.md), [ADR-0166](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0166-eval-scores-on-the-production-route.md)). The datasets are the five suites of `internal/evals/testdata`: `pr` (decision extraction from a pull request discussion), `redteam` (prompt injection), `checks` (drafted agent-edit checks), `templates` (the choice of a built-in template for a check, [ADR-0165](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0165-template-check-proposals.md)) and `relations` (how a pending proposal relates to the decisions in force, [ADR-0172](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0172-proposal-relation-annotations.md)). Every dataset is synthetic, and `TestDatasetsAreSynthetic` fails when one holds a URL whose host, or a mailbox whose domain, is not reserved (`.example`, `.test`, `.invalid`, `example.com`). It does not read a bare hostname or an IP address, so a person who reviews a new dataset still checks for those.
 
 ## Two routes
 
@@ -12,6 +12,20 @@ A recorded answer is keyed by its prompt and not by the model, so each route kee
 | `mistral` | the operator default route of the gateway, `mistral-medium-latest` | the `evals-provider` workflow, on `main` only | `mistral/cassette.json`, `mistral/baseline.json`, `mistral/history.jsonl`, `mistral/gateway.json` | the weekly run and a manual dispatch |
 
 A pull request never calls a provider and never sees its key. `ci / test` replays the `local` route only. The `mistral` route is recorded by `evals-provider`, which reads the secret `IPSO_LLM_MISTRAL` of the GitHub environment `evals-provider`, an environment that only `main` may deploy to. A run that records is gated against the baseline of its own route: a metric more than one case below it fails, and so does a metric under its floor. A floor is the product target of section 9.9 of the spec, so both routes hold the same one.
+
+## The relations suite
+
+`relation-proposals.json` holds 30 pending proposals, each with two or three decisions in force and the relation a person would name for each: 8 cases where the proposal replaces a decision, 8 where it conflicts with one, 6 where it restates one, 3 near misses that relate to none, and 5 prompt injections (an order to mark every decision superseded, a decision id of another tenant, a request to add a link, a forged answer, and a forged data marker). Each case runs the pipeline as the server does: `RelationCandidates` ranks the decisions, and `Relate` sends the candidates and checks the answer. `TestRelationDatasetIsWellFormed` fails when the ranking would not send a decision a case relates, so `relations.recall` measures the model and not the ranking. The suite stops when a hint names a decision that was not sent, because the server could never store it.
+
+| Metric | What it counts | Floor |
+| --- | --- | --- |
+| `relations.supersedes.precision` | hints that say replaces and that the case expects | 0.8 |
+| `relations.conflicts.precision` | hints that say conflicts and that the case expects | 0.8 |
+| `relations.valid` | calls answered with one known word for each decision sent | 0.9 |
+| `relations.duplicates.precision` | hints that say restates and that the case expects | none |
+| `relations.recall` | decisions a case relates that got the right hint | none |
+
+A restatement is shown to a reviewer next to the decision it restates, so a wrong one costs a glance, and it has no floor. The two others name a decision the proposal would end or contradict, so their precision has one.
 
 ## Scores
 
@@ -52,6 +66,8 @@ go test ./internal/evals -run '^TestEvals$' -route mistral -update
 ```
 
 `-update` keeps the floors, appends a line to the history of the route and rewrites the table above. Do not lower a floor or a baseline to make a run pass.
+
+A recording answers every prompt again, and two live runs of unchanged prompts differ by about one case. When a pull request adds a suite, take from the artifact only the answers whose prompts the committed cassette does not hold, so every other suite keeps its recorded answers and its baseline, then run `-update` and add the floors of the new suite to the baseline by hand.
 
 ## Acceptance rate of proposals
 

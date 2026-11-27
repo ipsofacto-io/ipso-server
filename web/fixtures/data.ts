@@ -34,6 +34,8 @@ export const ids = {
   postgresOnly: uuid(106),
   noEval: uuid(107),
   oldQueue: uuid(108),
+  publicRateLimits: uuid(109),
+  secretsInEnv: uuid(110),
 };
 
 function body(n: number, fields: Record<string, unknown>): Record<string, unknown> {
@@ -41,6 +43,16 @@ function body(n: number, fields: Record<string, unknown>): Record<string, unknow
 }
 
 export const decisions: Decision[] = [
+  {
+    id: ids.secretsInEnv,
+    version: 1,
+    body: body(10, { slug: 'secrets-in-environment-files', title: 'Services read secrets from environment files', status: 'accepted', owner: 'team:platform', criticality: 'warning', review_by: '2027-01-01', valid_from: '2025-03-01', valid_to: null, scope: [{ org: 'acme' }] }),
+  },
+  {
+    id: ids.publicRateLimits,
+    version: 1,
+    body: body(9, { slug: 'rate-limit-public-endpoints', title: 'Public endpoints are rate limited', status: 'accepted', owner: 'team:platform', criticality: 'warning', review_by: '2027-04-01', valid_from: '2026-04-01', valid_to: null, scope: [{ org: 'acme' }] }),
+  },
   {
     id: ids.oldQueue,
     version: 1,
@@ -182,6 +194,11 @@ export function proposals(now: Date): Proposal[] {
       pr_number: 412,
       source_url: 'https://github.com/acme/payments/pull/412',
       captured_at: iso(new Date(now.getTime() - 3 * 60 * 60 * 1000)),
+      relations: {
+        model_id: 'mistral-large-latest',
+        prompt_version: 'proposal-relation-v1',
+        decisions: [{ decision_id: ids.secretsInEnv, decision_version: 1, title: 'Services read secrets from environment files', relation: 'supersedes' }],
+      },
     },
     {
       id: uuid(301),
@@ -209,6 +226,11 @@ export function agentProposals(now: Date): AgentProposal[] {
       status: 'pending',
       payload: { title: 'Public endpoints need rate limits', criticality: 'warning' },
       captured_at: iso(new Date(now.getTime() - 5 * 60 * 60 * 1000)),
+      relations: {
+        model_id: 'mistral-large-latest',
+        prompt_version: 'proposal-relation-v1',
+        decisions: [{ decision_id: ids.publicRateLimits, decision_version: 1, title: 'Public endpoints are rate limited', relation: 'duplicates' }],
+      },
     },
   ];
 }

@@ -2037,7 +2037,7 @@ paths:
     get:
       operationId: get_llm_policy
       tags: [verification]
-      summary: Read the tenant opt-in policy for LLM authoring assist and engine llm evaluation.
+      summary: Read the tenant opt-in policy for LLM authoring assist, engine llm evaluation, and agent proposal relations.
       responses:
         '200':
           description: The tenant LLM policy.
@@ -2060,7 +2060,7 @@ paths:
     put:
       operationId: set_llm_policy
       tags: [verification]
-      summary: Update the tenant opt-in policy for LLM authoring assist and engine llm evaluation.
+      summary: Update the tenant opt-in policy for LLM authoring assist, engine llm evaluation, and agent proposal relations.
       requestBody:
         required: true
         content:
@@ -3548,6 +3548,8 @@ components:
         captured_at:
           type: string
           format: date-time
+        relations:
+          $ref: '#/components/schemas/ProposalRelations'
     AgentProposal:
       type: object
       additionalProperties: false
@@ -3568,6 +3570,53 @@ components:
         captured_at:
           type: string
           format: date-time
+        relations:
+          $ref: '#/components/schemas/ProposalRelations'
+    ProposalRelations:
+      type: object
+      additionalProperties: false
+      description: >-
+        How a model judged the pending proposal relates to decisions in force (ADR-0172). It is a hint for
+        the reviewer, labeled as AI-generated, and changes nothing: the proposal stays pending and its payload
+        is as it was. The field is absent when no annotation found a relation. Each decision is one the server
+        sent the model as a candidate, and its title is the one the model read.
+      required: [model_id, prompt_version, decisions]
+      properties:
+        model_id:
+          type: string
+          minLength: 1
+          maxLength: 200
+        prompt_version:
+          type: string
+          minLength: 1
+          maxLength: 100
+        decisions:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/ProposalRelation'
+    ProposalRelation:
+      type: object
+      additionalProperties: false
+      required: [decision_id, decision_version, title, relation]
+      properties:
+        decision_id:
+          type: string
+          format: uuid
+        decision_version:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        relation:
+          type: string
+          enum: [duplicates, supersedes, conflicts]
+          description: >-
+            duplicates: the proposal states the decision again. supersedes: it says it replaces, reverses, or
+            retires the decision. conflicts: both cannot hold, and the proposal does not say it replaces it.
     CheckProposal:
       type: object
       additionalProperties: false
@@ -4023,6 +4072,9 @@ components:
           type: boolean
         allow_check_eval:
           type: boolean
+        allow_agent_proposal_relations:
+          type: boolean
+          description: Compare each new agent proposal with the decisions in force through the LLM gateway and show the hint in the inbox (ADR-0172). Off when left out of a request; every response carries it.
         updated_at:
           type: string
           format: date-time

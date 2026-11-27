@@ -840,9 +840,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read the tenant opt-in policy for LLM authoring assist and engine llm evaluation. */
+        /** Read the tenant opt-in policy for LLM authoring assist, engine llm evaluation, and agent proposal relations. */
         get: operations["get_llm_policy"];
-        /** Update the tenant opt-in policy for LLM authoring assist and engine llm evaluation. */
+        /** Update the tenant opt-in policy for LLM authoring assist, engine llm evaluation, and agent proposal relations. */
         put: operations["set_llm_policy"];
         post?: never;
         delete?: never;
@@ -1492,6 +1492,7 @@ export interface components {
             source_url: string;
             /** Format: date-time */
             captured_at: string;
+            relations?: components["schemas"]["ProposalRelations"];
         };
         AgentProposal: {
             /** Format: uuid */
@@ -1506,6 +1507,24 @@ export interface components {
             payload: Record<string, never>;
             /** Format: date-time */
             captured_at: string;
+            relations?: components["schemas"]["ProposalRelations"];
+        };
+        /** @description How a model judged the pending proposal relates to decisions in force (ADR-0172). It is a hint for the reviewer, labeled as AI-generated, and changes nothing: the proposal stays pending and its payload is as it was. The field is absent when no annotation found a relation. Each decision is one the server sent the model as a candidate, and its title is the one the model read. */
+        ProposalRelations: {
+            model_id: string;
+            prompt_version: string;
+            decisions: components["schemas"]["ProposalRelation"][];
+        };
+        ProposalRelation: {
+            /** Format: uuid */
+            decision_id: string;
+            decision_version: number;
+            title: string;
+            /**
+             * @description duplicates: the proposal states the decision again. supersedes: it says it replaces, reverses, or retires the decision. conflicts: both cannot hold, and the proposal does not say it replaces it.
+             * @enum {string}
+             */
+            relation: "duplicates" | "supersedes" | "conflicts";
         };
         CheckProposal: {
             /** Format: uuid */
@@ -1712,6 +1731,8 @@ export interface components {
         LLMPolicy: {
             allow_authoring_assist: boolean;
             allow_check_eval: boolean;
+            /** @description Compare each new agent proposal with the decisions in force through the LLM gateway and show the hint in the inbox (ADR-0172). Off when left out of a request; every response carries it. */
+            allow_agent_proposal_relations?: boolean;
             /** Format: date-time */
             updated_at?: string;
         };
