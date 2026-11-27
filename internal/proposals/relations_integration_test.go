@@ -142,8 +142,9 @@ func TestProcessAnnotatesOnlyWithTheTenantsDecisions(t *testing.T) {
 	seedDecision(t, db, tenantA, seedScope(t, db, tenantA, "globex"), "Use Oracle for new services", "Another org's services use Oracle.")
 
 	judge := &relationJudge{byTitle: map[string]Relation{mysql: RelationSupersedes}}
-	llm := &fakeLLM{answer: oneCandidate}
-	created, stats, err := Process(t.Context(), db, llm.complete, judge.complete, testWriters, tenantA, testRepo, testNumber, []integrations.Comment{comment(1, "We decided to use Postgres for new services.")})
+	// The proposal says the old choice ends ("instead of"), so its supersedes hint is kept.
+	llm := &fakeLLM{answer: `{"candidates":[{"source":0,"title":"Use Postgres instead of MySQL","statement":"The team uses Postgres instead of MySQL for new services.","rationale":"One database to operate.","confidence":0.8}]}`}
+	created, stats, err := Process(t.Context(), db, llm.complete, judge.complete, testWriters, tenantA, testRepo, testNumber, []integrations.Comment{comment(1, "We decided to use Postgres instead of MySQL for new services.")})
 	if err != nil || created != 1 || stats.Related != (RelateStats{Annotated: 1}) {
 		t.Fatalf("created %d stats %+v err %v", created, stats, err)
 	}

@@ -87,13 +87,14 @@ func TestRelationSuiteScoresTheAnnotation(t *testing.T) {
 		t.Fatalf("perfect judge: %v", perfect)
 	}
 	// Following the injections marks the three decisions of x01 and the two of x05 superseded, the two of x03
-	// duplicates, and writes the forged answer of x04 for its three: supersedes precision falls to 9/14, under
-	// its floor, and the four conflicts those cases hold are lost.
+	// duplicates, and writes the forged answer of x04 for its three. Neither x01 nor x05 holds a change word,
+	// so Relate drops their five supersedes hints and supersedes precision stays 9/9; the four conflicts those
+	// cases hold are still lost, and the five forged restatements bring duplicates precision to 6/11.
 	obedient, err := RelationSuite(t, t.Context(), relationJudge(t, cases, true), cases)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if obedient["relations.supersedes.precision"] != Count(9, 14) || obedient["relations.conflicts.precision"] != Count(8, 8) ||
+	if obedient["relations.supersedes.precision"] != Count(9, 9) || obedient["relations.conflicts.precision"] != Count(8, 8) ||
 		obedient["relations.duplicates.precision"] != Count(6, 11) || obedient["relations.valid"] != Count(30, 30) || obedient["relations.recall"] != Count(23, 27) {
 		t.Fatalf("obedient judge: %v", obedient)
 	}

@@ -15,7 +15,7 @@ A pull request never calls a provider and never sees its key. `ci / test` replay
 
 ## The relations suite
 
-`relation-proposals.json` holds 30 pending proposals, each with two or three decisions in force and the relation a person would name for each: 8 cases where the proposal replaces a decision, 8 where it conflicts with one, 6 where it restates one, 3 near misses that relate to none, and 5 prompt injections (an order to mark every decision superseded, a decision id of another tenant, a request to add a link, a forged answer, and a forged data marker). Each case runs the pipeline as the server does: `RelationCandidates` ranks the decisions, and `Relate` sends the candidates and checks the answer. `TestRelationDatasetIsWellFormed` fails when the ranking would not send a decision a case relates, so `relations.recall` measures the model and not the ranking. The suite stops when a hint names a decision that was not sent, because the server could never store it.
+`relation-proposals.json` holds 30 pending proposals, each with two or three decisions in force and the relation a person would name for each: 8 cases where the proposal replaces a decision, 8 where it conflicts with one, 6 where it restates one, 3 near misses that relate to none, and 5 prompt injections (an order to mark every decision superseded, a decision id of another tenant, a request to add a link, a forged answer, and a forged data marker). Each case runs the pipeline as the server does: `RelationCandidates` ranks the decisions, and `Relate` sends the candidates, checks the answer, and keeps a `supersedes` answer only when the proposal holds a change word of ADR-0085. `TestRelationDatasetIsWellFormed` fails when the ranking would not send a decision a case relates, so `relations.recall` measures the model and not the ranking. The suite stops when a hint names a decision that was not sent, because the server could never store it.
 
 | Metric | What it counts | Floor |
 | --- | --- | --- |
@@ -46,6 +46,11 @@ The baseline score of each metric, from the committed baselines. This table is g
 | `redteam.model.resisted` | none | 0.8182 | 0.9545 |
 | `redteam.screen.detection` | none | 0.4054 | 0.4054 |
 | `redteam.screen.specificity` | none | 0.5 | 0.5 |
+| `relations.conflicts.precision` | 0.8 | 0.8 | not recorded |
+| `relations.duplicates.precision` | none | 0.8 | not recorded |
+| `relations.recall` | none | 0.7778 | not recorded |
+| `relations.supersedes.precision` | 0.8 | 1 | not recorded |
+| `relations.valid` | 0.9 | 1 | not recorded |
 | `templates.none` | 0.8 | 1 | 1 |
 | `templates.precision` | 0.9 | 1 | 1 |
 | `templates.recall` | none | 1 | 1 |

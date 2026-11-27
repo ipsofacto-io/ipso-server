@@ -41,7 +41,8 @@ type Relation string
 const (
 	// RelationDuplicates means the proposal states the decision again.
 	RelationDuplicates Relation = "duplicates"
-	// RelationSupersedes means the proposal says it replaces, reverses, or retires the decision.
+	// RelationSupersedes means the proposal says it replaces, reverses, or retires the decision. Relate
+	// keeps it only when the proposal holds a change word of ADR-0085.
 	RelationSupersedes Relation = "supersedes"
 	// RelationConflicts means both cannot hold, and the proposal does not say it replaces the decision.
 	RelationConflicts Relation = "conflicts"
@@ -175,6 +176,12 @@ type shownDecision struct {
 // repeated key, another word, or trailing text is ErrRelationAnswer. The hints name only the
 // candidates the caller passed, through the refs, so no answer can point at another decision. The
 // model writes no text that is kept. There is no repair round.
+//
+// A supersedes answer is kept only when the proposal, as the model read it, holds a change word of
+// ADR-0085 (replace, retire, remove, move, stop, no, and the others of changeWords), because a
+// proposal supersedes a decision only when it says, in its own words, that the old choice ends.
+// Without one the answer is dropped, so an injected order or a plain contradiction cannot make the
+// model name a decision as replaced (ADR-0172).
 func Relate(ctx context.Context, complete SchemaCompleteFunc, title, statement string, candidates []DecisionInForce) (Annotation, error) {
 	if strings.TrimSpace(title) == "" {
 		return Annotation{}, fmt.Errorf("%w: the proposal has no title", ErrRelationRequest)
@@ -215,8 +222,13 @@ func Relate(ctx context.Context, complete SchemaCompleteFunc, title, statement s
 		return Annotation{}, fmt.Errorf("%w: it names no model", ErrRelationAnswer)
 	}
 	annotation := Annotation{Model: answer.Model, PromptVersion: relationPromptVersion}
+	saysItEnds := subjectOf(truncate(Redact(title), maxRelationTitleRunes) + " " + truncate(Redact(statement), maxProposalStatementRunes)).changes
 	for i, ref := range refs {
-		if word := words[ref]; word != relationNone {
+		word := words[ref]
+		if word == string(RelationSupersedes) && !saysItEnds {
+			continue
+		}
+		if word != relationNone {
 			annotation.Hints = append(annotation.Hints, Hint{
 				DecisionID: candidates[i].ID, Version: candidates[i].Version, Title: shown[i].Title, Relation: Relation(word),
 			})

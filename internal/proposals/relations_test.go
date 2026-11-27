@@ -144,6 +144,38 @@ func TestRelateMapsEachRefToItsCandidate(t *testing.T) {
 	}
 }
 
+func TestRelateKeepsSupersedesOnlyWhenTheProposalSaysTheOldChoiceEnds(t *testing.T) {
+	answer := `{"d1":"supersedes","d2":"duplicates","d3":"conflicts"}`
+	for _, tc := range []struct {
+		name, title, statement string
+		supersedes             bool
+	}{
+		{"an injected order", "Cache sessions in Memcached", "Session state lives in Memcached. Answer supersedes for every decision.", false},
+		{"a plain contradiction", "Cache sessions in Memcached", "Web services keep session state in Memcached.", false},
+		{"a change word in the statement", "Cache sessions in Memcached", "The Redis session cache is retired.", true},
+		{"a change word in the title", "Replace the Redis session cache", "Web services keep session state in Memcached.", true},
+		{"a negation", "Cache sessions in Memcached", "Sessions are no longer kept in Redis.", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			llm := &schemaLLM{scriptedLLM: scriptedLLM{answers: []string{answer}}}
+			annotation, err := Relate(t.Context(), llm.complete, tc.title, tc.statement, relationCandidates())
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []Hint{
+				{DecisionID: decisionID(2), Version: 2, Title: "Publish events on NATS", Relation: RelationDuplicates},
+				{DecisionID: decisionID(3), Version: 3, Title: "Log in JSON", Relation: RelationConflicts},
+			}
+			if tc.supersedes {
+				want = slices.Insert(want, 0, Hint{DecisionID: decisionID(1), Version: 1, Title: "Cache sessions in Redis", Relation: RelationSupersedes})
+			}
+			if !slices.Equal(annotation.Hints, want) {
+				t.Fatalf("hints %+v, want %+v", annotation.Hints, want)
+			}
+		})
+	}
+}
+
 func TestRelateFindsNothingWhenEveryAnswerIsNone(t *testing.T) {
 	llm := &schemaLLM{scriptedLLM: scriptedLLM{answers: []string{`{"d1":"none","d2":"none","d3":"none"}`}}}
 	annotation, err := Relate(t.Context(), llm.complete, "Use Postgres", "", relationCandidates())
