@@ -85,12 +85,13 @@ func ValidCheckPromptRef(ref string) bool {
 
 // NeverSent reports whether a file is one whose diff ipso never sends to a model, because it usually holds a
 // secret or says who owns the code: an env file, a key or certificate, an SSH key, or CODEOWNERS (ADR-0173).
-// The name is compared without its directory.
+// The name is compared without its directory. A path that redaction would change, such as one that holds an
+// email address, is never sent either, so a place a verdict stores is always a path the model was shown.
 func NeverSent(file string) bool {
 	name := path.Base(file)
 	lower := strings.ToLower(name)
 	return strings.HasPrefix(lower, ".env") || strings.HasSuffix(lower, ".pem") || strings.HasSuffix(lower, ".key") ||
-		sshKeyName.MatchString(name) || name == "CODEOWNERS"
+		sshKeyName.MatchString(name) || name == "CODEOWNERS" || redact.Text(file) != file
 }
 
 // ParsePatch splits the patch GitHub keeps for one file into its hunks. Each hunk must hold exactly the

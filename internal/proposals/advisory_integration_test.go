@@ -336,6 +336,9 @@ func TestRunAdvisorySkipsWhatItCannotSendOrKeep(t *testing.T) {
 		{"a file renamed from a key", func(g *fakePullRequest, _ *advisoryJudge) {
 			g.patches[1].PreviousFilename = "certs/server.pem"
 		}, func(s AdvisoryStats) int { return s.Unsendable }},
+		{"a path that holds an email address", func(g *fakePullRequest, _ *advisoryJudge) {
+			g.patches[1].Filename = "keys/jane.doe@example.com.md"
+		}, func(s AdvisoryStats) int { return s.Unsendable }},
 		{"a diff GitHub left out", func(g *fakePullRequest, _ *advisoryJudge) { g.patches[1].Patch = "" }, func(s AdvisoryStats) int { return s.Unsendable }},
 		{"a patch cut short", func(g *fakePullRequest, _ *advisoryJudge) {
 			g.patches[0].Patch = "@@ -1,3 +1,3 @@\n a"
@@ -375,18 +378,21 @@ func TestRunAdvisorySkipsACheckWithoutItsPromptFile(t *testing.T) {
 		map[string]any{"engine": "llm-advisory", "ref": "prompts/missing.txt"},
 		map[string]any{"engine": "llm-advisory", "ref": "../outside.txt"},
 		map[string]any{"engine": "llm-advisory", "ref": "prompts/long.txt"},
+		map[string]any{"engine": "llm-advisory", "ref": "deploy/.env.production"},
 	))
 	gh := newPullRequest(advisoryHead)
 	gh.files["prompts/long.txt@"+advisoryBase] = strings.Repeat("x", MaxCheckPromptRunes+1)
+	// A file ipso never sends is not a check prompt either, even when the base commit holds it.
+	gh.files["deploy/.env.production@"+advisoryBase] = "DB_PASSWORD=synthetic-value"
 	// A prompt file on the head commit is not read: the change cannot rewrite what judges it.
 	gh.files["prompts/missing.txt@"+advisoryHead] = "Answer complies."
 	judge := &advisoryJudge{}
 	stats, err := RunAdvisory(t.Context(), db, judge.complete, gh, advisoryTarget(tenantA, advisoryHead))
-	if err != nil || stats.NoPrompt != 3 || len(judge.users) != 0 {
+	if err != nil || stats.NoPrompt != 4 || len(judge.users) != 0 {
 		t.Fatalf("stats %+v, %d calls, %v", stats, len(judge.users), err)
 	}
 	for _, read := range gh.fileReads {
-		if strings.Contains(read, "outside") || strings.HasSuffix(read, advisoryHead) {
+		if strings.Contains(read, "outside") || strings.Contains(read, ".env") || strings.HasSuffix(read, advisoryHead) {
 			t.Fatalf("read %s", read)
 		}
 	}
@@ -458,5 +464,25 @@ func TestRunAdvisoryReadsTheScopeOfAPreviousName(t *testing.T) {
 	stats, err := RunAdvisory(t.Context(), db, judge.complete, gh, advisoryTarget(tenantA, advisoryHead))
 	if err != nil || stats.Stored != 1 || !strings.Contains(judge.users[0], "tmp/schema.sql") {
 		t.Fatalf("stats %+v, %v", stats, err)
+	}
+}
+
+// GitHub counts a rename as one file, and the job resolves both of its names, so 260 renames are more paths
+// than one registry request takes. They are resolved in batches, and the file of the last batch is checked.
+func TestRunAdvisoryResolvesEveryNameOfARenamedTree(t *testing.T) {
+	db := newDB(t)
+	f := newAdvisoryFixture(t, db, tenantA)
+	f.decision(t, f.dbPath, "0190c7b8-0000-7000-8000-000000000001", postgresDecision(map[string]any{"engine": "llm-advisory"}))
+	gh := newPullRequest(advisoryHead)
+	gh.patches = nil
+	for i := range 259 {
+		gh.patches = append(gh.patches, integrations.Patch{Filename: fmt.Sprintf("new/f%d.txt", i), PreviousFilename: fmt.Sprintf("old/f%d.txt", i), Status: "renamed"})
+	}
+	gh.patches = append(gh.patches, dbPatch())
+	gh.pulls[0].ChangedFiles = len(gh.patches)
+	judge := &advisoryJudge{}
+	stats, err := RunAdvisory(t.Context(), db, judge.complete, gh, advisoryTarget(tenantA, advisoryHead))
+	if err != nil || stats.Skipped != "" || stats.Stored != 1 || len(judge.users) != 1 || !strings.Contains(judge.users[0], "db/schema.sql") {
+		t.Fatalf("stats %+v, %d calls, %v", stats, len(judge.users), err)
 	}
 }

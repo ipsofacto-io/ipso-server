@@ -157,13 +157,8 @@ func RunAdvisory(ctx context.Context, db *sql.DB, complete SchemaCompleteFunc, g
 	if len(paths) == 0 {
 		return stats, nil
 	}
-	if len(paths) > registry.MaxResolvePaths {
-		stats.Skipped = SkipTooManyFiles
-		return stats, nil
-	}
-	now := time.Now()
 	repo := strings.ToLower(pr.Repo)
-	resolved, err := registry.ResolvePathsAnyEnv(ctx, db, pr.Tenant, repo, paths, now, now)
+	resolved, err := resolveAll(ctx, db, pr.Tenant, repo, paths, time.Now())
 	if err != nil {
 		return stats, err
 	}
@@ -303,6 +298,28 @@ func scopePaths(patches []integrations.Patch) ([]string, map[string][]int) {
 	return paths, files
 }
 
+// resolveAll resolves paths in batches the registry accepts, all at the same time, so a pull request of at
+// most MaxPatchFiles files is resolved whole even when each file is a rename and carries two names. A decision
+// in force for paths of two batches is kept once.
+func resolveAll(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo string, paths []string, now time.Time) (registry.Resolved, error) {
+	var all registry.Resolved
+	kept := map[uuid.UUID]bool{}
+	for batch := range slices.Chunk(paths, registry.MaxResolvePaths) {
+		resolved, err := registry.ResolvePathsAnyEnv(ctx, db, tenant, repo, batch, now, now)
+		if err != nil {
+			return registry.Resolved{}, err
+		}
+		all.Resolutions = append(all.Resolutions, resolved.Resolutions...)
+		for _, decision := range resolved.Decisions {
+			if !kept[decision.ID] {
+				kept[decision.ID] = true
+				all.Decisions = append(all.Decisions, decision)
+			}
+		}
+	}
+	return all, nil
+}
+
 // hunksOf parses the patches of the files in a check's scope, in the order GitHub listed them. A file ipso
 // never sends, a file whose diff GitHub left out though lines changed, and a patch that does not match its
 // counts make the check unsendable, so a check never judges part of a change as if it were the whole. More
@@ -383,8 +400,9 @@ type promptFile struct {
 }
 
 // readCheckPrompt reads the prompt file of a check at the base commit, once per ref for one job. A ref that is
-// not valid, a file missing at that commit, and a file that is not text of at most MaxCheckPromptRunes are not
-// found. A check with no ref needs no file.
+// not valid or names a file NeverSent keeps from a model, a file missing at that commit, and a file that is not
+// text of at most MaxCheckPromptRunes are not found, and a ref NeverSent refuses is never read. A check with no
+// ref needs no file.
 func readCheckPrompt(ctx context.Context, gh PullRequestReader, cache map[string]promptFile, ref, base string) (promptFile, bool, error) {
 	if ref == "" {
 		return promptFile{found: true}, true, nil
@@ -393,7 +411,7 @@ func readCheckPrompt(ctx context.Context, gh PullRequestReader, cache map[string
 		return cached, cached.found, nil
 	}
 	var prompt promptFile
-	if ValidCheckPromptRef(ref) {
+	if ValidCheckPromptRef(ref) && !NeverSent(ref) {
 		raw, err := gh.FileAt(ctx, ref, base)
 		switch {
 		case errors.Is(err, integrations.ErrNotFound):

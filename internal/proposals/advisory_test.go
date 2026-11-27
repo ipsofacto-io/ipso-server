@@ -76,16 +76,18 @@ func TestParsePatchRefusesAPatchThatDoesNotMatchItsCounts(t *testing.T) {
 
 func TestNeverSentNamesSecretAndOwnerFiles(t *testing.T) {
 	for file, want := range map[string]bool{
-		".env":                   true,
-		"deploy/.env.production": true,
-		"certs/server.PEM":       true,
-		"tls/server.key":         true,
-		"home/.ssh/id_ed25519":   true,
-		".github/CODEOWNERS":     true,
-		"internal/id_gen.go":     false,
-		"docs/environment.md":    false,
-		"keys.go":                false,
-		"codeowners.md":          false,
+		".env":                          true,
+		"deploy/.env.production":        true,
+		"certs/server.PEM":              true,
+		"tls/server.key":                true,
+		"home/.ssh/id_ed25519":          true,
+		".github/CODEOWNERS":            true,
+		"internal/id_gen.go":            false,
+		"docs/environment.md":           false,
+		"keys.go":                       false,
+		"codeowners.md":                 false,
+		"keys/jane.doe@example.com.gpg": true,
+		"config/token=abc123.txt":       true,
 	} {
 		if got := NeverSent(file); got != want {
 			t.Errorf("NeverSent(%q) = %v, want %v", file, got, want)
@@ -330,7 +332,7 @@ func TestAdviseRefusesMoreThanTenPlaces(t *testing.T) {
 }
 
 func TestTheAdvisoryPromptHoldsNoDash(t *testing.T) {
-	if strings.ContainsAny(advisoryPrompt, "—–") {
+	if strings.ContainsAny(advisoryPrompt, "\u2014\u2013") {
 		t.Fatal("the prompt holds an em or en dash")
 	}
 }
