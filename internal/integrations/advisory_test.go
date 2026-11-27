@@ -1,0 +1,330 @@
+package integrations
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// advisoryHooks records what the advisory hooks of a service were asked.
+type advisoryHooks struct {
+	mu      sync.Mutex
+	enabled func(repo string) (bool, error)
+	asked   []string
+	tenants []uuid.UUID
+	runs    []OpenPullRequest
+	fail    error
+	block   chan struct{}
+	started chan struct{}
+}
+
+func (h *advisoryHooks) advisoryEnabled(_ context.Context, tenant uuid.UUID, repo string) (bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.asked = append(h.asked, repo)
+	h.tenants = append(h.tenants, tenant)
+	return h.enabled(repo)
+}
+
+func (h *advisoryHooks) onPullRequest(ctx context.Context, pr OpenPullRequest) error {
+	h.mu.Lock()
+	h.runs = append(h.runs, pr)
+	fail, block, started := h.fail, h.block, h.started
+	h.mu.Unlock()
+	if started != nil {
+		started <- struct{}{}
+	}
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+		}
+	}
+	return fail
+}
+
+func (h *advisoryHooks) ran() []OpenPullRequest {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]OpenPullRequest(nil), h.runs...)
+}
+
+func advisoryService(t *testing.T, app *App, logs io.Writer, hooks *advisoryHooks, onMerged func(context.Context, MergedPullRequest) error) *Service {
+	t.Helper()
+	if logs == nil {
+		logs = io.Discard
+	}
+	return NewService(Config{
+		App:             app,
+		WebhookSecret:   []byte(testSecret),
+		Logger:          slog.New(slog.NewTextHandler(logs, nil)),
+		Tenants:         ownedBy(map[int64]uuid.UUID{42: testTenant}),
+		OnMerged:        onMerged,
+		AdvisoryEnabled: hooks.advisoryEnabled,
+		OnPullRequest:   hooks.onPullRequest,
+	})
+}
+
+func optedIn(repo string) (bool, error) { return repo == testRepo, nil }
+
+func advisoryMints(fake *fakeGitHub) []map[string]any {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	var out []map[string]any
+	for _, minted := range fake.minted {
+		if _, writes := minted["permissions"].(map[string]any)["checks"]; !writes {
+			out = append(out, minted)
+		}
+	}
+	return out
+}
+
+func TestNoAdvisoryHookStartsNoAdvisoryJob(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	s := newTestService(t, app, nil, nil)
+	if code := deliver(t, s, "pull_request", "d-1", prEvent("opened")); code != http.StatusAccepted {
+		t.Fatalf("status %d", code)
+	}
+	if code := deliver(t, s, "pull_request", "d-2", prEvent("ready_for_review")); code != http.StatusAccepted {
+		t.Fatalf("ready: status %d", code)
+	}
+	if len(s.queue) != 1 || len(s.advisory) != 0 {
+		t.Fatalf("queued %d check and %d advisory jobs, want 1 and 0", len(s.queue), len(s.advisory))
+	}
+	drain(s)
+	if len(advisoryMints(fake)) != 0 {
+		t.Fatalf("a token was minted for an advisory job: %v", fake.minted)
+	}
+}
+
+// The list is the only switch: a repository that is not on it queues nothing and mints nothing (ADR-0173).
+func TestARepositoryNotOptedInMintsNothingForTheAdvisoryJob(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	hooks := &advisoryHooks{enabled: func(string) (bool, error) { return false, nil }}
+	s := advisoryService(t, app, nil, hooks, nil)
+	event := prEvent("opened")
+	event["repository"].(map[string]any)["full_name"] = "Acme/Payments"
+	if code := deliver(t, s, "pull_request", "d-1", event); code != http.StatusAccepted {
+		t.Fatalf("status %d", code)
+	}
+	if len(s.queue) != 1 || len(s.advisory) != 0 {
+		t.Fatalf("queued %d check and %d advisory jobs, want 1 and 0", len(s.queue), len(s.advisory))
+	}
+	// The fake serves the lowercase name only, so the check run is not run here.
+	<-s.queue
+	drain(s)
+	if len(fake.minted) != 0 || len(hooks.ran()) != 0 {
+		t.Fatalf("an advisory job ran: mints %v, runs %v", fake.minted, hooks.ran())
+	}
+	// The opt-in is read for the mapped tenant and the lowercase name.
+	if len(hooks.asked) != 1 || hooks.asked[0] != testRepo || hooks.tenants[0] != testTenant {
+		t.Fatalf("asked %v for %v", hooks.asked, hooks.tenants)
+	}
+}
+
+func TestAnOptedInPullRequestRunsTheAdvisoryJobWithAReadOnlyToken(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	hooks := &advisoryHooks{enabled: optedIn}
+	s := advisoryService(t, app, nil, hooks, nil)
+	for _, action := range []string{"opened", "synchronize", "reopened"} {
+		if code := deliver(t, s, "pull_request", "d-"+action, prEvent(action)); code != http.StatusAccepted {
+			t.Fatalf("%s: status %d", action, code)
+		}
+	}
+	if len(s.queue) != 3 || len(s.advisory) != 3 {
+		t.Fatalf("queued %d check and %d advisory jobs, want 3 and 3", len(s.queue), len(s.advisory))
+	}
+	drain(s)
+	runs := hooks.ran()
+	if len(runs) != 3 || len(fake.created) != 3 {
+		t.Fatalf("%d advisory jobs and %d check runs, want 3 and 3", len(runs), len(fake.created))
+	}
+	pr := runs[0]
+	if pr.Tenant != testTenant || pr.InstallationID != 42 || pr.Repo != testRepo || pr.RepositoryID != 9 || pr.Number != 7 || pr.HeadSHA != headSHA || pr.Client == nil {
+		t.Fatalf("the hook got %+v", pr)
+	}
+	mints := advisoryMints(fake)
+	if len(mints) != 3 {
+		t.Fatalf("%d advisory tokens, want 3", len(mints))
+	}
+	if got := fmt.Sprint(mints[0]["permissions"]); got != "map[contents:read metadata:read pull_requests:read]" {
+		t.Fatalf("the advisory token asks for %s", got)
+	}
+	if got := fmt.Sprint(mints[0]["repository_ids"]); got != "[9]" {
+		t.Fatalf("the advisory token names repositories %s", got)
+	}
+}
+
+// Marking a draft ready changes no commit, so it starts the advisory job and no check run.
+func TestReadyForReviewStartsOnlyTheAdvisoryJob(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	hooks := &advisoryHooks{enabled: optedIn}
+	s := advisoryService(t, app, nil, hooks, nil)
+	if code := deliver(t, s, "pull_request", "d-1", prEvent("ready_for_review")); code != http.StatusAccepted {
+		t.Fatalf("status %d", code)
+	}
+	drain(s)
+	if len(fake.created) != 0 || len(hooks.ran()) != 1 {
+		t.Fatalf("%d check runs and %d advisory jobs, want 0 and 1", len(fake.created), len(hooks.ran()))
+	}
+}
+
+// A failed advisory job is retried by a redelivery without a second check run, and a failed check run is
+// retried without a second advisory job, because each has its own key in the seen set.
+func TestEachJobOfADeliveryIsRetriedAlone(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	hooks := &advisoryHooks{enabled: optedIn, fail: errors.New("the model failed")}
+	s := advisoryService(t, app, nil, hooks, nil)
+	deliver(t, s, "pull_request", "d-1", prEvent("opened"))
+	drain(s)
+	hooks.mu.Lock()
+	hooks.fail = nil
+	hooks.mu.Unlock()
+	if code := deliver(t, s, "pull_request", "d-1", prEvent("opened")); code != http.StatusAccepted {
+		t.Fatalf("redelivery: status %d", code)
+	}
+	if len(s.queue) != 0 || len(s.advisory) != 1 {
+		t.Fatalf("the redelivery queued %d check and %d advisory jobs, want 0 and 1", len(s.queue), len(s.advisory))
+	}
+	drain(s)
+	if len(fake.created) != 1 || len(hooks.ran()) != 2 {
+		t.Fatalf("%d check runs and %d advisory jobs, want 1 and 2", len(fake.created), len(hooks.ran()))
+	}
+
+	fake.statusFor["/repos/"+testRepo+"/pulls/8/files"] = http.StatusInternalServerError
+	event := prEvent("opened")
+	event["number"] = 8
+	deliver(t, s, "pull_request", "d-2", event)
+	drain(s)
+	delete(fake.statusFor, "/repos/"+testRepo+"/pulls/8/files")
+	deliver(t, s, "pull_request", "d-2", event)
+	if len(s.queue) != 1 || len(s.advisory) != 0 {
+		t.Fatalf("the redelivery of a failed check run queued %d check and %d advisory jobs, want 1 and 0", len(s.queue), len(s.advisory))
+	}
+}
+
+// A repository removed from the list while its job waited mints nothing when the job runs.
+func TestTheAdvisoryJobReadsTheOptInAgainBeforeItMints(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	on := true
+	hooks := &advisoryHooks{}
+	hooks.enabled = func(string) (bool, error) { return on, nil }
+	s := advisoryService(t, app, nil, hooks, nil)
+	deliver(t, s, "pull_request", "d-1", prEvent("ready_for_review"))
+	if len(s.advisory) != 1 {
+		t.Fatal("the advisory job was not queued")
+	}
+	hooks.mu.Lock()
+	on = false
+	hooks.mu.Unlock()
+	drain(s)
+	if len(fake.minted) != 0 || len(hooks.ran()) != 0 {
+		t.Fatalf("a job for a repository taken off the list ran: mints %v", fake.minted)
+	}
+}
+
+// The advisory job is best effort: a full lane or a failed read of the opt-in drops it, and the check run of the
+// delivery still runs.
+func TestADroppedAdvisoryJobLeavesTheCheckRun(t *testing.T) {
+	_, app := newFakeGitHub(t)
+	var logs strings.Builder
+	hooks := &advisoryHooks{enabled: optedIn}
+	s := advisoryService(t, app, &logs, hooks, nil)
+	for i := range advisoryQueueSize {
+		if code := deliver(t, s, "pull_request", fmt.Sprintf("r-%d", i), prEvent("ready_for_review")); code != http.StatusAccepted {
+			t.Fatalf("delivery %d: status %d", i, code)
+		}
+	}
+	if code := deliver(t, s, "pull_request", "over", prEvent("opened")); code != http.StatusAccepted {
+		t.Fatalf("a full advisory lane: status %d", code)
+	}
+	if len(s.queue) != 1 || len(s.advisory) != advisoryQueueSize {
+		t.Fatalf("queued %d check and %d advisory jobs", len(s.queue), len(s.advisory))
+	}
+	if !strings.Contains(logs.String(), "webhook advisory job dropped") || !strings.Contains(logs.String(), "the lane is full") {
+		t.Fatalf("the drop was not logged: %s", logs.String())
+	}
+	// A dropped job is forgotten, so a redelivery once the lane has room queues it.
+	<-s.advisory
+	if code := deliver(t, s, "pull_request", "over", prEvent("opened")); code != http.StatusAccepted || len(s.advisory) != advisoryQueueSize {
+		t.Fatalf("the redelivery: status %d, %d advisory jobs", code, len(s.advisory))
+	}
+
+	hooks.mu.Lock()
+	hooks.enabled = func(string) (bool, error) { return false, errors.New("the database is down") }
+	hooks.mu.Unlock()
+	logs.Reset()
+	if code := deliver(t, s, "pull_request", "d-lookup", prEvent("opened")); code != http.StatusAccepted {
+		t.Fatalf("a failed opt-in read: status %d", code)
+	}
+	if len(s.queue) != 2 || !strings.Contains(logs.String(), "the opt-in read failed") || strings.Contains(logs.String(), "database is down") {
+		t.Fatalf("queued %d check jobs, logs %s", len(s.queue), logs.String())
+	}
+	if strings.Contains(strings.ToLower(logs.String()), testRepo) {
+		t.Fatalf("the log names the repository: %s", logs.String())
+	}
+}
+
+// A model can take minutes. An advisory job never holds the worker of a merged pull request job or of a check
+// run (ADR-0173).
+func TestSlowAdvisoryJobsDoNotDelayOtherLanes(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	release := make(chan struct{})
+	hooks := &advisoryHooks{enabled: optedIn, block: release, started: make(chan struct{}, advisoryQueueSize)}
+	merged := make(chan struct{}, 1)
+	s := advisoryService(t, app, nil, hooks, func(context.Context, MergedPullRequest) error {
+		merged <- struct{}{}
+		return nil
+	})
+	ctx, stop := context.WithCancel(t.Context())
+	stopped := make(chan struct{})
+	go func() {
+		s.Run(ctx)
+		close(stopped)
+	}()
+	defer func() {
+		close(release)
+		stop()
+		<-stopped
+	}()
+	for i := range 3 {
+		deliver(t, s, "pull_request", fmt.Sprintf("r-%d", i), prEvent("ready_for_review"))
+	}
+	select {
+	case <-hooks.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the advisory job did not start")
+	}
+	deliver(t, s, "pull_request", "m-1", prEvent("closed"))
+	deliver(t, s, "pull_request", "c-1", prEvent("synchronize"))
+	select {
+	case <-merged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the merged pull request job waited for the advisory job")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		fake.mu.Lock()
+		created := len(fake.created)
+		fake.mu.Unlock()
+		if created >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the check run waited for the advisory job")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if running := len(hooks.started); running != 0 {
+		t.Fatalf("%d advisory jobs beyond the %d worker of their lane started", running, advisoryWorkerCount)
+	}
+}

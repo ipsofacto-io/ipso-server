@@ -35,6 +35,17 @@ const (
 	// for a model served on CPU (ADR-0088), and tries the next route when one fails, so the bound of a check
 	// run would cut a call that failed over to a second route and lose the tokens it spent.
 	mergedJobTimeout = 15 * time.Minute
+	// advisoryQueueSize and advisoryWorkerCount bound the advisory jobs of open pull requests, which wait on a
+	// model like a merged pull request job and have a lane of their own, so a push never delays the extraction
+	// of a merged pull request (ADR-0173). A full lane drops the advisory job and the check run still runs.
+	advisoryQueueSize   = 64
+	advisoryWorkerCount = 1
+	// advisoryLookupTimeout bounds the read of the opt-in while GitHub waits for the answer, after the tenant
+	// lookup, so the two stay inside the 10 seconds of a delivery.
+	advisoryLookupTimeout = 2 * time.Second
+	// advisoryKey is added to the delivery id to name the advisory job in the seen set, so a failure of the
+	// check run never repeats the advisory job on a redelivery, nor the reverse.
+	advisoryKey = "/advisory"
 	// lookupTimeout bounds the tenant lookup of a delivery. GitHub gives a delivery 10 seconds.
 	lookupTimeout = 5 * time.Second
 	// unbindTimeout bounds the removal of a binding, which asks GitHub and then the database while GitHub waits
@@ -68,6 +79,21 @@ type MergedPullRequest struct {
 	Client       *RepoClient
 }
 
+// OpenPullRequest is a pull request that was opened, updated, reopened or marked ready in a repository the tenant
+// opted in to llm-advisory checks, and a client limited to reading its contents and its files (ADR-0173). HeadSHA
+// is the head the delivery names. The hook reads the pull request again and stops when the head moved.
+type OpenPullRequest struct {
+	// Tenant is the tenant the installation is bound to. It comes from the mapping and never from the payload
+	// (ADR-0101).
+	Tenant         uuid.UUID
+	InstallationID int64
+	Repo           string
+	RepositoryID   int64
+	Number         int
+	HeadSHA        string
+	Client         *RepoClient
+}
+
 // Config is what the service needs. OnMerged is optional. When it is nil, a merged pull request
 // mints no token and starts no work (ADR-0062). ipso-server webhooks sets it when an LLM gateway is
 // configured (ADR-0103).
@@ -86,6 +112,12 @@ type Config struct {
 	Tenants       func(ctx context.Context, installationID int64) (uuid.UUID, bool, error)
 	Unbind        func(ctx context.Context, installationID int64) (uuid.UUID, bool, error)
 	OnMerged      func(context.Context, MergedPullRequest) error
+	// AdvisoryEnabled reports whether the tenant opted the repository in to llm-advisory checks, and
+	// OnPullRequest runs the advisory job of an open pull request (ADR-0173). The service sets neither without
+	// the other: when either is nil, a pull request starts no advisory job. The opt-in is read when the delivery
+	// arrives and again before the job mints a token, so a repository that is not on the list mints nothing.
+	AdvisoryEnabled func(ctx context.Context, tenant uuid.UUID, repo string) (bool, error)
+	OnPullRequest   func(context.Context, OpenPullRequest) error
 	// Telemetry observes the requests and the jobs of the service (ADR-0155). Nil observes nothing.
 	Telemetry *telemetry.Telemetry
 }
@@ -96,18 +128,32 @@ type Service struct {
 	queue chan job
 	// merged queues the merged pull request jobs, which wait on a model and have workers of their own.
 	merged chan job
-	seen   *deliverySet
-	// timeout bounds one job. Zero means jobTimeout, or mergedJobTimeout for a merged pull request.
+	// advisory queues the advisory jobs of open pull requests, which wait on a model and have a worker of
+	// their own (ADR-0173).
+	advisory chan job
+	seen     *deliverySet
+	// timeout bounds one job. Zero means jobTimeout, or mergedJobTimeout for a job that waits on a model.
 	timeout time.Duration
 }
 
+// lane is the queue a job waits in. A merged pull request job and an advisory job wait on a model, and
+// each has workers of its own and the longer bound.
+type lane int
+
+const (
+	laneCheck lane = iota
+	laneMerged
+	laneAdvisory
+)
+
 type job struct {
+	// delivery is the key of the job in the seen set: the delivery id, with advisoryKey added for an
+	// advisory job, or the task result id of a run task.
 	delivery string
 	name     string
-	// kind is the ipso.job.kind of the job: check, merged_pr or runtask.
+	// kind is the ipso.job.kind of the job: check, merged_pr, advisory_pr or runtask.
 	kind string
-	// merged marks a merged pull request job, which runs on its own workers and under its own bound.
-	merged bool
+	lane lane
 	// installation is the one the signed payload names. tenant is what the mapping says it belongs to,
 	// set by receive before the job is queued. A job never takes its tenant from a payload.
 	installation int64
@@ -121,11 +167,17 @@ type job struct {
 
 // NewService returns a service. Run its workers with Run before serving Handler.
 func NewService(cfg Config) *Service {
-	return &Service{cfg: cfg, queue: make(chan job, queueSize), merged: make(chan job, queueSize), seen: newDeliverySet(seenDeliveries)}
+	return &Service{
+		cfg:      cfg,
+		queue:    make(chan job, queueSize),
+		merged:   make(chan job, queueSize),
+		advisory: make(chan job, advisoryQueueSize),
+		seen:     newDeliverySet(seenDeliveries),
+	}
 }
 
 // Run works the queues until ctx ends, then finishes what was queued, for at most drainTimeout. The check
-// runs and the merged pull request jobs have workers of their own.
+// runs, the merged pull request jobs and the advisory jobs have workers of their own.
 func (s *Service) Run(ctx context.Context) {
 	jobContext, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
@@ -134,7 +186,7 @@ func (s *Service) Run(ctx context.Context) {
 	for _, lane := range []struct {
 		queue chan job
 		count int
-	}{{s.queue, workerCount}, {s.merged, mergedWorkerCount}} {
+	}{{s.queue, workerCount}, {s.merged, mergedWorkerCount}, {s.advisory, advisoryWorkerCount}} {
 		for range lane.count {
 			workers.Go(func() {
 				for {
@@ -176,7 +228,7 @@ func (s *Service) work(ctx context.Context, next job) {
 	limit := s.timeout
 	if limit == 0 {
 		limit = jobTimeout
-		if next.merged {
+		if next.lane != laneCheck {
 			limit = mergedJobTimeout
 		}
 	}
@@ -236,49 +288,82 @@ func (s *Service) receive(w http.ResponseWriter, r *http.Request) {
 		s.receiveInstallation(r.Context(), w, delivery, body)
 		return
 	}
-	next, err := s.route(event, body)
+	work, err := s.route(event, body)
 	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if next == nil {
+	if work.main == nil && work.advisory == nil {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 	// The tenant of a delivery is the one the mapping gives its installation. An installation nobody
 	// bound starts nothing, and its delivery is not remembered, so a redelivery after the operator binds
 	// it is worked (ADR-0101).
-	tenant, bound, err := s.tenantOf(r.Context(), next.installation)
+	tenant, bound, err := s.tenantOf(r.Context(), work.installation)
 	if err != nil {
-		s.cfg.Logger.ErrorContext(r.Context(), "webhook tenant lookup failed", "delivery", delivery, "installation", next.installation, "error", err)
+		s.cfg.Logger.ErrorContext(r.Context(), "webhook tenant lookup failed", "delivery", delivery, "installation", work.installation, "error", err)
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if !bound {
-		s.cfg.Logger.WarnContext(r.Context(), "webhook from an installation no tenant owns", "delivery", delivery, "installation", next.installation)
+		s.cfg.Logger.WarnContext(r.Context(), "webhook from an installation no tenant owns", "delivery", delivery, "installation", work.installation)
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	next.tenant = tenant
-	next.delivery = delivery
-	next.received = received
-	next.span = telemetry.SpanContext(r.Context())
 	telemetry.SetTenant(r.Context(), tenant)
-	if !s.seen.add(delivery) {
-		w.WriteHeader(http.StatusAccepted)
+	stamp := func(next *job, key string) {
+		next.tenant = tenant
+		next.delivery = key
+		next.received = received
+		next.span = telemetry.SpanContext(r.Context())
+	}
+	if work.main != nil {
+		stamp(work.main, delivery)
+		if s.seen.add(delivery) {
+			queue := s.queue
+			if work.main.lane == laneMerged {
+				queue = s.merged
+			}
+			select {
+			case queue <- *work.main:
+			default:
+				// GitHub records the failed delivery, and it can be redelivered. The advisory job waits for it.
+				s.seen.forget(delivery)
+				http.Error(w, "busy", http.StatusServiceUnavailable)
+				return
+			}
+		}
+	}
+	if work.advisory != nil {
+		stamp(&work.advisory.job, delivery+advisoryKey)
+		s.queueAdvisory(r.Context(), *work.advisory)
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// queueAdvisory queues the advisory job of a delivery under a seen key of its own. A repository the tenant did
+// not opt in queues nothing and mints nothing (ADR-0173). A failed read of the opt-in or a full lane drops the
+// job and logs it, and the delivery is answered as its other work says: the advisory job is best effort, and
+// the next push is evaluated. The log names the delivery and never the repository.
+func (s *Service) queueAdvisory(ctx context.Context, next advisoryJob) {
+	lookup, cancel := context.WithTimeout(ctx, advisoryLookupTimeout)
+	enabled, err := s.cfg.AdvisoryEnabled(lookup, next.job.tenant, next.repo)
+	cancel()
+	switch {
+	case err != nil:
+		s.cfg.Logger.ErrorContext(ctx, "webhook advisory job dropped", "delivery", next.job.delivery, "reason", "the opt-in read failed")
+		return
+	case !enabled:
+		return
+	case !s.seen.add(next.job.delivery):
 		return
 	}
-	queue := s.queue
-	if next.merged {
-		queue = s.merged
-	}
 	select {
-	case queue <- *next:
-		w.WriteHeader(http.StatusAccepted)
+	case s.advisory <- next.job:
 	default:
-		// GitHub records the failed delivery, and it can be redelivered.
-		s.seen.forget(delivery)
-		http.Error(w, "busy", http.StatusServiceUnavailable)
+		s.seen.forget(next.job.delivery)
+		s.cfg.Logger.WarnContext(ctx, "webhook advisory job dropped", "delivery", next.job.delivery, "reason", "the lane is full")
 	}
 }
 
@@ -393,20 +478,38 @@ type installation struct {
 	ID int64 `json:"id"`
 }
 
-// route turns a signed event into a job. nil means the event needs no work. An error means a
+// routed is the work of one signed delivery: a job on the check or the merged lane, and an advisory job. Either
+// can be nil, and both come from the one installation the payload names.
+type routed struct {
+	installation int64
+	main         *job
+	advisory     *advisoryJob
+}
+
+// advisoryJob is an advisory job and the lowercase owner/name whose opt-in decides whether it is queued.
+type advisoryJob struct {
+	repo string
+	job  job
+}
+
+// route turns a signed event into its work. No job means the event needs no work. An error means a
 // handled event is malformed.
-func (s *Service) route(event string, body []byte) (*job, error) {
+func (s *Service) route(event string, body []byte) (routed, error) {
 	switch event {
 	case "pull_request":
 		return s.routePullRequest(body)
 	case "push":
-		return s.routePush(body)
+		next, err := s.routePush(body)
+		if err != nil || next == nil {
+			return routed{}, err
+		}
+		return routed{installation: next.installation, main: next}, nil
 	default:
-		return nil, nil
+		return routed{}, nil
 	}
 }
 
-func (s *Service) routePullRequest(body []byte) (*job, error) {
+func (s *Service) routePullRequest(body []byte) (routed, error) {
 	var payload struct {
 		Action       string       `json:"action"`
 		Number       int          `json:"number"`
@@ -420,33 +523,38 @@ func (s *Service) routePullRequest(body []byte) (*job, error) {
 		} `json:"pull_request"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, errors.New("not JSON")
+		return routed{}, errors.New("not JSON")
 	}
 	switch payload.Action {
-	case "opened", "synchronize", "reopened":
+	case "opened", "synchronize", "reopened", "ready_for_review":
 		if err := validTarget(payload.Installation, payload.Repository); err != nil {
-			return nil, err
+			return routed{}, err
 		}
 		if !validSHA.MatchString(payload.PullRequest.Head.SHA) || payload.Number <= 0 {
-			return nil, errors.New("bad pull request")
+			return routed{}, errors.New("bad pull request")
 		}
 		number, sha := payload.Number, payload.PullRequest.Head.SHA
-		return s.checkJob("pull_request", payload.Installation, payload.Repository, sha, map[string]string{
-			"checks": writeAccess, "contents": readAccess, "metadata": readAccess, "pull_requests": readAccess,
-		}, func(ctx context.Context, c *RepoClient) ([]changedFile, error) {
-			return c.pullRequestFiles(ctx, number)
-		}), nil
+		work := routed{installation: payload.Installation.ID, advisory: s.advisoryJob(payload.Installation, payload.Repository, number, sha)}
+		// Marking a draft ready changes no commit, so the check run of its head already ran.
+		if payload.Action != "ready_for_review" {
+			work.main = s.checkJob("pull_request", payload.Installation, payload.Repository, sha, map[string]string{
+				"checks": writeAccess, "contents": readAccess, "metadata": readAccess, "pull_requests": readAccess,
+			}, func(ctx context.Context, c *RepoClient) ([]changedFile, error) {
+				return c.pullRequestFiles(ctx, number)
+			})
+		}
+		return work, nil
 	case "closed":
 		if !payload.PullRequest.Merged || s.cfg.OnMerged == nil {
-			return nil, nil
+			return routed{}, nil
 		}
 		if err := validTarget(payload.Installation, payload.Repository); err != nil {
-			return nil, err
+			return routed{}, err
 		}
 		if payload.Number <= 0 {
-			return nil, errors.New("bad pull request")
+			return routed{}, errors.New("bad pull request")
 		}
-		return &job{name: "merged", kind: "merged_pr", merged: true, installation: payload.Installation.ID, run: func(ctx context.Context, tenant uuid.UUID) error {
+		return routed{installation: payload.Installation.ID, main: &job{name: "merged", kind: "merged_pr", lane: laneMerged, installation: payload.Installation.ID, run: func(ctx context.Context, tenant uuid.UUID) error {
 			client, err := s.cfg.App.repoClient(ctx, payload.Installation.ID, payload.Repository.ID, payload.Repository.FullName, map[string]string{
 				"metadata": readAccess, "pull_requests": readAccess,
 			})
@@ -461,10 +569,41 @@ func (s *Service) routePullRequest(body []byte) (*job, error) {
 				Number:         payload.Number,
 				Client:         client,
 			})
-		}}, nil
+		}}}, nil
 	default:
-		return nil, nil
+		return routed{}, nil
 	}
+}
+
+// advisoryJob is the advisory job of an open pull request, or nil when the service has no advisory hook. The job
+// reads the opt-in again before it mints a token, so a repository removed from the list while the job waited
+// mints nothing. The token reads contents, metadata and pull requests, and writes nothing (ADR-0173).
+func (s *Service) advisoryJob(install installation, repo repository, number int, sha string) *advisoryJob {
+	if s.cfg.AdvisoryEnabled == nil || s.cfg.OnPullRequest == nil {
+		return nil
+	}
+	name := strings.ToLower(repo.FullName)
+	return &advisoryJob{repo: name, job: job{name: "advisory", kind: "advisory_pr", lane: laneAdvisory, installation: install.ID, run: func(ctx context.Context, tenant uuid.UUID) error {
+		enabled, err := s.cfg.AdvisoryEnabled(ctx, tenant, name)
+		if err != nil || !enabled {
+			return err
+		}
+		client, err := s.cfg.App.repoClient(ctx, install.ID, repo.ID, repo.FullName, map[string]string{
+			"contents": readAccess, "metadata": readAccess, "pull_requests": readAccess,
+		})
+		if err != nil {
+			return err
+		}
+		return s.cfg.OnPullRequest(ctx, OpenPullRequest{
+			Tenant:         tenant,
+			InstallationID: install.ID,
+			Repo:           repo.FullName,
+			RepositoryID:   repo.ID,
+			Number:         number,
+			HeadSHA:        sha,
+			Client:         client,
+		})
+	}}}
 }
 
 func (s *Service) routePush(body []byte) (*job, error) {

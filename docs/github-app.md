@@ -51,7 +51,7 @@ ipso-server webhooks
 | `IPSO_GITHUB_APP_PRIVATE_KEY` | The private key as PEM, PKCS#1 or PKCS#8 |
 | `IPSO_GITHUB_WEBHOOK_SECRET` | The webhook secret, at least 32 bytes |
 | `IPSO_LISTEN_ADDR` | Listen address, `:8080` by default |
-| `IPSO_GATEWAY_CONFIG` | Optional. The path of the LLM gateway configuration, a JSON file. When it is set, a merged pull request is turned into decision proposals. Without it no discussion is read and no model is called. The service stops at start when the file is wrong or a route's key is missing |
+| `IPSO_GATEWAY_CONFIG` | Optional. The path of the LLM gateway configuration, a JSON file. When it is set, a merged pull request is turned into decision proposals, and the open pull requests of the repositories a tenant opted in get llm-advisory checks. Without it no discussion or diff is read and no model is called. The service stops at start when the file is wrong or a route's key is missing |
 | `IPSO_LLM_<NAME>` | The key of one route, named by the `key_env` of that route in the file. The file holds no key |
 
 The listener speaks plain HTTP, so put TLS and a rate limit in front of it. `GET /healthz` answers 204. It says nothing about GitHub.
@@ -76,6 +76,16 @@ When a pull request merges, the service reads its body, conversation comments, r
 
 The job runs on two workers of its own, so a slow model never delays a check run, and it is bounded to 15 minutes. A job that fails, such as one over the tenant's budget or one whose routes are all down, is forgotten, and a redelivery from the App's advanced settings runs it again. The comments already turned into proposals are not sent again. The log of a finished job holds counts only.
 
+## Turn on llm-advisory checks
+
+A decision can carry an `llm-advisory` check, which no engine can codify. With `IPSO_GATEWAY_CONFIG` set, the service evaluates those checks on the open pull requests of each repository a tenant names in `advisory_repositories` of `PUT /v1/llm-policy` on the api role, and stores one advisory verdict per check and head commit ([ADR-0173](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0173-llm-advisory-checks-on-pull-requests.md)). The list is the only switch, and it is empty for every tenant until an admin sets it: a repository that is not on it mints no token, reads nothing and sends nothing. This is the first path that sends source code to a model, as diff hunks, so name only repositories whose code may go to the routes of your gateway.
+
+When a pull request is opened, updated, reopened or marked ready, the service reads the pull request with a token limited to `contents:read`, `metadata:read` and `pull_requests:read` for that repository. It sends nothing when the pull request is a draft, when its head moved past the delivery, when its branch is in a fork, when its author is a bot or cannot write to the repository ([ADR-0104](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0104-trust-gate-by-repository-permission.md)), or when it changes more than 500 files. Then, for each decision in force for the changed files in any environment, it takes the `llm-advisory` checks whose `target` is absent or `diff`, at most 10 per head commit, and leaves out a sensitive decision. Each check sends the decision's title and statement, the prompt file its `ref` names read at the base commit, and the hunks of the files in its scope, with secrets and email addresses redacted.
+
+A check is skipped, and the log counts it, when a file in its scope is an env file, a key or certificate, an SSH key or `CODEOWNERS`, when GitHub left out the diff of a changed file, when a hunk does not match its own counts, when it holds more than 20 hunks or more than 12 KiB, or when its prompt file is missing or longer than 2000 characters. The model answers `complies`, `deviates` or `unclear`, the hunks it rests on, and one plain sentence. Any other answer stores nothing. The server builds the places from its own hunks, the result is always `advisory` and the mode always `advise`, whatever mode the check declares, so nothing here blocks a merge ([ADR-0005](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0005-llm-is-advisory-only.md)). A redelivery and a push that sends the same hunks again call no model.
+
+The job runs on one worker of its own, apart from the check runs and the merged pull requests, and is bounded to 15 minutes. When its queue of 64 is full, the job is dropped and logged and the check run of the delivery still runs. It spends the tenant's one monthly budget, which proposals and their relation hints share. The log of a finished job holds counts and the repository id only.
+
 ## Check the sandbox install
 
 1. Install the App on one repository of a sandbox organization, and bind the installation to a tenant as above.
@@ -88,7 +98,8 @@ The job runs on two workers of its own, so a slow model never delays a check run
 
 | Event | Work |
 | --- | --- |
-| `pull_request` opened, synchronize, reopened | One check run on the head commit, over the files of the pull request |
+| `pull_request` opened, synchronize, reopened | One check run on the head commit, over the files of the pull request. With `IPSO_GATEWAY_CONFIG` set and the repository opted in, the llm-advisory checks of the head commit too |
+| `pull_request` ready_for_review, with `IPSO_GATEWAY_CONFIG` set and the repository opted in | The llm-advisory checks of the head commit |
 | `push` to the default branch | One check run on the new commit, over the files since the previous commit |
 | `pull_request` closed and merged, with `IPSO_GATEWAY_CONFIG` set | The discussion is read and turned into pending proposals for the tenant of the installation |
 | `installation` deleted | The service asks GitHub, as the App, whether the installation is gone, and if it is, removes its binding before it answers |

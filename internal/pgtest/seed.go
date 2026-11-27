@@ -237,6 +237,13 @@ func SeedEveryTable(t testing.TB, app *sql.DB, tenant string) {
 		INSERT INTO verification.verdict (tenant_id, upload_id, decision_id, slug, check_index, mode, result, violations, fingerprints)
 		VALUES ($1::uuid, $2::uuid, '01M5QJ0V9EVXKR4C89XNBNT5GG', 'use-tls', 0, 'block', 'fail', 2,
 		        ARRAY[sha256('violation a'), sha256('violation b')])`, tenant, upload)
+	mustExec(`
+		INSERT INTO verification.advisory_verdict
+			(tenant_id, repository_id, repo, pull_number, head_sha, base_sha, decision_id, decision_version, check_index,
+			 assessment, cited, reason, model_id, prompt_version, input_sha256, prompt_sha256)
+		VALUES ($1::uuid, 1, 'acme/payments', 8, repeat('ab', 20), repeat('cd', 20), $2::uuid, 1, 0, 'deviates',
+		        '[{"path":"db/schema.sql","start_line":3,"end_line":9}]'::jsonb, 'The change adds a MySQL table.',
+		        'm', 'pr-advisory-v1', sha256('input'), sha256('prompt'))`, tenant, DecisionKeep)
 
 	// A finished export an admin asked for, with its one part (ADR-0111). It finished an hour ago, so a new
 	// request is past the cooldown and replaces it.

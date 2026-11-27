@@ -231,8 +231,10 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 	}
 	llmPol := s.expect(http.StatusOK, personA, http.MethodPut, "/v1/llm-policy", map[string]any{
 		"allow_authoring_assist": true, "allow_check_eval": false, "allow_agent_proposal_relations": true,
+		"advisory_repositories": []string{"acme/web", "Acme/API", "acme/api"},
 	})
-	if llmPol["allow_authoring_assist"] != true || llmPol["allow_agent_proposal_relations"] != true {
+	if llmPol["allow_authoring_assist"] != true || llmPol["allow_agent_proposal_relations"] != true ||
+		fmt.Sprint(llmPol["advisory_repositories"]) != "[acme/api acme/web]" {
 		t.Fatalf("the llm policy answered %v", llmPol)
 	}
 	freshnessPol := s.expect(http.StatusOK, personA, http.MethodPut, "/v1/freshness-policies", map[string]any{
@@ -289,15 +291,43 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 		byAction["api.allow_premise_host"].Principal != f.callers[personA].Principal {
 		t.Errorf("the log names the wrong people: %+v", byAction)
 	}
+	// The policy entry counts the advisory repositories and names them by a digest, not by name.
+	if subject := byAction["api.set_llm_policy"].Subject; !strings.Contains(subject, "advisory_repositories=2 sha256=") || strings.Contains(subject, "acme/") {
+		t.Errorf("the llm policy entry is %q", subject)
+	}
 	if len(s.logged()) != before+16 {
 		t.Errorf("%d entries after the clearance, host, approvals, export request, invitation, role binding, name erasure, human proposal+approval, policies and agent pin, from %d", len(s.logged()), before)
 	}
 
-	// A request written before ADR-0172 leaves the switch out, which turns it off.
+	// A repository that is not owner/name refuses the whole policy, and the list stays as it was.
+	// The document refuses these bodies too, so they go out unchecked to reach the handler's own refusal.
+	refused := func(body map[string]any) {
+		t.Helper()
+		payload, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w := s.raw(personA, http.MethodPut, "/v1/llm-policy", "application/json", string(payload)); w.Code != http.StatusBadRequest {
+			t.Errorf("PUT /v1/llm-policy %s: status %d, want 400", payload, w.Code)
+		}
+	}
+	for _, bad := range []string{"acme", "acme/web/extra", "acme/we b", strings.Repeat("a", 40) + "/web"} {
+		refused(map[string]any{"allow_authoring_assist": true, "allow_check_eval": true, "advisory_repositories": []string{"acme/web", bad}})
+	}
+	tooMany := make([]string, 101)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("acme/repo-%d", i)
+	}
+	refused(map[string]any{"allow_authoring_assist": true, "allow_check_eval": true, "advisory_repositories": tooMany})
+	if kept := s.expect(http.StatusOK, personA, http.MethodGet, "/v1/llm-policy", nil); fmt.Sprint(kept["advisory_repositories"]) != "[acme/api acme/web]" {
+		t.Fatalf("a refused policy changed the list: %v", kept)
+	}
+
+	// A request written before ADR-0172 and ADR-0173 leaves the switch and the list out, which turns both off.
 	llmPol = s.expect(http.StatusOK, personA, http.MethodPut, "/v1/llm-policy", map[string]any{
 		"allow_authoring_assist": true, "allow_check_eval": false,
 	})
-	if llmPol["allow_agent_proposal_relations"] != false {
+	if llmPol["allow_agent_proposal_relations"] != false || fmt.Sprint(llmPol["advisory_repositories"]) != "[]" {
 		t.Fatalf("the llm policy answered %v", llmPol)
 	}
 }

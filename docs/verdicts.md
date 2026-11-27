@@ -93,6 +93,12 @@ Audit question Q3, `GET /v1/audit/merges`, returns the verdicts of a merged comm
 
 A verdict that is a `fail` or a `waived` is also read against the waivers recorded for its decision ([docs/web-app.md](web-app.md)), and `waiver` on the item says the result: `waived` with `expires_at`, the latest end among the waivers that cover it, or `fail` with a null `expires_at`. `waiver` is null when the run reported `pass` or `error`, because a pass has nothing to waive and a waiver never covers an error. A run that reported `waived` is read like a `fail`, so a waiver written into the decision file of the repository shows as `waived` in the run and reads `fail` here until a person records it. The valid time is the time the server stored the upload, as for the baseline. A waiver covers a verdict when its scope covers every path of the repository, so a waiver of a path never covers one, because a report holds no path, a waiver of an environment covers a run that names that environment and no other, and an environment that is not a registry name reads as none. The reason, the approver, the ticket and the id of a waiver are not in the answer.
 
+## Advisory verdicts are apart
+
+An `llm-advisory` check is not evaluated by `ipso check`. When a tenant opts a repository in, the webhooks service evaluates it on each open pull request and stores an advisory verdict in `verification.advisory_verdict` ([docs/github-app.md](github-app.md#turn-on-llm-advisory-checks), [ADR-0173](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0173-llm-advisory-checks-on-pull-requests.md)). Its result is always `advisory` and its mode always `advise`, and the table refuses any other value. `GET /v1/verdicts`, audit question Q3 and decision health read `verification.verdict` only, so an advisory verdict never counts toward compliance, a merge gate or a health score. There is no read of advisory verdicts in the API yet.
+
+An upload can still name the index of an `llm-advisory` check. `ipso check` never writes one, and health skips those indexes.
+
 ## Failures
 
 | Status | Meaning |

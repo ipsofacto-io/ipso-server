@@ -107,6 +107,18 @@ func TestEvals(t *testing.T) {
 	for name, metric := range related {
 		metrics[name] = metric
 	}
+	advisoryCases, err := LoadAdvisoryCases("testdata/advisory-diffs.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	advised, err := AdvisorySuite(t, t.Context(), cassette.CompleteSchema, advisoryCases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("advisory scores:\n%s", Table(advised))
+	for name, metric := range advised {
+		metrics[name] = metric
+	}
 	t.Logf("scores:\n%s", Table(metrics))
 
 	scores := metrics.Scores()

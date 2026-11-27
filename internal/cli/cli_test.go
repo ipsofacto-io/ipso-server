@@ -270,7 +270,7 @@ func TestWebhooksServes(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code %d stderr %q", code, stderr)
 	}
-	if string(got.WebhookSecret) != values[webhookSecretEnv] || got.App == nil || got.OnMerged != nil {
+	if string(got.WebhookSecret) != values[webhookSecretEnv] || got.App == nil || got.OnMerged != nil || got.AdvisoryEnabled != nil || got.OnPullRequest != nil {
 		t.Fatalf("config %+v", got)
 	}
 	// The process opens the database as the application role behind the start gate of the api role, and
@@ -338,6 +338,13 @@ func TestWebhooksBuildsTheMergedHookFromTheGatewayConfig(t *testing.T) {
 	// client would panic if it did.
 	if err := got.OnMerged(t.Context(), integrations.MergedPullRequest{Repo: "acme/payments", Number: 7}); err == nil || err.Error() != "no tenant" {
 		t.Fatalf("the hook answered %v for a merged pull request with no tenant", err)
+	}
+	// The advisory hooks come with the gateway, and the job hook is the proposals one (ADR-0173).
+	if got.AdvisoryEnabled == nil || got.OnPullRequest == nil {
+		t.Fatalf("the advisory hooks are not set: %v, %v", got.AdvisoryEnabled != nil, got.OnPullRequest != nil)
+	}
+	if err := got.OnPullRequest(t.Context(), integrations.OpenPullRequest{Repo: "acme/payments", Number: 7}); err == nil || err.Error() != "no tenant" {
+		t.Fatalf("the advisory hook answered %v for a pull request with no tenant", err)
 	}
 }
 

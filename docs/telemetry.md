@@ -38,7 +38,7 @@ A span or a metric point carries these keys and no others.
 | `http.response.status_code` | The status |
 | `error.type` | The status for a 5xx, `panic`, or `rpc_error` |
 | `ipso.tenant.id` | The tenant. On every point of a role that has one, and on each webhook delivery once its installation is mapped. `runtasks` has none |
-| `ipso.job.kind` | A constant of the code: `check`, `merged_pr`, `runtask`, or a River job kind |
+| `ipso.job.kind` | A constant of the code: `check`, `merged_pr`, `advisory_pr`, `runtask`, or a River job kind |
 | `ipso.job.outcome` | `ok`, `error`, `timeout`, `canceled` or `panic` |
 | `mcp.method.name` | A method of the MCP server, or `_OTHER` |
 | `gen_ai.tool.name` | One of the four tools of the MCP server, and only on `tools/call` |

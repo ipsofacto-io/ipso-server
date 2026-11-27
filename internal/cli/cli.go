@@ -618,12 +618,10 @@ func webhooksCmd(ctx context.Context, stderr io.Writer, d deps) int {
 		},
 	}
 	if path := d.getenv(gatewayConfigEnv); path != "" {
-		hook, err := mergedHook(db, path, logger)
-		if err != nil {
+		if err := gatewayHooks(db, path, logger, &cfg); err != nil {
 			fprintf(stderr, "webhooks: %v\n", err)
 			return 1
 		}
-		cfg.OnMerged = hook
 	}
 	address := d.getenv(listenAddrEnv)
 	if address == "" {
@@ -642,24 +640,31 @@ func webhooksCmd(ctx context.Context, stderr io.Writer, d deps) int {
 	return 0
 }
 
-// mergedHook builds the LLM gateway from the configuration file and returns the hook that turns the discussion of
-// a merged pull request into decision proposals (ADR-0103). A route key comes from the IPSO_LLM_ variable the
-// route names, and no error here carries one.
-func mergedHook(db *sql.DB, path string, log *slog.Logger) (func(context.Context, integrations.MergedPullRequest) error, error) {
+// gatewayHooks builds the LLM gateway from the configuration file once and sets the hooks that call a model:
+// the one that turns the discussion of a merged pull request into decision proposals (ADR-0103), and the
+// advisory checks of an open pull request in a repository the tenant opted in (ADR-0173). Both share the
+// gateway, so a tenant has one monthly budget. A route key comes from the IPSO_LLM_ variable the route names,
+// and no error here carries one.
+func gatewayHooks(db *sql.DB, path string, log *slog.Logger, cfg *integrations.Config) error {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", gatewayConfigEnv, err)
+		return fmt.Errorf("%s: %w", gatewayConfigEnv, err)
 	}
 	defer func() { _ = file.Close() }()
-	cfg, err := llmgw.ParseConfig(file)
+	parsed, err := llmgw.ParseConfig(file)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	gateway, err := llmgw.New(cfg, llmgw.PGLedger{DB: db}, nil, log)
+	gateway, err := llmgw.New(parsed, llmgw.PGLedger{DB: db}, nil, log)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return proposals.OnMerged(db, gateway, log), nil
+	cfg.OnMerged = proposals.OnMerged(db, gateway, log)
+	cfg.AdvisoryEnabled = func(ctx context.Context, tenant uuid.UUID, repo string) (bool, error) {
+		return llmgw.AdvisesRepository(ctx, db, tenant, repo)
+	}
+	cfg.OnPullRequest = proposals.OnPullRequest(db, gateway, log)
+	return nil
 }
 
 // installConnectorKey parses IPSO_CONNECTOR_KEK when it is set and clears the process key when it is not.

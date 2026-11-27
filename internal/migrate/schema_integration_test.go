@@ -498,6 +498,7 @@ func TestTriggersRunOnTheCurrentTablesOnly(t *testing.T) {
 		{"identity.action_log", "action_log_no_truncate", 2 | 32},
 		{"identity.action_log", "action_log_open_sys_period", 1 | 2 | 4},
 		{"identity.action_log", "action_log_stamp", 1 | 2 | 4},
+		{"verification.advisory_verdict", "advisory_verdict_open_sys_period", 1 | 2 | 4},
 		{"proposals.agent_approval", "agent_approval_approver", 1 | 2 | 4},
 		{"proposals.agent_approval", "agent_approval_open_sys_period", 1 | 2 | 4},
 		{"verification.agent_pin", "agent_pin_open_sys_period", 1 | 2 | 4},

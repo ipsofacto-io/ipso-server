@@ -300,13 +300,16 @@ func deliver(t *testing.T, s *Service, event, id string, payload any) int {
 	return recorder.Code
 }
 
-// drain runs what the handler queued, check runs and merged pull request jobs alike, and returns.
+// drain runs what the handler queued, check runs, merged pull request jobs and advisory jobs alike, and
+// returns.
 func drain(s *Service) {
 	for {
 		select {
 		case next := <-s.queue:
 			s.work(context.Background(), next)
 		case next := <-s.merged:
+			s.work(context.Background(), next)
+		case next := <-s.advisory:
 			s.work(context.Background(), next)
 		default:
 			return
@@ -702,20 +705,24 @@ func TestFullMergedQueueAsksForRedelivery(t *testing.T) {
 func TestMergedJobsGetALongerBoundThanCheckRuns(t *testing.T) {
 	_, app := newFakeGitHub(t)
 	s := newTestService(t, app, nil, nil)
-	bound := func(merged bool) time.Duration {
+	bound := func(on lane) time.Duration {
 		var left time.Duration
-		s.work(t.Context(), job{delivery: "d-1", name: "bound", merged: merged, run: func(ctx context.Context, _ uuid.UUID) error {
+		s.work(t.Context(), job{delivery: "d-1", name: "bound", lane: on, run: func(ctx context.Context, _ uuid.UUID) error {
 			deadline, _ := ctx.Deadline()
 			left = time.Until(deadline)
 			return nil
 		}})
 		return left
 	}
-	if check := bound(false); check > jobTimeout || check < jobTimeout-time.Minute {
+	if check := bound(laneCheck); check > jobTimeout || check < jobTimeout-time.Minute {
 		t.Errorf("a check job is bounded to %s, want about %s", check, jobTimeout)
 	}
-	if merged := bound(true); merged > mergedJobTimeout || merged < mergedJobTimeout-time.Minute {
+	if merged := bound(laneMerged); merged > mergedJobTimeout || merged < mergedJobTimeout-time.Minute {
 		t.Errorf("a merged pull request job is bounded to %s, want about %s", merged, mergedJobTimeout)
+	}
+	// An advisory job waits on a model too (ADR-0173).
+	if advisory := bound(laneAdvisory); advisory > mergedJobTimeout || advisory < mergedJobTimeout-time.Minute {
+		t.Errorf("an advisory job is bounded to %s, want about %s", advisory, mergedJobTimeout)
 	}
 }
 
