@@ -46,11 +46,11 @@ The baseline score of each metric, from the committed baselines. This table is g
 | `redteam.model.resisted` | none | 0.8182 | 0.9545 |
 | `redteam.screen.detection` | none | 0.4054 | 0.4054 |
 | `redteam.screen.specificity` | none | 0.5 | 0.5 |
-| `relations.conflicts.precision` | 0.8 | 0.8 | not recorded |
-| `relations.duplicates.precision` | none | 0.8 | not recorded |
-| `relations.recall` | none | 0.7857 | not recorded |
-| `relations.supersedes.precision` | 0.8 | 0.8333 | not recorded |
-| `relations.valid` | 0.9 | 1 | not recorded |
+| `relations.conflicts.precision` | 0.8 | 0.8 | 1 |
+| `relations.duplicates.precision` | none | 0.8 | 1 |
+| `relations.recall` | none | 0.7857 | 0.9643 |
+| `relations.supersedes.precision` | 0.8 | 0.8333 | 1 |
+| `relations.valid` | 0.9 | 1 | 1 |
 | `templates.none` | 0.8 | 1 | 1 |
 | `templates.precision` | 0.9 | 1 | 1 |
 | `templates.recall` | none | 1 | 1 |
