@@ -157,6 +157,7 @@ func TestRelateKeepsSupersedesOnlyWhenTheProposalSaysTheOldChoiceEnds(t *testing
 		{"a negation", "Cache sessions in Memcached", "Sessions are no longer kept in Redis.", true},
 		{"an end word of the prompt", "Cache sessions in Memcached", "The Redis session default is withdrawn.", true},
 		{"a system shut down", "Cache sessions in Memcached", "The Redis session cluster is shut down.", true},
+		{"an -ing form", "Retiring the Redis session cache", "Web services keep session state in Memcached.", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			llm := &schemaLLM{scriptedLLM: scriptedLLM{answers: []string{answer}}}

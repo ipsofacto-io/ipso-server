@@ -42,7 +42,7 @@ const (
 	// RelationDuplicates means the proposal states the decision again.
 	RelationDuplicates Relation = "duplicates"
 	// RelationSupersedes means the proposal says it replaces, reverses, or retires the decision. Relate
-	// keeps it only when the proposal holds a change word of ADR-0085.
+	// keeps it only when the proposal holds a change word of ADR-0085 or an end word (saysTheOldChoiceEnds).
 	RelationSupersedes Relation = "supersedes"
 	// RelationConflicts means both cannot hold, and the proposal does not say it replaces the decision.
 	RelationConflicts Relation = "conflicts"
@@ -171,11 +171,16 @@ type shownDecision struct {
 }
 
 // endWords are the words, beyond the change words of ADR-0085, that a proposal uses to say that an old
-// choice ends: the relation prompt names a choice "withdrawn", and the others say the same of a system.
+// choice ends: the relation prompt names a choice "withdrawn", the others say the same of a system, and
+// the -ing forms of the change words that ADR-0085 leaves out are here so that Dedupe does not change.
 var endWords = map[string]bool{
-	"withdraw": true, "withdraws": true, "withdrawn": true, "withdrew": true, "shut": true, "shuts": true,
-	"decommission": true, "decommissions": true, "decommissioned": true, "discontinue": true,
-	"discontinues": true, "discontinued": true, "sunset": true, "sunsets": true,
+	"withdraw": true, "withdraws": true, "withdrawn": true, "withdrew": true, "withdrawing": true,
+	"shut": true, "shuts": true, "shutting": true, "shutdown": true,
+	"decommission": true, "decommissions": true, "decommissioned": true, "decommissioning": true,
+	"discontinue": true, "discontinues": true, "discontinued": true, "discontinuing": true,
+	"sunset": true, "sunsets": true, "sunsetted": true, "sunsetting": true,
+	"replacing": true, "retiring": true, "removing": true, "switching": true, "migrating": true,
+	"dropping": true, "deprecating": true, "stopping": true,
 }
 
 // saysTheOldChoiceEnds reports whether text holds a change word of ADR-0085 or one of endWords.
