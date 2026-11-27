@@ -48,8 +48,8 @@ The baseline score of each metric, from the committed baselines. This table is g
 | `redteam.screen.specificity` | none | 0.5 | 0.5 |
 | `relations.conflicts.precision` | 0.8 | 0.8 | not recorded |
 | `relations.duplicates.precision` | none | 0.8 | not recorded |
-| `relations.recall` | none | 0.7778 | not recorded |
-| `relations.supersedes.precision` | 0.8 | 1 | not recorded |
+| `relations.recall` | none | 0.7857 | not recorded |
+| `relations.supersedes.precision` | 0.8 | 0.8333 | not recorded |
 | `relations.valid` | 0.9 | 1 | not recorded |
 | `templates.none` | 0.8 | 1 | 1 |
 | `templates.precision` | 0.9 | 1 | 1 |

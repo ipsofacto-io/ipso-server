@@ -600,6 +600,11 @@
     "text": "{\"fits\":true}"
   },
   {
+    "prompt_sha256": "a0b42cfc03b486837e9b1439854fbe45ca11af8744919a367bf4e74e84527d86",
+    "model": "qwen3-4b-q4_k_m",
+    "text": "{\"d1\":\"supersedes\",\"d2\":\"supersedes\",\"d3\":\"supersedes\"}"
+  },
+  {
     "prompt_sha256": "a0bbbc46ae12997b75544c0c00da20ea09c5ea99b1325272a0fe02b8b2704451",
     "model": "qwen3-4b-q4_k_m",
     "text": "{\"candidates\":[{\"source\":0,\"title\":\"RFC 9457 Compliance for Error Responses\",\"statement\":\"Error responses must follow RFC 9457 problem details.\",\"rationale\":\"The comment specifies that error responses should adhere to RFC 9457, replacing the previous ad-hoc error format.\",\"confidence\":1.0}]}"
