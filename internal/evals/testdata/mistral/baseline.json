@@ -39,6 +39,24 @@
   "redteam.screen.specificity": {
     "score": 0.5
   },
+  "relations.conflicts.precision": {
+    "score": 1,
+    "min": 0.8
+  },
+  "relations.duplicates.precision": {
+    "score": 1
+  },
+  "relations.recall": {
+    "score": 0.9643
+  },
+  "relations.supersedes.precision": {
+    "score": 1,
+    "min": 0.8
+  },
+  "relations.valid": {
+    "score": 1,
+    "min": 0.9
+  },
   "templates.none": {
     "score": 1,
     "min": 0.8
