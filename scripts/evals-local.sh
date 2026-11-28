@@ -118,12 +118,15 @@ server_pid=""
 
 cleanup() {
   local exit_code=$?
+  set +e
   if [ -n "$server_pid" ]; then
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
   fi
   if [ -n "$cassette_backup" ] && [ -f "$cassette_backup" ]; then
-    cp "$cassette_backup" "$cassette_path"
+    if ! cp "$cassette_backup" "$cassette_path"; then
+      echo "warning: failed to restore ${cassette_path} from ${cassette_backup}" >&2
+    fi
   fi
   rm -rf "$work_dir"
   exit "$exit_code"
@@ -150,7 +153,7 @@ LLAMA_API_KEY="$key" llama-server \
 server_pid=$!
 
 ready=0
-for _ in $(seq 1 60); do
+for _ in $(seq 1 180); do
   if ! kill -0 "$server_pid" 2>/dev/null; then
     echo "error: llama-server exited during startup:" >&2
     cat "$llama_log" >&2
@@ -164,12 +167,12 @@ for _ in $(seq 1 60); do
 done
 
 if [ "$ready" -ne 1 ]; then
-  echo "error: llama-server did not become healthy within 60s:" >&2
+  echo "error: llama-server did not become healthy within 180s:" >&2
   cat "$llama_log" >&2
   exit 1
 fi
 
-test_args=(-run '^TestEvals$' -count=1 -timeout 60m -v -route local -record -report "$report_path")
+test_args=(-run '^TestEvals$' -count=1 -timeout 120m -v -route local -record -report "$report_path")
 if [ "$mode" = "update" ]; then
   test_args+=(-update)
 fi
