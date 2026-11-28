@@ -78,6 +78,9 @@ repo_root="$(cd "${script_dir}/.." && pwd)"
 cd "$repo_root"
 
 cassette_path="internal/evals/testdata/cassette.json"
+baseline_path="internal/evals/testdata/baseline.json"
+history_path="internal/evals/testdata/history.jsonl"
+docs_path="docs/evals.md"
 if [ ! -f "$cassette_path" ]; then
   echo "error: ${cassette_path} not found under ${repo_root}" >&2
   exit 1
@@ -113,8 +116,18 @@ tmp_base="${tmp_base%/}"
 work_dir="$(mktemp -d "${tmp_base}/ipso-evals-local.XXXXXX")"
 llama_log="${work_dir}/llama.log"
 report_path="${tmp_base}/ipso-evals-scores-$(date +%Y%m%d-%H%M%S)-$$.json"
-cassette_backup=""
+backup_dir="${work_dir}/backup"
+mkdir -p "$backup_dir"
 server_pid=""
+
+restore_file() {
+  local src="$1" dst="$2"
+  if [ -f "$src" ]; then
+    if ! cp "$src" "$dst"; then
+      echo "warning: failed to restore ${dst} from ${src}" >&2
+    fi
+  fi
+}
 
 cleanup() {
   local exit_code=$?
@@ -123,19 +136,35 @@ cleanup() {
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
   fi
-  if [ -n "$cassette_backup" ] && [ -f "$cassette_backup" ]; then
-    if ! cp "$cassette_backup" "$cassette_path"; then
-      echo "warning: failed to restore ${cassette_path} from ${cassette_backup}" >&2
-    fi
-  fi
+  case "$mode" in
+    check)
+      restore_file "${backup_dir}/cassette.json" "$cassette_path"
+      ;;
+    record)
+      # Restore if the run aborted before completing all suites and writing the report.
+      if [ ! -f "$report_path" ]; then
+        restore_file "${backup_dir}/cassette.json" "$cassette_path"
+      fi
+      ;;
+    update)
+      if [ "$exit_code" -ne 0 ]; then
+        restore_file "${backup_dir}/cassette.json" "$cassette_path"
+        restore_file "${backup_dir}/baseline.json" "$baseline_path"
+        restore_file "${backup_dir}/history.jsonl" "$history_path"
+        restore_file "${backup_dir}/evals.md" "$docs_path"
+      fi
+      ;;
+  esac
   rm -rf "$work_dir"
   exit "$exit_code"
 }
 trap cleanup EXIT INT TERM
 
-if [ "$mode" = "check" ]; then
-  cassette_backup="${work_dir}/cassette.json.bak"
-  cp "$cassette_path" "$cassette_backup"
+cp "$cassette_path" "${backup_dir}/cassette.json"
+if [ "$mode" = "update" ]; then
+  [ -f "$baseline_path" ] && cp "$baseline_path" "${backup_dir}/baseline.json"
+  [ -f "$history_path" ] && cp "$history_path" "${backup_dir}/history.jsonl"
+  [ -f "$docs_path" ] && cp "$docs_path" "${backup_dir}/evals.md"
 fi
 
 key="$(openssl rand -hex 24)"
