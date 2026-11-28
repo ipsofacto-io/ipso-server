@@ -195,7 +195,18 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		wantStatus := r.URL.Query().Get("status")
 		var runs []map[string]any
 		for i, c := range f.created {
-			if c["head_sha"] == sha && (wantName == "" || c["name"] == wantName) && (wantStatus == "" || c["status"] == wantStatus) {
+			if c["head_sha"] != sha || (wantName != "" && c["name"] != wantName) {
+				continue
+			}
+			status, _ := c["status"].(string)
+			if status != "completed" {
+				for _, p := range f.patches {
+					if ps, _ := p["status"].(string); ps == "completed" {
+						status = "completed"
+					}
+				}
+			}
+			if wantStatus == "" || status == wantStatus {
 				runs = append(runs, map[string]any{"id": int64(77 + i)})
 			}
 		}

@@ -145,7 +145,9 @@ func (c *RepoClient) HasAdvisoryCheckRun(ctx context.Context, headSHA string) (b
 // PublishAdvisoryCheckRun creates and completes an ipso / advisory check run on headSHA.
 // It always concludes neutral and never concludes failure or action_required.
 // When annotations fit within 50 items, the check run is created completed in one request;
-// remaining batches are appended via PATCH in chunks of 50 while staying completed and neutral.
+// when more than 50 items exist, POST opens the run in_progress and only the final PATCH
+// marks it completed with conclusion neutral, so a failed intermediate PATCH never fools
+// HasAdvisoryCheckRun into skipping retry on webhook redelivery.
 func (c *RepoClient) PublishAdvisoryCheckRun(ctx context.Context, headSHA string, run AdvisoryCheckRun) error {
 	if !validSHA.MatchString(headSHA) {
 		return errors.New("publish advisory check run: head_sha is not a commit SHA")
@@ -187,15 +189,19 @@ func (c *RepoClient) PublishAdvisoryCheckRun(ctx context.Context, headSHA string
 		ID int64 `json:"id"`
 	}
 	postBody := map[string]any{
-		"name":       AdvisoryCheckName,
-		"head_sha":   headSHA,
-		"status":     "completed",
-		"conclusion": advisoryConclusion,
+		"name":     AdvisoryCheckName,
+		"head_sha": headSHA,
 		"output": checkOutput{
 			Title:       title,
 			Summary:     summary,
 			Annotations: first,
 		},
+	}
+	if len(rest) == 0 {
+		postBody["status"] = "completed"
+		postBody["conclusion"] = advisoryConclusion
+	} else {
+		postBody["status"] = "in_progress"
 	}
 	if err := c.app.call(ctx, c.token, http.MethodPost, c.repoPath("/check-runs"), postBody, &created); err != nil {
 		return fmt.Errorf("create advisory check run: %w", err)
@@ -211,13 +217,15 @@ func (c *RepoClient) PublishAdvisoryCheckRun(ctx context.Context, headSHA string
 		}
 		rest = rest[len(batch):]
 		patchBody := map[string]any{
-			"status":     "completed",
-			"conclusion": advisoryConclusion,
 			"output": checkOutput{
 				Title:       title,
 				Summary:     summary,
 				Annotations: batch,
 			},
+		}
+		if len(rest) == 0 {
+			patchBody["status"] = "completed"
+			patchBody["conclusion"] = advisoryConclusion
 		}
 		if err := c.app.call(ctx, c.token, http.MethodPatch, path, patchBody, nil); err != nil {
 			return fmt.Errorf("append advisory check run annotations: %w", err)

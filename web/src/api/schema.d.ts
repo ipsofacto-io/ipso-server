@@ -498,7 +498,7 @@ export interface paths {
         };
         /**
          * List stored llm-advisory verdicts, newest first.
-         * @description Each item is one AI-generated advisory verdict stored from an `llm-advisory` pull request check (ADR-0174, IPSO-162). `mode` is always `advise` and `result` is always `advisory`. Advisory verdicts never block a merge or count toward compliance health, and no field or filter names a person.
+         * @description Each item is one AI-generated advisory verdict stored from an `llm-advisory` pull request check (ADR-0174, ADR-0175, IPSO-162). `mode` is always `advise` and `result` is always `advisory`. Advisory verdicts never block a merge or count toward compliance health, and no field or filter names a person.
          */
         get: operations["list_advisory_verdicts"];
         put?: never;

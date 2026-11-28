@@ -334,7 +334,7 @@ func TestPublishAdvisoryCheckRunIsAlwaysNeutralAndPlainText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 55 annotations force one POST (50) and one PATCH (5), both completed with conclusion "neutral".
+	// 55 annotations force one in_progress POST (50) and one completing PATCH (5) with conclusion "neutral".
 	anns := make([]AdvisoryAnnotation, 55)
 	for i := range anns {
 		level := "notice"
@@ -365,8 +365,8 @@ func TestPublishAdvisoryCheckRunIsAlwaysNeutralAndPlainText(t *testing.T) {
 		t.Fatalf("created %d, patches %d, want 1 and 1", len(fake.created), len(fake.patches))
 	}
 	post := fake.created[0]
-	if post["name"] != AdvisoryCheckName || post["status"] != "completed" || post["conclusion"] != "neutral" {
-		t.Fatalf("unexpected POST check run: %v", post)
+	if post["name"] != AdvisoryCheckName || post["status"] != "in_progress" || post["conclusion"] != nil {
+		t.Fatalf("unexpected POST check run for multi-batch publish: %v", post)
 	}
 	output := post["output"].(map[string]any)
 	firstBatch := output["annotations"].([]any)
@@ -426,5 +426,39 @@ func TestPublishAdvisoryCheckRunIsAlwaysNeutralAndPlainText(t *testing.T) {
 	cappedSummary := cappedPost["output"].(map[string]any)["summary"].(string)
 	if !strings.Contains(cappedSummary, "3 more advisory citations are not annotated.") {
 		t.Fatalf("summary missing omitted citation note: %q", cappedSummary)
+	}
+
+	// Single-batch publish (<= 50 annotations) completes atomically on POST with conclusion "neutral".
+	singleSHA := "1111222233334444555566667777888899990000"
+	patchesBefore := len(fake.patches)
+	if err := client.PublishAdvisoryCheckRun(t.Context(), singleSHA, AdvisoryCheckRun{
+		Title:       "Advisory check: 1 check complied",
+		Summary:     "AI-generated advisory verdicts.",
+		Annotations: []AdvisoryAnnotation{{Path: "db/schema.sql", StartLine: 1, EndLine: 1, Level: "notice", Title: "Complies", Message: "ok"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	singlePost := fake.created[len(fake.created)-1]
+	if singlePost["status"] != "completed" || singlePost["conclusion"] != "neutral" || len(fake.patches) != patchesBefore {
+		t.Fatalf("single-batch publish did not complete atomically: post=%v patches=%d->%d", singlePost, patchesBefore, len(fake.patches))
+	}
+
+	// If a multi-batch PATCH fails, the check run stays in_progress so HasAdvisoryCheckRun returns false for retry.
+	failFake, failApp := newFakeGitHub(t)
+	failFake.statusFor["/repos/"+testRepo+"/check-runs/77"] = http.StatusInternalServerError
+	failClient, err := failApp.repoClient(t.Context(), 42, 9, testRepo, map[string]string{"checks": writeAccess})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := failClient.PublishAdvisoryCheckRun(t.Context(), headSHA, AdvisoryCheckRun{
+		Title:       "Advisory check",
+		Summary:     "AI-generated advisory verdicts.",
+		Annotations: anns,
+	}); err == nil {
+		t.Fatal("expected PATCH failure error")
+	}
+	exists, err = failClient.HasAdvisoryCheckRun(t.Context(), headSHA)
+	if err != nil || exists {
+		t.Fatalf("HasAdvisoryCheckRun after failed PATCH = %v, %v; want false, nil", exists, err)
 	}
 }
