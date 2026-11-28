@@ -173,7 +173,7 @@ func ResolvePaths(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo, env s
 // ResolvePathsAnyEnv answers for a change that no environment runs yet, such as an open pull request:
 // the decisions in force for each path of repo in any environment, because an omitted env matches every
 // scope that names one (ADR-0051 decision 4). The advisory job of a pull request uses it, and no request
-// of the API reaches it (ADR-0173). repo and every path are still required, and the rest is ResolvePaths.
+// of the API reaches it (ADR-0174). repo and every path are still required, and the rest is ResolvePaths.
 func ResolvePathsAnyEnv(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo string, paths []string, validAt, knownAt time.Time) (Resolved, error) {
 	return resolvePaths(ctx, db, tenant, repo, "", true, paths, validAt, knownAt)
 }

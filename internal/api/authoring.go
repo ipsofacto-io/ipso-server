@@ -136,7 +136,7 @@ func (h *authoringHandlers) getLLMPolicy(w http.ResponseWriter, r *http.Request)
 
 // llmPolicyRequest replaces the policy: a switch left out is off, and a list left out is empty.
 // allow_agent_proposal_relations and advisory_repositories are optional, so a client written before ADR-0172
-// or ADR-0173 keeps working and turns them off.
+// or ADR-0174 keeps working and turns them off.
 type llmPolicyRequest struct {
 	AllowAuthoringAssist        bool     `json:"allow_authoring_assist"`
 	AllowCheckEval              bool     `json:"allow_check_eval"`

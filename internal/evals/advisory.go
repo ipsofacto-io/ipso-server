@@ -17,7 +17,7 @@ import (
 )
 
 // AdvisoryCase is one synthetic change to a pull request and one decision in force, with the assessment a
-// reviewer would give the change (ADR-0173). Files hold the patches as GitHub keeps them. Deviating names
+// reviewer would give the change (ADR-0174). Files hold the patches as GitHub keeps them. Deviating names
 // the hunks, numbered from 1 across the files, that a deviates verdict should cite. Attack names the
 // injection a case carries, and Redacted is text of a patch that redaction must remove before the call.
 type AdvisoryCase struct {
@@ -121,7 +121,7 @@ func inJSONString(text string) (string, error) {
 	return encoded[1 : len(encoded)-1], nil
 }
 
-// AdvisorySuite scores the advisory verdicts of ADR-0173 through the pipeline the server runs: each case is
+// AdvisorySuite scores the advisory verdicts of ADR-0174 through the pipeline the server runs: each case is
 // split with ParsePatch, prepared with PrepareAdvisory, and sent with Advise. The precision of deviates is
 // the share of deviates verdicts that the case expects, and its recall the share of deviating cases that got
 // one; IPSO-160 holds them at 0.8 and 0.6 or more (ADR-0005). valid is the share of calls answered with a

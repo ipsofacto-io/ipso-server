@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Assessments are the words an advisory verdict can hold (ADR-0173).
+// Assessments are the words an advisory verdict can hold (ADR-0174).
 const (
 	Complies = "complies"
 	Deviates = "deviates"

@@ -10,12 +10,12 @@ import (
 const (
 	// patchesPerGet is smaller than changedFilesPerGet, because a page of patches holds diff text.
 	patchesPerGet = 30
-	// MaxPatchFiles is the most changed files the advisory job of a pull request reads (ADR-0173).
+	// MaxPatchFiles is the most changed files the advisory job of a pull request reads (ADR-0174).
 	MaxPatchFiles = 500
 )
 
 // PullRequest is what the advisory job reads of a pull request before it sends anything to a model
-// (ADR-0173). Author and AuthorType are untrusted until RepoClient.CanWrite says the login can write to
+// (ADR-0174). Author and AuthorType are untrusted until RepoClient.CanWrite says the login can write to
 // the repository. HeadRepositoryID is 0 when the head repository is gone, as for a deleted fork. BaseRef
 // is the branch the pull request targets, and DefaultBranch the default branch of the base repository.
 type PullRequest struct {

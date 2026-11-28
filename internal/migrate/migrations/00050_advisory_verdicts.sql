@@ -1,5 +1,5 @@
 -- +goose Up
--- Advisory verdicts of llm-advisory checks on pull requests (IPSO-160, ADR-0173).
+-- Advisory verdicts of llm-advisory checks on pull requests (IPSO-160, ADR-0174).
 --
 -- A tenant names the repositories whose pull requests may send diff hunks to a model. The list is the
 -- only switch: an empty list sends nothing. Each entry is a lowercase owner/name, as verification.upload

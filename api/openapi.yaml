@@ -4078,7 +4078,7 @@ components:
         advisory_repositories:
           type: array
           maxItems: 100
-          description: The repositories, as owner/name, whose pull requests send diff hunks through the LLM gateway to evaluate llm-advisory checks (ADR-0173). Names are stored in lowercase, sorted and once each. Empty when left out of a request; every response carries it.
+          description: The repositories, as owner/name, whose pull requests send diff hunks through the LLM gateway to evaluate llm-advisory checks (ADR-0174). Names are stored in lowercase, sorted and once each. Empty when left out of a request; every response carries it.
           items:
             type: string
             pattern: '^[A-Za-z0-9_.-]{1,39}/[A-Za-z0-9_.-]{1,100}$'

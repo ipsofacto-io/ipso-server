@@ -13,7 +13,7 @@ import (
 
 var tenantB = uuid.MustParse("00000000-0000-4000-8000-00000000000b")
 
-// The list of repositories is the only switch of llm-advisory checks (ADR-0173): a tenant with no row, an
+// The list of repositories is the only switch of llm-advisory checks (ADR-0174): a tenant with no row, an
 // empty list, or another tenant's list opts nothing in.
 func TestAdvisesRepositoryReadsTheTenantsList(t *testing.T) {
 	ledger, admin := newLedger(t)

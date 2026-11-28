@@ -21,14 +21,14 @@ import (
 )
 
 const (
-	// AdvisoryPromptVersion names the prompt an advisory verdict was made with (ADR-0173).
+	// AdvisoryPromptVersion names the prompt an advisory verdict was made with (ADR-0174).
 	AdvisoryPromptVersion = "pr-advisory-v2"
 	// maxAdvisoryTokens bounds an answer of three keys, ten hunk numbers and a reason of 300 runes.
 	maxAdvisoryTokens = 256
 	// MaxAdvisoryHunks is the most hunks one check sends. A check that would send more is skipped.
 	MaxAdvisoryHunks = 20
 	// maxAdvisoryMessageBytes bounds the JSON sent for one check, so that it fits the 8192-token context of
-	// the local route with the prompt and the answer (ADR-0173).
+	// the local route with the prompt and the answer (ADR-0174).
 	maxAdvisoryMessageBytes = 12 << 10
 	// MaxCheckPromptRunes bounds the check prompt file a check names, and the title and the statement bound
 	// what the model reads of the decision.
@@ -84,7 +84,7 @@ func ValidCheckPromptRef(ref string) bool {
 }
 
 // NeverSent reports whether a file is one whose diff ipso never sends to a model, because it usually holds a
-// secret or says who owns the code: an env file, a key or certificate, an SSH key, or CODEOWNERS (ADR-0173).
+// secret or says who owns the code: an env file, a key or certificate, an SSH key, or CODEOWNERS (ADR-0174).
 // The name is compared without its directory. A path that redaction would change, such as one that holds an
 // email address, is never sent either, so a place a verdict stores is always a path the model was shown.
 func NeverSent(file string) bool {
@@ -195,7 +195,7 @@ type AdvisoryRequest struct {
 
 // PreparedAdvisory is a request as it will be sent: the JSON the model reads, and its digest. The digest
 // leaves out the random markers of the call, so the same hunks and the same decision text give the same
-// digest on another head, and the answer can be reused (ADR-0173).
+// digest on another head, and the answer can be reused (ADR-0174).
 type PreparedAdvisory struct {
 	payload []byte
 	hunks   []Hunk

@@ -323,7 +323,7 @@ func TestEveryWriteMatchesTheDocumentAndIsLogged(t *testing.T) {
 		t.Fatalf("a refused policy changed the list: %v", kept)
 	}
 
-	// A request written before ADR-0172 and ADR-0173 leaves the switch and the list out, which turns both off.
+	// A request written before ADR-0172 and ADR-0174 leaves the switch and the list out, which turns both off.
 	llmPol = s.expect(http.StatusOK, personA, http.MethodPut, "/v1/llm-policy", map[string]any{
 		"allow_authoring_assist": true, "allow_check_eval": false,
 	})

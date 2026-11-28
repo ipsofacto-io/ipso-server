@@ -642,7 +642,7 @@ func webhooksCmd(ctx context.Context, stderr io.Writer, d deps) int {
 
 // gatewayHooks builds the LLM gateway from the configuration file once and sets the hooks that call a model:
 // the one that turns the discussion of a merged pull request into decision proposals (ADR-0103), and the
-// advisory checks of an open pull request in a repository the tenant opted in (ADR-0173). Both share the
+// advisory checks of an open pull request in a repository the tenant opted in (ADR-0174). Both share the
 // gateway, so a tenant has one monthly budget. A route key comes from the IPSO_LLM_ variable the route names,
 // and no error here carries one.
 func gatewayHooks(db *sql.DB, path string, log *slog.Logger, cfg *integrations.Config) error {

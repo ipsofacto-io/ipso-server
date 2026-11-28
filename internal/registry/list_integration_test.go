@@ -100,7 +100,7 @@ func TestResolvePathsRefusesARequestThatWidensTheAnswer(t *testing.T) {
 }
 
 // A pull request runs in no environment yet, so the decisions of every environment apply to it, and the
-// rest of the answer is the one ResolvePaths gives (ADR-0173).
+// rest of the answer is the one ResolvePaths gives (ADR-0174).
 func TestResolvePathsAnyEnvMatchesEveryEnvironment(t *testing.T) {
 	r := newRegistryDB(t)
 	org := r.scope(t, tenantA, uuid.Nil, "org", "acme")

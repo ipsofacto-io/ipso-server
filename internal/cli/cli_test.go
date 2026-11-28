@@ -339,7 +339,7 @@ func TestWebhooksBuildsTheMergedHookFromTheGatewayConfig(t *testing.T) {
 	if err := got.OnMerged(t.Context(), integrations.MergedPullRequest{Repo: "acme/payments", Number: 7}); err == nil || err.Error() != "no tenant" {
 		t.Fatalf("the hook answered %v for a merged pull request with no tenant", err)
 	}
-	// The advisory hooks come with the gateway, and the job hook is the proposals one (ADR-0173).
+	// The advisory hooks come with the gateway, and the job hook is the proposals one (ADR-0174).
 	if got.AdvisoryEnabled == nil || got.OnPullRequest == nil {
 		t.Fatalf("the advisory hooks are not set: %v, %v", got.AdvisoryEnabled != nil, got.OnPullRequest != nil)
 	}

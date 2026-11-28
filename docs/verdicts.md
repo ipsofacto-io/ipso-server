@@ -95,7 +95,7 @@ A verdict that is a `fail` or a `waived` is also read against the waivers record
 
 ## Advisory verdicts are apart
 
-An `llm-advisory` check is not evaluated by `ipso check`. When a tenant opts a repository in, the webhooks service evaluates it on each open pull request into the default branch and stores an advisory verdict in `verification.advisory_verdict` ([docs/github-app.md](github-app.md#turn-on-llm-advisory-checks), [ADR-0173](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0173-llm-advisory-checks-on-pull-requests.md)). Its result is always `advisory` and its mode always `advise`, and the table refuses any other value. `GET /v1/verdicts`, audit question Q3 and decision health read `verification.verdict` only, so an advisory verdict never counts toward compliance, a merge gate or a health score. There is no read of advisory verdicts in the API yet.
+An `llm-advisory` check is not evaluated by `ipso check`. When a tenant opts a repository in, the webhooks service evaluates it on each open pull request into the default branch and stores an advisory verdict in `verification.advisory_verdict` ([docs/github-app.md](github-app.md#turn-on-llm-advisory-checks), [ADR-0174](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0174-llm-advisory-checks-on-pull-requests.md)). Its result is always `advisory` and its mode always `advise`, and the table refuses any other value. `GET /v1/verdicts`, audit question Q3 and decision health read `verification.verdict` only, so an advisory verdict never counts toward compliance, a merge gate or a health score. There is no read of advisory verdicts in the API yet.
 
 An upload can still name the index of an `llm-advisory` check. `ipso check` never writes one, and health skips those indexes.
 

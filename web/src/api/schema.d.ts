@@ -1733,7 +1733,7 @@ export interface components {
             allow_check_eval: boolean;
             /** @description Compare each new agent proposal with the decisions in force through the LLM gateway and show the hint in the inbox (ADR-0172). Off when left out of a request; every response carries it. */
             allow_agent_proposal_relations?: boolean;
-            /** @description The repositories, as owner/name, whose pull requests send diff hunks through the LLM gateway to evaluate llm-advisory checks (ADR-0173). Names are stored in lowercase, sorted and once each. Empty when left out of a request; every response carries it. */
+            /** @description The repositories, as owner/name, whose pull requests send diff hunks through the LLM gateway to evaluate llm-advisory checks (ADR-0174). Names are stored in lowercase, sorted and once each. Empty when left out of a request; every response carries it. */
             advisory_repositories?: string[];
             /** Format: date-time */
             updated_at?: string;

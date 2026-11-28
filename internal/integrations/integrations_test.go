@@ -720,7 +720,7 @@ func TestMergedJobsGetALongerBoundThanCheckRuns(t *testing.T) {
 	if merged := bound(laneMerged); merged > mergedJobTimeout || merged < mergedJobTimeout-time.Minute {
 		t.Errorf("a merged pull request job is bounded to %s, want about %s", merged, mergedJobTimeout)
 	}
-	// An advisory job waits on a model too (ADR-0173).
+	// An advisory job waits on a model too (ADR-0174).
 	if advisory := bound(laneAdvisory); advisory > mergedJobTimeout || advisory < mergedJobTimeout-time.Minute {
 		t.Errorf("an advisory job is bounded to %s, want about %s", advisory, mergedJobTimeout)
 	}

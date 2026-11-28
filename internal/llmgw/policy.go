@@ -25,7 +25,7 @@ var advisoryRepository = regexp.MustCompile(`^[a-z0-9_.-]{1,39}/[a-z0-9_.-]{1,10
 
 // TenantPolicy records per-tenant opt-in switches for authoring assistance, engine: llm evaluation, the
 // relation annotation of agent proposals (ADR-0172), and the repositories whose pull requests send diff
-// hunks for llm-advisory checks (ADR-0173). AdvisoryRepositories is never nil, so a response always holds
+// hunks for llm-advisory checks (ADR-0174). AdvisoryRepositories is never nil, so a response always holds
 // a list.
 type TenantPolicy struct {
 	AllowAuthoringAssist        bool      `json:"allow_authoring_assist"`

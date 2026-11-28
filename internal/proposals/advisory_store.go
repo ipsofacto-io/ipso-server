@@ -22,7 +22,7 @@ import (
 )
 
 // MaxAdvisoryChecks is the most llm-advisory checks one head commit of a pull request evaluates, in decision
-// id order and then check index order, so the same checks are taken on every head (ADR-0173).
+// id order and then check index order, so the same checks are taken on every head (ADR-0174).
 const MaxAdvisoryChecks = 10
 
 // The reasons a whole pull request is skipped. Each is a constant, so the log of a job holds no text of its own.
@@ -71,7 +71,7 @@ type AdvisoryStats struct {
 }
 
 // OnPullRequest returns the hook the webhooks service runs for an open pull request of a repository the tenant
-// opted in to llm-advisory checks (ADR-0173). It runs RunAdvisory through the gateway for the tenant the
+// opted in to llm-advisory checks (ADR-0174). It runs RunAdvisory through the gateway for the tenant the
 // installation mapping gave, with the client the service limited to that repository. The log holds counts and
 // the repository id, never a path, a diff, an answer or a person (ADR-0012).
 func OnPullRequest(db *sql.DB, gateway *llmgw.Gateway, log *slog.Logger) func(context.Context, integrations.OpenPullRequest) error {

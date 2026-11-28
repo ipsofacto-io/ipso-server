@@ -37,7 +37,7 @@ const (
 	mergedJobTimeout = 15 * time.Minute
 	// advisoryQueueSize and advisoryWorkerCount bound the advisory jobs of open pull requests, which wait on a
 	// model like a merged pull request job and have a lane of their own, so a push never delays the extraction
-	// of a merged pull request (ADR-0173). A full lane drops the advisory job and the check run still runs.
+	// of a merged pull request (ADR-0174). A full lane drops the advisory job and the check run still runs.
 	advisoryQueueSize   = 64
 	advisoryWorkerCount = 1
 	// advisoryLookupTimeout bounds the read of the opt-in while GitHub waits for the answer, after the tenant
@@ -80,7 +80,7 @@ type MergedPullRequest struct {
 }
 
 // OpenPullRequest is a pull request that was opened, updated, reopened or marked ready in a repository the tenant
-// opted in to llm-advisory checks, and a client limited to reading its contents and its files (ADR-0173). HeadSHA
+// opted in to llm-advisory checks, and a client limited to reading its contents and its files (ADR-0174). HeadSHA
 // is the head the delivery names. The hook reads the pull request again and stops when the head moved.
 type OpenPullRequest struct {
 	// Tenant is the tenant the installation is bound to. It comes from the mapping and never from the payload
@@ -113,7 +113,7 @@ type Config struct {
 	Unbind        func(ctx context.Context, installationID int64) (uuid.UUID, bool, error)
 	OnMerged      func(context.Context, MergedPullRequest) error
 	// AdvisoryEnabled reports whether the tenant opted the repository in to llm-advisory checks, and
-	// OnPullRequest runs the advisory job of an open pull request (ADR-0173). The service sets neither without
+	// OnPullRequest runs the advisory job of an open pull request (ADR-0174). The service sets neither without
 	// the other: when either is nil, a pull request starts no advisory job. The opt-in is read when the delivery
 	// arrives and again before the job mints a token, so a repository that is not on the list mints nothing.
 	AdvisoryEnabled func(ctx context.Context, tenant uuid.UUID, repo string) (bool, error)
@@ -129,7 +129,7 @@ type Service struct {
 	// merged queues the merged pull request jobs, which wait on a model and have workers of their own.
 	merged chan job
 	// advisory queues the advisory jobs of open pull requests, which wait on a model and have a worker of
-	// their own (ADR-0173).
+	// their own (ADR-0174).
 	advisory chan job
 	seen     *deliverySet
 	// timeout bounds one job. Zero means jobTimeout, or mergedJobTimeout for a job that waits on a model.
@@ -343,7 +343,7 @@ func (s *Service) receive(w http.ResponseWriter, r *http.Request) {
 }
 
 // queueAdvisory queues the advisory job of a delivery under a seen key of its own. A repository the tenant did
-// not opt in queues nothing and mints nothing (ADR-0173). A failed read of the opt-in or a full lane drops the
+// not opt in queues nothing and mints nothing (ADR-0174). A failed read of the opt-in or a full lane drops the
 // job and logs it, and the delivery is answered as its other work says: the advisory job is best effort, and
 // the next push is evaluated. The log names the delivery and never the repository.
 func (s *Service) queueAdvisory(ctx context.Context, next advisoryJob) {
@@ -577,7 +577,7 @@ func (s *Service) routePullRequest(body []byte) (routed, error) {
 
 // advisoryJob is the advisory job of an open pull request, or nil when the service has no advisory hook. The job
 // reads the opt-in again before it mints a token, so a repository removed from the list while the job waited
-// mints nothing. The token reads contents, metadata and pull requests, and writes nothing (ADR-0173).
+// mints nothing. The token reads contents, metadata and pull requests, and writes nothing (ADR-0174).
 func (s *Service) advisoryJob(install installation, repo repository, number int, sha string) *advisoryJob {
 	if s.cfg.AdvisoryEnabled == nil || s.cfg.OnPullRequest == nil {
 		return nil

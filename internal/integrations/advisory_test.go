@@ -106,7 +106,7 @@ func TestNoAdvisoryHookStartsNoAdvisoryJob(t *testing.T) {
 	}
 }
 
-// The list is the only switch: a repository that is not on it queues nothing and mints nothing (ADR-0173).
+// The list is the only switch: a repository that is not on it queues nothing and mints nothing (ADR-0174).
 func TestARepositoryNotOptedInMintsNothingForTheAdvisoryJob(t *testing.T) {
 	fake, app := newFakeGitHub(t)
 	hooks := &advisoryHooks{enabled: func(string) (bool, error) { return false, nil }}
@@ -275,7 +275,7 @@ func TestADroppedAdvisoryJobLeavesTheCheckRun(t *testing.T) {
 }
 
 // A model can take minutes. An advisory job never holds the worker of a merged pull request job or of a check
-// run (ADR-0173).
+// run (ADR-0174).
 func TestSlowAdvisoryJobsDoNotDelayOtherLanes(t *testing.T) {
 	fake, app := newFakeGitHub(t)
 	release := make(chan struct{})
