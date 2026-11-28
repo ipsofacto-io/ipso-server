@@ -44,6 +44,7 @@ type PullRequestReader interface {
 	PullRequestPatches(ctx context.Context, number int) ([]integrations.Patch, error)
 	FileAt(ctx context.Context, path, ref string) ([]byte, error)
 	CanWrite(ctx context.Context, login string) (bool, error)
+	HasAdvisoryCheckRun(ctx context.Context, headSHA string) (bool, error)
 	PublishAdvisoryCheckRun(ctx context.Context, headSHA string, run integrations.AdvisoryCheckRun) error
 }
 
@@ -266,10 +267,20 @@ func RunAdvisory(ctx context.Context, db *sql.DB, complete SchemaCompleteFunc, g
 		return stats, err
 	}
 	if len(verdicts) > 0 {
-		if err := gh.PublishAdvisoryCheckRun(ctx, pr.HeadSHA, buildAdvisoryCheckRun(verdicts)); err != nil {
-			return stats, err
+		needPublish := stats.Stored > 0 || stats.Reused > 0
+		if !needPublish {
+			exists, err := gh.HasAdvisoryCheckRun(ctx, pr.HeadSHA)
+			if err != nil {
+				return stats, err
+			}
+			needPublish = !exists
 		}
-		stats.Published = true
+		if needPublish {
+			if err := gh.PublishAdvisoryCheckRun(ctx, pr.HeadSHA, buildAdvisoryCheckRun(verdicts)); err != nil {
+				return stats, err
+			}
+			stats.Published = true
+		}
 	}
 	return stats, nil
 }

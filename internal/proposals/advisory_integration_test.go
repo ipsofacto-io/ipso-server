@@ -29,17 +29,19 @@ const (
 // fakePullRequest is GitHub for one pull request. Each read of the pull request takes the next answer of
 // pulls, and the last one repeats.
 type fakePullRequest struct {
-	pulls       []integrations.PullRequest
-	patches     []integrations.Patch
-	patchErr    error
-	files       map[string]string
-	canWrite    bool
-	canWriteErr error
-	publishErr  error
-	published   []integrations.AdvisoryCheckRun
-	reads       int
-	asked       []string
-	fileReads   []string
+	pulls          []integrations.PullRequest
+	patches        []integrations.Patch
+	patchErr       error
+	files          map[string]string
+	canWrite       bool
+	canWriteErr    error
+	hasCheckRun    bool
+	hasCheckRunErr error
+	publishErr     error
+	published      []integrations.AdvisoryCheckRun
+	reads          int
+	asked          []string
+	fileReads      []string
 }
 
 func (f *fakePullRequest) PullRequest(_ context.Context, number int) (integrations.PullRequest, error) {
@@ -69,11 +71,16 @@ func (f *fakePullRequest) CanWrite(_ context.Context, login string) (bool, error
 	return f.canWrite, f.canWriteErr
 }
 
+func (f *fakePullRequest) HasAdvisoryCheckRun(_ context.Context, _ string) (bool, error) {
+	return f.hasCheckRun, f.hasCheckRunErr
+}
+
 func (f *fakePullRequest) PublishAdvisoryCheckRun(_ context.Context, _ string, run integrations.AdvisoryCheckRun) error {
 	if f.publishErr != nil {
 		return f.publishErr
 	}
 	f.published = append(f.published, run)
+	f.hasCheckRun = true
 	return nil
 }
 
@@ -526,6 +533,14 @@ func TestRunAdvisoryPublishesCheckRunAndRetriesWithoutRecallingModel(t *testing.
 	}
 	if strings.Contains(run.Summary, "octocat") || strings.Contains(run.Annotations[0].Message, "octocat") {
 		t.Fatalf("check run exposed author login: %+v", run)
+	}
+
+	// An idempotent delivery (e.g. PR reopened on the same head) sees the existing check run and does not duplicate it.
+	ghReopen := newPullRequest(advisoryHead)
+	ghReopen.hasCheckRun = true
+	stats, err = RunAdvisory(t.Context(), db, judge.complete, ghReopen, advisoryTarget(tenantA, advisoryHead))
+	if err != nil || stats.Known != 1 || stats.Published || len(judge.users) != 1 || len(ghReopen.published) != 0 {
+		t.Fatalf("reopen: stats %+v, calls %d, published %d, err %v", stats, len(judge.users), len(ghReopen.published), err)
 	}
 
 	// A PR with no in-scope advisory verdicts publishes no check run.

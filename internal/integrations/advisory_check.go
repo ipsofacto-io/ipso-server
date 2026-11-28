@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -117,6 +118,30 @@ func normalizeAdvisoryAnnotation(a AdvisoryAnnotation) (annotation, bool) {
 	}, true
 }
 
+// HasAdvisoryCheckRun reports whether this GitHub App already has a completed
+// ipso / advisory check run on headSHA.
+func (c *RepoClient) HasAdvisoryCheckRun(ctx context.Context, headSHA string) (bool, error) {
+	if !validSHA.MatchString(headSHA) {
+		return false, errors.New("check advisory check run: head_sha is not a commit SHA")
+	}
+	var resp struct {
+		CheckRuns []struct {
+			ID int64 `json:"id"`
+		} `json:"check_runs"`
+	}
+	q := url.Values{
+		"check_name": {AdvisoryCheckName},
+		"status":     {"completed"},
+		"app_id":     {c.app.id},
+		"per_page":   {"1"},
+	}
+	path := c.repoPath("/commits/" + headSHA + "/check-runs?" + q.Encode())
+	if err := c.app.call(ctx, c.token, http.MethodGet, path, nil, &resp); err != nil {
+		return false, fmt.Errorf("list advisory check runs: %w", err)
+	}
+	return len(resp.CheckRuns) > 0, nil
+}
+
 // PublishAdvisoryCheckRun creates and completes an ipso / advisory check run on headSHA.
 // It always concludes neutral and never concludes failure or action_required.
 // When annotations fit within 50 items, the check run is created completed in one request;
@@ -135,13 +160,20 @@ func (c *RepoClient) PublishAdvisoryCheckRun(ctx context.Context, headSHA string
 	}
 
 	annotations := make([]annotation, 0, min(len(run.Annotations), maxRunAnnotations))
+	omitted := 0
 	for _, a := range run.Annotations {
+		norm, ok := normalizeAdvisoryAnnotation(a)
+		if !ok {
+			continue
+		}
 		if len(annotations) >= maxRunAnnotations {
-			break
+			omitted++
+			continue
 		}
-		if norm, ok := normalizeAdvisoryAnnotation(a); ok {
-			annotations = append(annotations, norm)
-		}
+		annotations = append(annotations, norm)
+	}
+	if omitted > 0 {
+		summary += fmt.Sprintf(" %d more advisory citations are not annotated.", omitted)
 	}
 
 	first := annotations

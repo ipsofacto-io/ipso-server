@@ -188,6 +188,18 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"token": mintedValue, "permissions": grant})
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/repos/"+testRepo+"/commits/") && strings.HasSuffix(path, "/check-runs"):
+		f.requireRepoToken(r)
+		sha := strings.TrimSuffix(strings.TrimPrefix(path, "/repos/"+testRepo+"/commits/"), "/check-runs")
+		wantName := r.URL.Query().Get("check_name")
+		wantStatus := r.URL.Query().Get("status")
+		var runs []map[string]any
+		for i, c := range f.created {
+			if c["head_sha"] == sha && (wantName == "" || c["name"] == wantName) && (wantStatus == "" || c["status"] == wantStatus) {
+				runs = append(runs, map[string]any{"id": int64(77 + i)})
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"total_count": len(runs), "check_runs": runs})
 	case r.Method == http.MethodPost && path == "/repos/"+testRepo+"/check-runs":
 		f.requireRepoToken(r)
 		f.created = append(f.created, decoded)

@@ -399,4 +399,32 @@ func TestPublishAdvisoryCheckRunIsAlwaysNeutralAndPlainText(t *testing.T) {
 	if len(secondBatch) != 5 {
 		t.Fatalf("second batch has %d annotations, want 5", len(secondBatch))
 	}
+
+	exists, err := client.HasAdvisoryCheckRun(t.Context(), headSHA)
+	if err != nil || !exists {
+		t.Fatalf("HasAdvisoryCheckRun after publish = %v, %v; want true, nil", exists, err)
+	}
+	otherSHA := "fedcba9876543210fedcba9876543210fedcba98"
+	exists, err = client.HasAdvisoryCheckRun(t.Context(), otherSHA)
+	if err != nil || exists {
+		t.Fatalf("HasAdvisoryCheckRun for unseen head = %v, %v; want false, nil", exists, err)
+	}
+
+	// Over maxRunAnnotations (500) caps annotations at 500 and notes the omitted count in summary.
+	many := make([]AdvisoryAnnotation, maxRunAnnotations+3)
+	for i := range many {
+		many[i] = AdvisoryAnnotation{Path: "db/schema.sql", StartLine: i + 1, EndLine: i + 1, Level: "notice", Title: "Complies", Message: "ok"}
+	}
+	if err := client.PublishAdvisoryCheckRun(t.Context(), otherSHA, AdvisoryCheckRun{
+		Title:       "Advisory check",
+		Summary:     "AI-generated advisory verdicts.",
+		Annotations: many,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cappedPost := fake.created[len(fake.created)-1]
+	cappedSummary := cappedPost["output"].(map[string]any)["summary"].(string)
+	if !strings.Contains(cappedSummary, "3 more advisory citations are not annotated.") {
+		t.Fatalf("summary missing omitted citation note: %q", cappedSummary)
+	}
 }
