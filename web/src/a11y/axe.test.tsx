@@ -67,6 +67,7 @@ describe('WCAG 2.2 A and AA on each route', () => {
         await screen.findByText('Check for decision 0194f2a0, version 2');
       },
     },
+    { path: '/advisory', settle: () => screen.findByText('Configures minVersion TLSv1.1 on the public ingress listener.') },
     { path: '/waivers', settle: () => screen.findByRole('table', { name: 'Waivers in force' }) },
     { path: '/waivers/new', settle: () => screen.findByRole('button', { name: 'Record the waiver' }) },
     {

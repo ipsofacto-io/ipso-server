@@ -72,3 +72,44 @@ func TestDecisionsByEDRIDKeepsAnIdThatOneDecisionHoldsAsKnownAtATime(t *testing.
 		t.Errorf("tenant B = %v, %v", b, err)
 	}
 }
+
+func TestDecisionTitlesByVersionOmitsSensitiveAndOtherTenants(t *testing.T) {
+	r := newRegistryDB(t)
+	rootA := r.scope(t, tenantA, uuid.Nil, "org", "acme")
+	rootB := r.scope(t, tenantB, uuid.Nil, "org", "acme")
+	insertBody := func(tenant, id uuid.UUID, version int, body string, scope uuid.UUID) {
+		t.Helper()
+		if _, err := pgtest.Exec(t.Context(), r.app, tenant.String(), `
+			INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
+			VALUES ($1, $2, $3, $4::jsonb, ARRAY[$5::uuid], '[2026-01-01,)'::tstzrange)`,
+			id, version, tenant, body, scope); err != nil {
+			t.Fatalf("insert decision version: %v", err)
+		}
+	}
+	dPlain := uuid.MustParse("00000000-0000-4000-8000-0000000000a1")
+	dSensitiveFlag := uuid.MustParse("00000000-0000-4000-8000-0000000000a2")
+	dSensitiveTag := uuid.MustParse("00000000-0000-4000-8000-0000000000a3")
+	dOtherTenant := uuid.MustParse("00000000-0000-4000-8000-0000000000a4")
+	dMissing := uuid.MustParse("00000000-0000-4000-8000-0000000000a5")
+
+	insertBody(tenantA, dPlain, 1, `{"title":"Keep PostgreSQL"}`, rootA)
+	insertBody(tenantA, dPlain, 2, `{"title":"Keep PostgreSQL 18"}`, rootA)
+	insertBody(tenantA, dSensitiveFlag, 1, `{"title":"Internal range","sensitive":true}`, rootA)
+	insertBody(tenantA, dSensitiveTag, 1, `{"title":"Vendor deal","tags":["legal","sensitive"]}`, rootA)
+	insertBody(tenantB, dOtherTenant, 1, `{"title":"Tenant B secret"}`, rootB)
+
+	got, err := DecisionTitlesByVersion(t.Context(), r.app, tenantA, []DecisionVersionKey{
+		{ID: dPlain, Version: 1},
+		{ID: dPlain, Version: 2},
+		{ID: dSensitiveFlag, Version: 1},
+		{ID: dSensitiveTag, Version: 1},
+		{ID: dOtherTenant, Version: 1},
+		{ID: dMissing, Version: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[DecisionVersionKey{ID: dPlain, Version: 1}] != "Keep PostgreSQL" || got[DecisionVersionKey{ID: dPlain, Version: 2}] != "Keep PostgreSQL 18" {
+		t.Fatalf("titles = %v", got)
+	}
+}

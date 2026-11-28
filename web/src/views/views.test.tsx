@@ -539,3 +539,82 @@ describe('the time controls and the address', () => {
     expect(stub.requests.filter((request) => request.startsWith('GET /v1/scopes'))).toHaveLength(1);
   });
 });
+
+describe('advisory verdicts (IPSO-162)', () => {
+  it('renders advisory verdicts on /advisory with AI-generated labels, filters, and plain-text reasons', async () => {
+    const stub = stubFetch();
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    renderApp('/advisory');
+
+    expect(await screen.findByText('Configures minVersion TLSv1.1 on the public ingress listener.')).toBeInTheDocument();
+    expect(screen.getByText('Uses PostgreSQL table DDL.')).toBeInTheDocument();
+    expect(screen.getAllByText('AI-generated')).toHaveLength(2);
+    expect(screen.getAllByText('mistral-medium-latest, prompt pr-advisory-v2')).toHaveLength(2);
+    expect(screen.getAllByText('AI-generated advisory verdict. Does not block a merge or count toward compliance.')).toHaveLength(2);
+    expect(screen.getByText('deploy/ingress.yaml:14-18')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Public ingress terminates TLS 1.2 or later' })).toHaveAttribute('href', `/decisions/${ids.useTls}`);
+    expect(screen.getByRole('link', { name: 'acme/payments#42' })).toHaveAttribute('href', 'https://github.com/acme/payments/pull/42');
+
+    // Filter by repository, PR number, and assessment.
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'acme/payments' } });
+    fireEvent.change(screen.getByLabelText('Pull request'), { target: { value: '42' } });
+    fireEvent.change(screen.getByLabelText('Assessment'), { target: { value: 'deviates' } });
+    await user.click(screen.getByRole('button', { name: 'Filter' }));
+    await waitFor(() =>
+      expect(stub.requests.at(-1)).toBe('GET /v1/advisory-verdicts?repo=acme%2Fpayments&pull_number=42&assessment=deviates&limit=50'),
+    );
+    expect(screen.getByText('Configures minVersion TLSv1.1 on the public ingress listener.')).toBeInTheDocument();
+    expect(screen.queryByText('Uses PostgreSQL table DDL.')).not.toBeInTheDocument();
+  });
+
+  it('renders model reasons strictly as plain text, never as Markdown links, HTML, or mentions', async () => {
+    const hostileReason = 'See [evil](https://evil.example) <script>alert(1)</script> and ping @octocat';
+    stubFetch({
+      override: ({ url }) =>
+        url.startsWith('/v1/advisory-verdicts')
+          ? {
+              status: 200,
+              headers: {},
+              body: {
+                advisory_verdicts: [
+                  {
+                    id: '0194f2a0-0000-7000-8000-000000000999',
+                    repo: 'acme/payments',
+                    pull_number: 99,
+                    pull_url: 'https://github.com/acme/payments/pull/99',
+                    head_sha: COMMIT,
+                    base_sha: COMMIT,
+                    decision_id: ids.useTls,
+                    decision_version: 1,
+                    decision_title: 'Use TLS',
+                    check_index: 0,
+                    mode: 'advise',
+                    result: 'advisory',
+                    assessment: 'deviates',
+                    cited: [{ path: 'ingress.yaml', start_line: 1, end_line: 2 }],
+                    reason: hostileReason,
+                    model_id: 'mistral-medium-latest',
+                    prompt_version: 'pr-advisory-v2',
+                    recorded_at: '2026-11-01T00:00:00Z',
+                  },
+                ],
+              },
+            }
+          : undefined,
+    });
+    renderApp('/advisory');
+
+    expect(await screen.findByText(hostileReason)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'evil' })).not.toBeInTheDocument();
+    expect(document.querySelector('script')).toBeNull();
+  });
+
+  it('shows advisory verdicts on DecisionDetail separately from Verdicts from CI', async () => {
+    stubFetch();
+    renderApp(`/decisions/${ids.useTls}`);
+    expect(await screen.findByRole('heading', { name: 'Advisory verdicts' })).toBeInTheDocument();
+    expect(await screen.findByText('Configures minVersion TLSv1.1 on the public ingress listener.')).toBeInTheDocument();
+    expect(screen.getByText('mistral-medium-latest, prompt pr-advisory-v2')).toBeInTheDocument();
+    expect(screen.getByText('AI-generated advisory verdict. Does not block a merge or count toward compliance.')).toBeInTheDocument();
+  });
+});

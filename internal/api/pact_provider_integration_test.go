@@ -38,6 +38,10 @@ const stateRegistry = "tenant A holds decisions, scopes, a waiver, and proposals
 // stateVerdicts is the provider state of the verdict list: tenant A holds one stored verdict.
 const stateVerdicts = "tenant A holds a stored verdict"
 
+// stateAdvisoryVerdicts is the provider state of the advisory verdict list (IPSO-162): tenant A holds one
+// stored llm-advisory verdict on f.tls.
+const stateAdvisoryVerdicts = "tenant A holds an advisory verdict"
+
 // stateVerdictInBaseline is the provider state of a verdict read against a recorded baseline (IPSO-156, ADR-0122). It seeds
 // a decision with its grandfather terms and a baseline, and one upload whose digests are all in that baseline.
 const stateVerdictInBaseline = "tenant A holds a verdict whose digests are all in the recorded baseline of its decision"
@@ -538,6 +542,7 @@ func TestPactProviderIpsoServer(t *testing.T) {
 		StateHandlers: models.StateHandlers{
 			stateRegistry:          as(personA),
 			stateVerdicts:          as(personA),
+			stateAdvisoryVerdicts:  as(personA),
 			stateVerdictInBaseline: seeds(personA, verdictInBaseline),
 			stateVerdictWaived:     seeds(personA, verdictWaived),
 			stateMergedCommit:      seeds(personA, mergedCommit),

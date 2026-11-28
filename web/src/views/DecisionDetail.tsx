@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router';
 import { calls } from '../api/calls';
 import { useResource } from '../api/hooks';
 import type { Decision, HealthVerdictRef, ScopeCompliance } from '../api/types';
+import { AdvisoryVerdictsList } from '../components/AdvisoryVerdictsList';
 import { DecisionStatus } from '../components/DecisionStatus';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorNotice } from '../components/ErrorNotice';
@@ -178,6 +179,7 @@ function DecisionCard({ decision, valid, known }: { decision: Decision; valid?: 
       <ValidityAndCompliance id={d.id} valid={valid} known={known} />
 
       {d.edrId ?? d.slug ? <Verdicts decision={(d.edrId ?? d.slug) as string} /> : null}
+      <AdvisoryVerdicts decisionID={d.id} />
       <p>
         <Link to={`/audit/supersessions?decision=${encodeURIComponent(d.id)}&known=${encodeURIComponent(nowAsTime())}`}>
           Supersession chain of this decision
@@ -341,6 +343,26 @@ function Verdicts({ decision }: { decision: string }) {
         </TableWrap>
       ) : null}
       {verdicts.status === 'ready' && verdicts.data.verdicts.length === SHOWN ? <p className="muted">Showing the newest {SHOWN} verdicts.</p> : null}
+    </section>
+  );
+}
+
+function AdvisoryVerdicts({ decisionID }: { decisionID: string }) {
+  const advisory = useResource((signal) => calls.listAdvisoryVerdicts({ decision: decisionID, limit: SHOWN }, signal), [decisionID]);
+  return (
+    <section aria-label="Advisory verdicts">
+      <h3 className="ip-label">Advisory verdicts</h3>
+      {advisory.status === 'loading' ? <Loading what="advisory verdicts" /> : null}
+      {advisory.status === 'error' && advisory.error.status !== 401 ? <ErrorNotice error={advisory.error} onRetry={advisory.reload} /> : null}
+      {advisory.status === 'ready' && advisory.data.advisory_verdicts.length === 0 ? (
+        <p className="muted">No advisory verdict has been recorded for this decision yet.</p>
+      ) : null}
+      {advisory.status === 'ready' && advisory.data.advisory_verdicts.length > 0 ? (
+        <AdvisoryVerdictsList verdicts={advisory.data.advisory_verdicts} showDecision={false} headingLevel={4} />
+      ) : null}
+      {advisory.status === 'ready' && advisory.data.advisory_verdicts.length === SHOWN ? (
+        <p className="muted">Showing the newest {SHOWN} advisory verdicts.</p>
+      ) : null}
     </section>
   );
 }

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -36,13 +37,14 @@ const (
 	SkipTooManyFiles = "too_many_files"
 )
 
-// PullRequestReader is what the advisory job reads from GitHub with the token the webhooks service limited to
-// one repository: integrations.RepoClient.
+// PullRequestReader is what the advisory job reads from and publishes to GitHub with the token the webhooks
+// service limited to one repository: integrations.RepoClient.
 type PullRequestReader interface {
 	PullRequest(ctx context.Context, number int) (integrations.PullRequest, error)
 	PullRequestPatches(ctx context.Context, number int) ([]integrations.Patch, error)
 	FileAt(ctx context.Context, path, ref string) ([]byte, error)
 	CanWrite(ctx context.Context, login string) (bool, error)
+	PublishAdvisoryCheckRun(ctx context.Context, headSHA string, run integrations.AdvisoryCheckRun) error
 }
 
 // AdvisoryStats counts what one advisory job did. It holds no text, no path and no person (ADR-0012).
@@ -68,6 +70,8 @@ type AdvisoryStats struct {
 	Empty int
 	// Flagged counts the hunks the injection screen flagged. They are sent all the same.
 	Flagged int
+	// Published reports whether an ipso / advisory check run was published for this head commit.
+	Published bool
 }
 
 // OnPullRequest returns the hook the webhooks service runs for an open pull request of a repository the tenant
@@ -89,7 +93,7 @@ func OnPullRequest(db *sql.DB, gateway *llmgw.Gateway, log *slog.Logger) func(co
 		log.InfoContext(ctx, "pull request advisory checks processed", "tenant", pr.Tenant.String(), "repository_id", pr.RepositoryID, "pull_request", pr.Number,
 			"skipped", stats.Skipped, "checks", stats.Checks, "capped", stats.Capped, "known", stats.Known, "reused", stats.Reused,
 			"stored", stats.Stored, "refused", stats.Refused, "unsendable", stats.Unsendable, "no_prompt", stats.NoPrompt,
-			"empty", stats.Empty, "flagged", stats.Flagged)
+			"empty", stats.Empty, "flagged", stats.Flagged, "published", stats.Published)
 		return nil
 	}
 }
@@ -257,7 +261,92 @@ func RunAdvisory(ctx context.Context, db *sql.DB, complete SchemaCompleteFunc, g
 			stats.Known++
 		}
 	}
+	verdicts, err := verification.ListAdvisoryForHead(ctx, db, pr.Tenant, pr.RepositoryID, pr.Number, pr.HeadSHA)
+	if err != nil {
+		return stats, err
+	}
+	if len(verdicts) > 0 {
+		if err := gh.PublishAdvisoryCheckRun(ctx, pr.HeadSHA, buildAdvisoryCheckRun(verdicts)); err != nil {
+			return stats, err
+		}
+		stats.Published = true
+	}
 	return stats, nil
+}
+
+// buildAdvisoryCheckRun turns the stored advisory verdicts of one head commit into a non-blocking
+// ipso / advisory check run (IPSO-162). Title and summary are strictly server-authored; model reasons
+// appear only in plain-text line annotations paired with the AI-generated label, model_id, and prompt_version.
+func buildAdvisoryCheckRun(verdicts []verification.StoredAdvisoryVerdict) integrations.AdvisoryCheckRun {
+	var deviates, complies, unclear int
+	var annotations []integrations.AdvisoryAnnotation
+	for _, v := range verdicts {
+		switch v.Assessment {
+		case verification.Deviates:
+			deviates++
+		case verification.Complies:
+			complies++
+		default:
+			unclear++
+		}
+		level := "notice"
+		if v.Assessment == verification.Deviates {
+			level = "warning"
+		}
+		decisionLabel := integrations.SanitizeAdvisoryText(v.DecisionTitle)
+		if decisionLabel == "" {
+			decisionLabel = "decision " + v.DecisionID.String()[:8]
+		}
+		annTitle := fmt.Sprintf("%s: %s", assessmentLabel(v.Assessment), decisionLabel)
+		cleanReason := integrations.SanitizeAdvisoryText(v.Reason)
+		if cleanReason == "" {
+			cleanReason = "No plain-text reason available."
+		}
+		footer := fmt.Sprintf("AI-generated (%s, prompt %s). Advisory only; does not block a merge.",
+			integrations.SanitizeAdvisoryLabel(v.ModelID), integrations.SanitizeAdvisoryLabel(v.PromptVersion))
+		annMessage := cleanReason + "\n\n" + footer
+		for _, place := range v.Cited {
+			annotations = append(annotations, integrations.AdvisoryAnnotation{
+				Path:      place.Path,
+				StartLine: place.StartLine,
+				EndLine:   place.EndLine,
+				Level:     level,
+				Title:     annTitle,
+				Message:   annMessage,
+			})
+		}
+	}
+	var title string
+	switch {
+	case deviates == 1:
+		title = "Advisory check: 1 deviation noted"
+	case deviates > 1:
+		title = fmt.Sprintf("Advisory check: %d deviations noted", deviates)
+	case len(verdicts) == 1:
+		title = "Advisory check: 1 check evaluated (no deviations)"
+	default:
+		title = fmt.Sprintf("Advisory check: %d checks evaluated (no deviations)", len(verdicts))
+	}
+	summary := fmt.Sprintf(
+		"AI-generated advisory verdicts from llm-advisory checks. These results are advisory only and never block a merge or count toward compliance.\n\nEvaluated %d checks: %d deviates, %d complies, %d unclear.",
+		len(verdicts), deviates, complies, unclear,
+	)
+	return integrations.AdvisoryCheckRun{
+		Title:       title,
+		Summary:     summary,
+		Annotations: annotations,
+	}
+}
+
+func assessmentLabel(assessment string) string {
+	switch assessment {
+	case verification.Deviates:
+		return "Deviates"
+	case verification.Complies:
+		return "Complies"
+	default:
+		return "Unclear"
+	}
 }
 
 // pullRequestGate is the first reason to skip the pull request, or empty when it passes.

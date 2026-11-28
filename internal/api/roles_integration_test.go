@@ -62,6 +62,7 @@ func (f *fixture) operations(t *testing.T) []operation {
 		{"audit_waivers", http.MethodGet, "/v1/audit/waivers?known=" + known + "&now=" + valid, nil},
 		{"read_audit_log", http.MethodGet, "/v1/audit-log?after=0", nil},
 		{"list_verdicts", http.MethodGet, "/v1/verdicts?repo=acme%2Fapi&decision=use-tls", nil},
+		{"list_advisory_verdicts", http.MethodGet, "/v1/advisory-verdicts?repo=acme%2Fapi&pull_number=7&assessment=deviates", nil},
 	}
 }
 

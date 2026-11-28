@@ -7,9 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
+	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"github.com/ipsofacto-io/ipso-server/internal/registry"
 )
 
 // Assessments are the words an advisory verdict can hold (ADR-0174).
@@ -263,4 +268,185 @@ func inTenant(ctx context.Context, db *sql.DB, tenant uuid.UUID, fn func(*sql.Tx
 		return err
 	}
 	return tx.Commit()
+}
+
+// AdvisoryFilter narrows a list of stored advisory verdicts. An empty or zero field matches everything.
+type AdvisoryFilter struct {
+	Repo       string
+	Decision   uuid.UUID
+	PullNumber int
+	Assessment string
+}
+
+// StoredAdvisoryVerdict is one stored advisory verdict read from verification.advisory_verdict, enriched with
+// the non-sensitive decision title of its stored version and a server-built pull request link (IPSO-162).
+// Mode is always "advise" and Result is always "advisory". No field names a person.
+type StoredAdvisoryVerdict struct {
+	ID              uuid.UUID `json:"id"`
+	Repo            string    `json:"repo"`
+	PullNumber      int       `json:"pull_number"`
+	PullURL         string    `json:"pull_url"`
+	HeadSHA         string    `json:"head_sha"`
+	BaseSHA         string    `json:"base_sha"`
+	DecisionID      uuid.UUID `json:"decision_id"`
+	DecisionVersion int       `json:"decision_version"`
+	DecisionTitle   string    `json:"decision_title,omitempty"`
+	CheckIndex      int       `json:"check_index"`
+	Mode            string    `json:"mode"`
+	Result          string    `json:"result"`
+	Assessment      string    `json:"assessment"`
+	Cited           []Place   `json:"cited"`
+	Reason          string    `json:"reason"`
+	ModelID         string    `json:"model_id"`
+	PromptVersion   string    `json:"prompt_version"`
+	RecordedAt      time.Time `json:"recorded_at"`
+}
+
+const advisorySelectColumns = `id, repo, pull_number, head_sha, base_sha, decision_id, decision_version, check_index,
+	mode, result, assessment, cited, reason, model_id, prompt_version, lower(sys_period)`
+
+// ListAdvisoryForHead returns all stored advisory verdicts for one head commit of a pull request, ordered
+// deterministically by decision_id, decision_version, and check_index, with non-sensitive decision titles.
+func ListAdvisoryForHead(ctx context.Context, db *sql.DB, tenant uuid.UUID, repositoryID int64, pullNumber int, headSHA string) ([]StoredAdvisoryVerdict, error) {
+	if db == nil || tenant == uuid.Nil {
+		return nil, errors.New("advisory: a database and a tenant are required")
+	}
+	if repositoryID <= 0 || pullNumber <= 0 || !advisorySHA.MatchString(headSHA) {
+		return nil, invalid("repository_id, pull_number and head_sha are required")
+	}
+	var items []StoredAdvisoryVerdict
+	err := inTenantReadOnly(ctx, db, tenant, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT `+advisorySelectColumns+`
+			FROM verification.advisory_verdict
+			WHERE tenant_id = ipso.current_tenant()
+			  AND repository_id = $1 AND pull_number = $2 AND head_sha = $3
+			ORDER BY decision_id ASC, decision_version ASC, check_index ASC`,
+			repositoryID, pullNumber, headSHA)
+		if err != nil {
+			return err
+		}
+		items, err = scanAdvisoryVerdicts(rows)
+		return err
+	})
+	if err != nil {
+		return nil, reduce("advisory: list for head", err)
+	}
+	if err := enrichAdvisoryTitles(ctx, db, tenant, items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// ListAdvisory returns the tenant's advisory verdicts, newest first, at most limit of them, starting after
+// the verdict named by before (uuid.Nil for the first page).
+func ListAdvisory(ctx context.Context, db *sql.DB, tenant uuid.UUID, f AdvisoryFilter, limit int, before uuid.UUID) ([]StoredAdvisoryVerdict, error) {
+	if db == nil || tenant == uuid.Nil {
+		return nil, errors.New("advisory: a database and a tenant are required")
+	}
+	if limit < 1 || limit > MaxPage {
+		return nil, invalid("limit is out of range")
+	}
+	repo := strings.ToLower(f.Repo)
+	if repo != "" && !validRepo(repo) {
+		return nil, invalid("repo is not owner/name")
+	}
+	if f.PullNumber < 0 {
+		return nil, invalid("pull_number must be positive")
+	}
+	if f.Assessment != "" && f.Assessment != Complies && f.Assessment != Deviates && f.Assessment != Unclear {
+		return nil, invalid("assessment is not complies, deviates or unclear")
+	}
+	var decision any
+	if f.Decision != uuid.Nil {
+		decision = f.Decision
+	}
+	var after any
+	if before != uuid.Nil {
+		after = before
+	}
+	var items []StoredAdvisoryVerdict
+	err := inTenantReadOnly(ctx, db, tenant, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT `+advisorySelectColumns+`
+			FROM verification.advisory_verdict
+			WHERE tenant_id = ipso.current_tenant()
+			  AND ($1 = '' OR repo = $1)
+			  AND ($2::uuid IS NULL OR decision_id = $2::uuid)
+			  AND ($3 = 0 OR pull_number = $3)
+			  AND ($4 = '' OR assessment = $4)
+			  AND ($5::uuid IS NULL OR id < $5::uuid)
+			ORDER BY id DESC
+			LIMIT $6`,
+			repo, decision, f.PullNumber, f.Assessment, after, limit)
+		if err != nil {
+			return err
+		}
+		items, err = scanAdvisoryVerdicts(rows)
+		return err
+	})
+	if err != nil {
+		return nil, reduce("advisory: list", err)
+	}
+	if err := enrichAdvisoryTitles(ctx, db, tenant, items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func inTenantReadOnly(ctx context.Context, db *sql.DB, tenant uuid.UUID, fn func(*sql.Tx) error) error {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('ipso.tenant', $1, true)`, tenant.String()); err != nil {
+		return err
+	}
+	return fn(tx)
+}
+
+func scanAdvisoryVerdicts(rows *sql.Rows) ([]StoredAdvisoryVerdict, error) {
+	defer func() { _ = rows.Close() }()
+	items := []StoredAdvisoryVerdict{}
+	for rows.Next() {
+		var it StoredAdvisoryVerdict
+		var citedRaw []byte
+		if err := rows.Scan(&it.ID, &it.Repo, &it.PullNumber, &it.HeadSHA, &it.BaseSHA,
+			&it.DecisionID, &it.DecisionVersion, &it.CheckIndex,
+			&it.Mode, &it.Result, &it.Assessment, &citedRaw, &it.Reason,
+			&it.ModelID, &it.PromptVersion, &it.RecordedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(citedRaw, &it.Cited); err != nil {
+			return nil, err
+		}
+		if it.Cited == nil {
+			it.Cited = []Place{}
+		}
+		it.PullURL = "https://github.com/" + it.Repo + "/pull/" + strconv.Itoa(it.PullNumber)
+		items = append(items, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func enrichAdvisoryTitles(ctx context.Context, db *sql.DB, tenant uuid.UUID, items []StoredAdvisoryVerdict) error {
+	if len(items) == 0 {
+		return nil
+	}
+	keys := make([]registry.DecisionVersionKey, 0, len(items))
+	for _, it := range items {
+		keys = append(keys, registry.DecisionVersionKey{ID: it.DecisionID, Version: it.DecisionVersion})
+	}
+	titles, err := registry.DecisionTitlesByVersion(ctx, db, tenant, keys)
+	if err != nil {
+		return reduce("advisory: read decision titles", err)
+	}
+	for i := range items {
+		items[i].DecisionTitle = titles[registry.DecisionVersionKey{ID: items[i].DecisionID, Version: items[i].DecisionVersion}]
+	}
+	return nil
 }

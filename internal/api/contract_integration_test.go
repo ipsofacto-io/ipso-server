@@ -265,6 +265,17 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 				t.Errorf("%v", a)
 			}
 		}},
+		{"list_advisory_verdicts", http.MethodGet, "/v1/advisory-verdicts?repo=acme%2Fapi&decision=" + f.tls.String() + "&pull_number=7&assessment=deviates&limit=10", nil, func(t *testing.T, a map[string]any) {
+			v := list(a, "advisory_verdicts")
+			if len(v) != 1 {
+				t.Errorf("%v", a)
+				return
+			}
+			item := v[0].(map[string]any)
+			if item["id"] != f.advisoryVerdicts[tenantA].String() || item["mode"] != "advise" || item["result"] != "advisory" || item["decision_title"] != "Use TLS" {
+				t.Errorf("%v", item)
+			}
+		}},
 		{"analyze_verifiability", http.MethodPost, "/v1/verifiability", verifiability, func(t *testing.T, a map[string]any) {
 			if a["classification"] == "" {
 				t.Errorf("%v", a)
@@ -383,6 +394,15 @@ func TestATenantReadsOnlyItsOwnRows(t *testing.T) {
 	if v := list(answerOf(t, w), "verdicts"); v == nil || len(v) != 0 {
 		t.Fatalf("tenant B asked for tenant A's repository: %s", w.Body.String())
 	}
+	// Tenant B has an advisory verdict of its own, and tenant A's is not visible to it.
+	w = c.exchange(t, handler, http.MethodGet, "/v1/advisory-verdicts", token, "", nil)
+	if v := list(answerOf(t, w), "advisory_verdicts"); len(v) != 1 || v[0].(map[string]any)["id"] != f.advisoryVerdicts[tenantB].String() {
+		t.Fatalf("tenant B advisory verdicts: %s", w.Body.String())
+	}
+	w = c.exchange(t, handler, http.MethodGet, "/v1/advisory-verdicts?repo=acme%2Fapi", token, "", nil)
+	if v := list(answerOf(t, w), "advisory_verdicts"); v == nil || len(v) != 0 {
+		t.Fatalf("tenant B asked for tenant A's advisory repository: %s", w.Body.String())
+	}
 	for _, tc := range []struct{ target, key string }{
 		{"/v1/scopes?known=" + known, "scopes"},
 		{"/v1/waivers?valid=" + valid + "&known=" + known, "waivers"},
@@ -417,6 +437,8 @@ func TestARequestCannotNameATenant(t *testing.T) {
 		"/v1/audit/waivers?known=" + at(f.known) + "&now=" + at(f.known) + "&tenant_id=" + tenantB.String(),
 		"/v1/proposals?Tenant=" + tenantB.String(),
 		"/v1/verdicts?tenant_id=" + tenantB.String(),
+		"/v1/advisory-verdicts?tenant_id=" + tenantB.String(),
+		"/v1/advisory-verdicts?author=octocat",
 	} {
 		w := c.exchange(t, handler, http.MethodGet, target, token, "", nil)
 		if w.Code != http.StatusBadRequest || errorOf(t, w) != errInvalidQuery {

@@ -489,6 +489,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/advisory-verdicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List stored llm-advisory verdicts, newest first.
+         * @description Each item is one AI-generated advisory verdict stored from an `llm-advisory` pull request check (ADR-0174, IPSO-162). `mode` is always `advise` and `result` is always `advisory`. Advisory verdicts never block a merge or count toward compliance health, and no field or filter names a person.
+         */
+        get: operations["list_advisory_verdicts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/verdicts": {
         parameters: {
             query?: never;
@@ -992,6 +1012,39 @@ export interface components {
              */
             id: string;
             verdicts: number;
+        };
+        AdvisoryPlace: {
+            path: string;
+            start_line: number;
+            end_line: number;
+        };
+        AdvisoryVerdict: {
+            /** Format: uuid */
+            id: string;
+            repo: string;
+            pull_number: number;
+            /** Format: uri */
+            pull_url: string;
+            head_sha: string;
+            base_sha: string;
+            /** Format: uuid */
+            decision_id: string;
+            decision_version: number;
+            /** @description Non-sensitive title of the stored decision version; omitted when sensitive or missing. */
+            decision_title?: string;
+            check_index: number;
+            /** @enum {string} */
+            mode: "advise";
+            /** @enum {string} */
+            result: "advisory";
+            /** @enum {string} */
+            assessment: "complies" | "deviates" | "unclear";
+            cited: components["schemas"]["AdvisoryPlace"][];
+            reason: string;
+            model_id: string;
+            prompt_version: string;
+            /** Format: date-time */
+            recorded_at: string;
         };
         StoredVerdict: {
             /** Format: uuid */
@@ -1939,6 +1992,12 @@ export interface components {
         Before: string;
         /** @description An owner/name, compared in lowercase. Absent matches every repository. */
         VerdictRepo: string;
+        /** @description A registry decision UUID. Absent matches every decision. */
+        AdvisoryDecision: string;
+        /** @description A positive pull request number. Absent matches every pull request. */
+        AdvisoryPullNumber: number;
+        /** @description Filter by advisory assessment word. Absent matches every assessment. */
+        AdvisoryAssessment: "complies" | "deviates" | "unclear";
         /** @description An EDR id or a slug. Absent matches every decision. */
         VerdictDecision: string;
         /** @description A lowercase owner/name. */
@@ -2889,6 +2948,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditWaivers"];
+                };
+            };
+            400: components["responses"]["InvalidQuery"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Timeout"];
+        };
+    };
+    list_advisory_verdicts: {
+        parameters: {
+            query?: {
+                /** @description An owner/name, compared in lowercase. Absent matches every repository. */
+                repo?: components["parameters"]["VerdictRepo"];
+                /** @description A registry decision UUID. Absent matches every decision. */
+                decision?: components["parameters"]["AdvisoryDecision"];
+                /** @description A positive pull request number. Absent matches every pull request. */
+                pull_number?: components["parameters"]["AdvisoryPullNumber"];
+                /** @description Filter by advisory assessment word. Absent matches every assessment. */
+                assessment?: components["parameters"]["AdvisoryAssessment"];
+                limit?: components["parameters"]["Limit"];
+                /** @description The last id of the previous page. */
+                before?: components["parameters"]["Before"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of advisory verdicts, newest first. Pass the last `id` as `before` for the next page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        advisory_verdicts: components["schemas"]["AdvisoryVerdict"][];
+                    };
                 };
             };
             400: components["responses"]["InvalidQuery"];

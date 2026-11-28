@@ -63,6 +63,7 @@ func TestAIActGuardrails(t *testing.T) {
 	checkModelLabelComponent(t, filepath.Join(root, "web", "src", "components", "ModelLabel.tsx"))
 	checkViewUsesModelLabel(t, filepath.Join(root, "web", "src", "views", "DecisionDetail.tsx"), "model_id")
 	checkViewUsesModelLabel(t, filepath.Join(root, "web", "src", "views", "NewDecision.tsx"), "ai_generated")
+	checkAdvisoryVerdictSurfaces(t, root)
 }
 
 func skipAIActDir(name string) bool {
@@ -187,6 +188,58 @@ func checkViewUsesModelLabel(t *testing.T, path, requiredToken string) {
 	src := string(data)
 	if !strings.Contains(src, "<ModelLabel") || !strings.Contains(src, requiredToken) {
 		t.Errorf("%s must pair %s with <ModelLabel", path, requiredToken)
+	}
+}
+
+// checkAdvisoryVerdictSurfaces enforces ADR-0152 decision 5 and IPSO-162 on both the web app
+// advisory verdict surfaces and the GitHub advisory check run publisher.
+func checkAdvisoryVerdictSurfaces(t *testing.T, root string) {
+	t.Helper()
+	listPath := filepath.Join(root, "web", "src", "components", "AdvisoryVerdictsList.tsx")
+	listData, err := os.ReadFile(listPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listSrc := string(listData)
+	for _, want := range []string{
+		"<ModelLabel",
+		"model_id",
+		"prompt_version",
+		"Does not block a merge",
+		"decisionPath(verdict.decision_id)",
+	} {
+		if !strings.Contains(listSrc, want) {
+			t.Errorf("%s missing required AI Act guardrail %q", listPath, want)
+		}
+	}
+	if strings.Contains(listSrc, "dangerouslySetInnerHTML") {
+		t.Errorf("%s must render model reasons strictly as plain text", listPath)
+	}
+	for _, view := range []string{
+		filepath.Join(root, "web", "src", "views", "Advisory.tsx"),
+		filepath.Join(root, "web", "src", "views", "DecisionDetail.tsx"),
+	} {
+		data, err := os.ReadFile(view)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), "<AdvisoryVerdictsList") {
+			t.Errorf("%s must render <AdvisoryVerdictsList", view)
+		}
+	}
+	checkPath := filepath.Join(root, "internal", "integrations", "advisory_check.go")
+	checkData, err := os.ReadFile(checkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkSrc := string(checkData)
+	if !strings.Contains(checkSrc, `advisoryConclusion = "neutral"`) {
+		t.Errorf("%s must fix advisory check run conclusion to neutral", checkPath)
+	}
+	for _, forbidden := range []string{`"action_required"`, `conclusion: "failure"`, `"conclusion": "failure"`} {
+		if strings.Contains(checkSrc, forbidden) {
+			t.Errorf("%s must never conclude %s", checkPath, forbidden)
+		}
 	}
 }
 

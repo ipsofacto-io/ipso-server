@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -233,4 +234,65 @@ func (h *verdictRoutes) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"known": known, "verdicts": items})
+}
+
+// listAdvisory reads the tenant's stored llm-advisory verdicts, newest first, for a repository, decision,
+// pull request, assessment, or all (IPSO-162). No field or filter names a person.
+func (h *verdictRoutes) listAdvisory(w http.ResponseWriter, r *http.Request) {
+	tenant, ok := tenantOf(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return
+	}
+	q := query{values: r.URL.Query()}
+	page, ok := q.page()
+	if !ok {
+		writeError(w, http.StatusBadRequest, errInvalidQuery)
+		return
+	}
+	var filter verification.AdvisoryFilter
+	if q.values.Has("repo") {
+		repo := q.values.Get("repo")
+		if repo == "" {
+			writeError(w, http.StatusBadRequest, errInvalidQuery)
+			return
+		}
+		filter.Repo = repo
+	}
+	if q.values.Has("decision") {
+		raw := q.values.Get("decision")
+		id, err := uuid.Parse(raw)
+		if err != nil || id == uuid.Nil {
+			writeError(w, http.StatusBadRequest, errInvalidQuery)
+			return
+		}
+		filter.Decision = id
+	}
+	if q.values.Has("pull_number") {
+		raw := q.values.Get("pull_number")
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, errInvalidQuery)
+			return
+		}
+		filter.PullNumber = n
+	}
+	if q.values.Has("assessment") {
+		assessment := q.values.Get("assessment")
+		if assessment == "" {
+			writeError(w, http.StatusBadRequest, errInvalidQuery)
+			return
+		}
+		filter.Assessment = assessment
+	}
+	items, err := verification.ListAdvisory(r.Context(), h.db, tenant, filter, page.Limit, page.Before)
+	if errors.Is(err, verification.ErrInvalid) {
+		writeError(w, http.StatusBadRequest, errInvalidQuery)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errInternal)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"advisory_verdicts": items})
 }

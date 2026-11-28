@@ -11,6 +11,7 @@ const NAV = [
   { to: '/decisions', label: 'Decisions' },
   { to: '/scopes', label: 'Scopes' },
   { to: '/inbox', label: 'Inbox' },
+  { to: '/advisory', label: 'Advisory' },
   { to: '/waivers', label: 'Waivers' },
   { to: '/premises', label: 'Premises' },
   { to: '/audit', label: 'Audit' },

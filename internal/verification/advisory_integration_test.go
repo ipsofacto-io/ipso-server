@@ -175,3 +175,115 @@ func TestReuseAdvisoryCopiesOnlyTheSameInput(t *testing.T) {
 		t.Fatalf("a second copy to the same head must insert nothing: %v, %v", again, err)
 	}
 }
+
+func TestListAdvisoryFiltersPagesEnrichesAndIsolatesTenants(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	var scopeA uuid.UUID
+	if err := s.admin.QueryRowContext(ctx, `
+		INSERT INTO registry.scope (tenant_id, kind, name) VALUES ($1, 'org', 'acme') RETURNING scope_id`, tenantA).Scan(&scopeA); err != nil {
+		t.Fatal(err)
+	}
+	insertDecision := func(id uuid.UUID, version int, body string) {
+		t.Helper()
+		if _, err := pgtest.Exec(ctx, s.app, tenantA.String(), `
+			INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
+			VALUES ($1, $2, $3, $4::jsonb, ARRAY[$5::uuid], '[2026-01-01,)'::tstzrange)`,
+			id, version, tenantA, body, scopeA); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	d1 := uuid.MustParse("0190c7b8-0000-7000-8000-0000000000d1")
+	d2 := uuid.MustParse("0190c7b8-0000-7000-8000-0000000000d2")
+	dSens := uuid.MustParse("0190c7b8-0000-7000-8000-0000000000d3")
+	insertDecision(d1, 2, `{"title":"Keep PostgreSQL"}`)
+	insertDecision(d2, 1, `{"title":"No raw SQL"}`)
+	insertDecision(dSens, 1, `{"title":"Secret deal","sensitive":true}`)
+
+	v1 := advisoryVerdict()
+	v1.DecisionID = d1
+	v1.DecisionVersion = 2
+	v1.CheckIndex = 0
+	if _, err := StoreAdvisory(ctx, s.app, tenantA, v1); err != nil {
+		t.Fatal(err)
+	}
+
+	v2 := advisoryVerdict()
+	v2.DecisionID = d2
+	v2.DecisionVersion = 1
+	v2.CheckIndex = 0
+	v2.Assessment = Complies
+	v2.Cited = nil
+	v2.Reason = "Uses parameterized queries."
+	if _, err := StoreAdvisory(ctx, s.app, tenantA, v2); err != nil {
+		t.Fatal(err)
+	}
+
+	v3 := advisoryVerdict()
+	v3.Repo = "acme/web"
+	v3.RepositoryID = 43
+	v3.PullNumber = 9
+	v3.DecisionID = dSens
+	v3.DecisionVersion = 1
+	v3.CheckIndex = 0
+	v3.Assessment = Unclear
+	v3.Cited = nil
+	v3.Reason = "Not enough context in diff."
+	if _, err := StoreAdvisory(ctx, s.app, tenantA, v3); err != nil {
+		t.Fatal(err)
+	}
+
+	// Tenant B row must never leak to Tenant A.
+	vb := advisoryVerdict()
+	vb.DecisionID = d1
+	if _, err := StoreAdvisory(ctx, s.app, tenantB, vb); err != nil {
+		t.Fatal(err)
+	}
+
+	// ListAdvisoryForHead returns deterministic decision/version/check order for PR 7 head.
+	headItems, err := ListAdvisoryForHead(ctx, s.app, tenantA, v1.RepositoryID, v1.PullNumber, v1.HeadSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(headItems) != 2 || headItems[0].DecisionID != d1 || headItems[0].DecisionTitle != "Keep PostgreSQL" ||
+		headItems[1].DecisionID != d2 || headItems[1].DecisionTitle != "No raw SQL" {
+		t.Fatalf("head items = %+v", headItems)
+	}
+	if headItems[0].PullURL != "https://github.com/acme/payments/pull/7" || headItems[0].Mode != "advise" || headItems[0].Result != "advisory" {
+		t.Fatalf("unexpected head item metadata: %+v", headItems[0])
+	}
+
+	// ListAdvisory returns newest first, omits sensitive title, and pages via before.
+	page1, err := ListAdvisory(ctx, s.app, tenantA, AdvisoryFilter{}, 2, uuid.Nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page1) != 2 || page1[0].DecisionID != dSens || page1[0].DecisionTitle != "" || page1[1].DecisionID != d2 {
+		t.Fatalf("page1 = %+v", page1)
+	}
+	page2, err := ListAdvisory(ctx, s.app, tenantA, AdvisoryFilter{}, 2, page1[1].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page2) != 1 || page2[0].DecisionID != d1 || page2[0].DecisionTitle != "Keep PostgreSQL" {
+		t.Fatalf("page2 = %+v", page2)
+	}
+
+	// Filters narrow by repo, decision, pull_number, and assessment.
+	byRepo, err := ListAdvisory(ctx, s.app, tenantA, AdvisoryFilter{Repo: "ACME/Web", PullNumber: 9, Assessment: Unclear}, 10, uuid.Nil)
+	if err != nil || len(byRepo) != 1 || byRepo[0].DecisionID != dSens {
+		t.Fatalf("byRepo = %+v, %v", byRepo, err)
+	}
+	byDecision, err := ListAdvisory(ctx, s.app, tenantA, AdvisoryFilter{Decision: d1}, 10, uuid.Nil)
+	if err != nil || len(byDecision) != 1 || byDecision[0].Assessment != Deviates {
+		t.Fatalf("byDecision = %+v, %v", byDecision, err)
+	}
+
+	// Tenant B sees only its own row.
+	bItems, err := ListAdvisory(ctx, s.app, tenantB, AdvisoryFilter{}, 10, uuid.Nil)
+	if err != nil || len(bItems) != 1 || bItems[0].DecisionTitle != "" {
+		t.Fatalf("tenantB = %+v, %v", bItems, err)
+	}
+}

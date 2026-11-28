@@ -1149,6 +1149,48 @@ paths:
           $ref: '#/components/responses/Internal'
         '503':
           $ref: '#/components/responses/Timeout'
+  /v1/advisory-verdicts:
+    get:
+      operationId: list_advisory_verdicts
+      tags: [verification]
+      summary: List stored llm-advisory verdicts, newest first.
+      description: >-
+        Each item is one AI-generated advisory verdict stored from an `llm-advisory` pull request check
+        (ADR-0174, IPSO-162). `mode` is always `advise` and `result` is always `advisory`. Advisory verdicts
+        never block a merge or count toward compliance health, and no field or filter names a person.
+      parameters:
+        - $ref: '#/components/parameters/VerdictRepo'
+        - $ref: '#/components/parameters/AdvisoryDecision'
+        - $ref: '#/components/parameters/AdvisoryPullNumber'
+        - $ref: '#/components/parameters/AdvisoryAssessment'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: One page of advisory verdicts, newest first. Pass the last `id` as `before` for the next page.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [advisory_verdicts]
+                properties:
+                  advisory_verdicts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AdvisoryVerdict'
+        '400':
+          $ref: '#/components/responses/InvalidQuery'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Timeout'
   /v1/verdicts:
     get:
       operationId: list_verdicts
@@ -2388,6 +2430,30 @@ components:
         type: string
         minLength: 1
         maxLength: 140
+    AdvisoryDecision:
+      name: decision
+      in: query
+      required: false
+      description: A registry decision UUID. Absent matches every decision.
+      schema:
+        type: string
+        format: uuid
+    AdvisoryPullNumber:
+      name: pull_number
+      in: query
+      required: false
+      description: A positive pull request number. Absent matches every pull request.
+      schema:
+        type: integer
+        minimum: 1
+    AdvisoryAssessment:
+      name: assessment
+      in: query
+      required: false
+      description: Filter by advisory assessment word. Absent matches every assessment.
+      schema:
+        type: string
+        enum: [complies, deviates, unclear]
     VerdictDecision:
       name: decision
       in: query
@@ -2659,6 +2725,98 @@ components:
         verdicts:
           type: integer
           minimum: 0
+    AdvisoryPlace:
+      type: object
+      additionalProperties: false
+      required: [path, start_line, end_line]
+      properties:
+        path:
+          type: string
+          minLength: 1
+        start_line:
+          type: integer
+          minimum: 1
+        end_line:
+          type: integer
+          minimum: 1
+    AdvisoryVerdict:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - repo
+        - pull_number
+        - pull_url
+        - head_sha
+        - base_sha
+        - decision_id
+        - decision_version
+        - check_index
+        - mode
+        - result
+        - assessment
+        - cited
+        - reason
+        - model_id
+        - prompt_version
+        - recorded_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        repo:
+          type: string
+        pull_number:
+          type: integer
+          minimum: 1
+        pull_url:
+          type: string
+          format: uri
+        head_sha:
+          type: string
+        base_sha:
+          type: string
+        decision_id:
+          type: string
+          format: uuid
+        decision_version:
+          type: integer
+          minimum: 1
+        decision_title:
+          type: string
+          description: Non-sensitive title of the stored decision version; omitted when sensitive or missing.
+        check_index:
+          type: integer
+          minimum: 0
+        mode:
+          type: string
+          enum: [advise]
+        result:
+          type: string
+          enum: [advisory]
+        assessment:
+          type: string
+          enum: [complies, deviates, unclear]
+        cited:
+          type: array
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/AdvisoryPlace'
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 300
+        model_id:
+          type: string
+          minLength: 1
+          maxLength: 200
+        prompt_version:
+          type: string
+          minLength: 1
+          maxLength: 100
+        recorded_at:
+          type: string
+          format: date-time
     StoredVerdict:
       type: object
       additionalProperties: false

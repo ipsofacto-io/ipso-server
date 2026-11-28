@@ -3820,6 +3820,528 @@
       "type": "Synchronous/HTTP"
     },
     {
+      "description": "a request for the stored advisory verdicts of a decision",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds an advisory verdict"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/advisory-verdicts",
+        "query": {
+          "decision": [
+            "00000000-0000-7000-8000-000000000001"
+          ],
+          "limit": [
+            "20"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "advisory_verdicts": [
+              {
+                "assessment": "deviates",
+                "base_sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                "check_index": 0,
+                "cited": [
+                  {
+                    "end_line": 6,
+                    "path": "ingress/tls.yaml",
+                    "start_line": 4
+                  }
+                ],
+                "decision_id": "00000000-0000-7000-8000-000000000001",
+                "decision_title": "Use TLS",
+                "decision_version": 1,
+                "head_sha": "abababababababababababababababababababab",
+                "id": "0194f2a0-0000-7000-8000-000000000a11",
+                "mode": "advise",
+                "model_id": "advisory-model",
+                "prompt_version": "pr-advisory-v2",
+                "pull_number": 7,
+                "pull_url": "https://github.com/acme/api/pull/7",
+                "reason": "Configures TLS 1.1 on the ingress listener.",
+                "recorded_at": "2026-11-01T00:00:00Z",
+                "repo": "acme/api",
+                "result": "advisory"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.advisory_verdicts": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].assessment": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^(complies|deviates|unclear)$"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].base_sha": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].check_index": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].cited": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].cited[*].end_line": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].cited[*].path": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].cited[*].start_line": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].decision_title": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].decision_version": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].head_sha": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].model_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].prompt_version": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].pull_number": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].pull_url": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^https://github\\.com/[^/]+/[^/]+/pull/[0-9]+$"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].reason": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].recorded_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].repo": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "description": "a request for the stored advisory verdicts of a pull request",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "tenant A holds an advisory verdict"
+        }
+      ],
+      "request": {
+        "headers": {
+          "Accept": [
+            "application/json"
+          ],
+          "Cookie": [
+            "__Host-ipso-session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Cookie": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^__Host-ipso-session=[A-Za-z0-9_-]{43}$"
+                }
+              ]
+            }
+          }
+        },
+        "method": "GET",
+        "path": "/v1/advisory-verdicts",
+        "query": {
+          "assessment": [
+            "deviates"
+          ],
+          "limit": [
+            "20"
+          ],
+          "pull_number": [
+            "7"
+          ],
+          "repo": [
+            "acme/api"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "advisory_verdicts": [
+              {
+                "assessment": "deviates",
+                "base_sha": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                "check_index": 0,
+                "cited": [
+                  {
+                    "end_line": 6,
+                    "path": "ingress/tls.yaml",
+                    "start_line": 4
+                  }
+                ],
+                "decision_id": "00000000-0000-7000-8000-000000000001",
+                "decision_title": "Use TLS",
+                "decision_version": 1,
+                "head_sha": "abababababababababababababababababababab",
+                "id": "0194f2a0-0000-7000-8000-000000000a11",
+                "mode": "advise",
+                "model_id": "advisory-model",
+                "prompt_version": "pr-advisory-v2",
+                "pull_number": 7,
+                "pull_url": "https://github.com/acme/api/pull/7",
+                "reason": "Configures TLS 1.1 on the ingress listener.",
+                "recorded_at": "2026-11-01T00:00:00Z",
+                "repo": "acme/api",
+                "result": "advisory"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.advisory_verdicts": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].assessment": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^(complies|deviates|unclear)$"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].base_sha": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].check_index": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].cited": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].cited[*].end_line": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].cited[*].path": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].cited[*].start_line": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].decision_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].decision_title": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].decision_version": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].head_sha": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].model_id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].prompt_version": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].pull_number": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "integer"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].pull_url": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^https://github\\.com/[^/]+/[^/]+/pull/[0-9]+$"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].reason": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].recorded_at": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            },
+            "$.advisory_verdicts[*].repo": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
       "description": "a request for the stored verdicts of a decision",
       "pending": false,
       "providerStates": [
