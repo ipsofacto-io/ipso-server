@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -406,6 +407,55 @@ func inTenantReadOnly(ctx context.Context, db *sql.DB, tenant uuid.UUID, fn func
 	return fn(tx)
 }
 
+var (
+	advisoryMDLinkPattern  = regexp.MustCompile(`\[([^\]\r\n]+)\]\([^)\r\n]+\)`)
+	advisoryURLPattern     = regexp.MustCompile(`(?i)\b(?:https?://\S+|www\.\S+|(?:javascript|data|vbscript):\S*)`)
+	advisoryMentionPattern = regexp.MustCompile(`@[A-Za-z0-9][A-Za-z0-9_.-]*`)
+	advisoryAnglePattern   = regexp.MustCompile(`[<>]`)
+)
+
+// SanitizeAdvisoryText renders untrusted text as safe plain text with no Markdown links,
+// bare or colon-scheme URLs, HTML angle brackets, mentions, or control characters (IPSO-162).
+func SanitizeAdvisoryText(text string) string {
+	s := advisoryMDLinkPattern.ReplaceAllString(text, "$1")
+	s = advisoryURLPattern.ReplaceAllString(s, "")
+	s = advisoryMentionPattern.ReplaceAllString(s, "[mention removed]")
+	s = advisoryAnglePattern.ReplaceAllString(s, "")
+	s = stripAdvisoryControlRunes(s)
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// SanitizeAdvisoryReason scrubs an advisory verdict reason on read as defense in depth and bounds
+// it to 1..MaxReasonRunes so responses always satisfy the OpenAPI contract (IPSO-162).
+func SanitizeAdvisoryReason(text string) string {
+	s := SanitizeAdvisoryText(text)
+	if s == "" {
+		return "Advisory verdict."
+	}
+	runes := []rune(s)
+	if len(runes) > MaxReasonRunes {
+		return strings.TrimSpace(string(runes[:MaxReasonRunes]))
+	}
+	return s
+}
+
+// SanitizeAdvisoryLabel strips control characters and angle brackets from model_id or prompt_version
+// metadata before placing it into a plain-text label.
+func SanitizeAdvisoryLabel(text string) string {
+	s := advisoryAnglePattern.ReplaceAllString(text, "")
+	s = stripAdvisoryControlRunes(s)
+	return strings.TrimSpace(s)
+}
+
+func stripAdvisoryControlRunes(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
 func scanAdvisoryVerdicts(rows *sql.Rows) ([]StoredAdvisoryVerdict, error) {
 	defer func() { _ = rows.Close() }()
 	items := []StoredAdvisoryVerdict{}
@@ -424,6 +474,7 @@ func scanAdvisoryVerdicts(rows *sql.Rows) ([]StoredAdvisoryVerdict, error) {
 		if it.Cited == nil {
 			it.Cited = []Place{}
 		}
+		it.Reason = SanitizeAdvisoryReason(it.Reason)
 		it.PullURL = "https://github.com/" + it.Repo + "/pull/" + strconv.Itoa(it.PullNumber)
 		items = append(items, it)
 	}

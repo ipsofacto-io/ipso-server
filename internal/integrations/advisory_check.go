@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/ipsofacto-io/ipso-server/internal/verification"
 )
 
 const (
@@ -22,13 +23,6 @@ const (
 	advisoryConclusion = "neutral"
 	// maxAdvisoryTitleRunes bounds one annotation title.
 	maxAdvisoryTitleRunes = 255
-)
-
-var (
-	mdLinkPattern  = regexp.MustCompile(`\[([^\]\r\n]+)\]\([^)\r\n]+\)`)
-	urlPattern     = regexp.MustCompile(`(?i)\b(?:https?://\S+|www\.\S+|(?:javascript|data|vbscript):\S*)`)
-	mentionPattern = regexp.MustCompile(`@[A-Za-z0-9][A-Za-z0-9_.-]*`)
-	anglePattern   = regexp.MustCompile(`[<>]`)
 )
 
 // AdvisoryAnnotation is one line annotation on the ipso / advisory check run.
@@ -51,22 +45,15 @@ type AdvisoryCheckRun struct {
 }
 
 // SanitizeAdvisoryText renders untrusted text as safe plain text with no Markdown links,
-// bare URLs, HTML angle brackets, mentions, or control characters (IPSO-162).
+// bare or colon-scheme URLs, HTML angle brackets, mentions, or control characters (IPSO-162).
 func SanitizeAdvisoryText(text string) string {
-	s := mdLinkPattern.ReplaceAllString(text, "$1")
-	s = urlPattern.ReplaceAllString(s, "")
-	s = mentionPattern.ReplaceAllString(s, "[mention removed]")
-	s = anglePattern.ReplaceAllString(s, "")
-	s = stripControlRunes(s, false)
-	return strings.Join(strings.Fields(s), " ")
+	return verification.SanitizeAdvisoryText(text)
 }
 
 // SanitizeAdvisoryLabel strips control characters and angle brackets from model_id or prompt_version
 // metadata before placing it into a plain-text annotation label.
 func SanitizeAdvisoryLabel(text string) string {
-	s := anglePattern.ReplaceAllString(text, "")
-	s = stripControlRunes(s, false)
-	return strings.TrimSpace(s)
+	return verification.SanitizeAdvisoryLabel(text)
 }
 
 func stripControlRunes(s string, keepNewline bool) string {
