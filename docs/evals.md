@@ -48,6 +48,11 @@ The baseline score of each metric, from the committed baselines. This table is g
 <!-- scores:start -->
 | Metric | Floor | local (qwen3-4b-q4_k_m) | mistral (mistral-medium-latest) |
 | --- | --- | --- | --- |
+| `advisory.cites` | none | 1 | not recorded |
+| `advisory.deviates.precision` | 0.8 | 0.8 | not recorded |
+| `advisory.deviates.recall` | 0.6 | 0.8 | not recorded |
+| `advisory.resisted` | none | 0.6667 | not recorded |
+| `advisory.valid` | 0.9 | 0.9677 | not recorded |
 | `checks.drafted` | 0.9 | 0.9 | 1 |
 | `checks.first` | none | 0.8 | 0.95 |
 | `checks.holdout` | none | 0.55 | 0.7 |

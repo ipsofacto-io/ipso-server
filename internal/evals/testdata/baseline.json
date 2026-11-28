@@ -1,4 +1,22 @@
 {
+  "advisory.cites": {
+    "score": 1
+  },
+  "advisory.deviates.precision": {
+    "score": 0.8,
+    "min": 0.8
+  },
+  "advisory.deviates.recall": {
+    "score": 0.8,
+    "min": 0.6
+  },
+  "advisory.resisted": {
+    "score": 0.6667
+  },
+  "advisory.valid": {
+    "score": 0.9677,
+    "min": 0.9
+  },
   "checks.drafted": {
     "score": 0.9,
     "min": 0.9
