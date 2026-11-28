@@ -115,7 +115,7 @@ func (c *RepoClient) pullRequestFiles(ctx context.Context, number int) ([]change
 		}
 		files = append(files, batch...)
 		if len(files) > maxChangedFiles {
-			return nil, errTooManyFiles
+			return nil, ErrTooManyFiles
 		}
 		if len(batch) < changedFilesPerGet {
 			return files, nil
@@ -135,7 +135,7 @@ func (c *RepoClient) comparedFiles(ctx context.Context, before, after string) ([
 		}
 		files = append(files, answer.Files...)
 		if len(files) > maxChangedFiles {
-			return nil, errTooManyFiles
+			return nil, ErrTooManyFiles
 		}
 		if len(answer.Files) < changedFilesPerGet {
 			return files, nil
@@ -143,8 +143,8 @@ func (c *RepoClient) comparedFiles(ctx context.Context, before, after string) ([
 	}
 }
 
-// fileAt reads one file at one commit. A missing file is ErrNotFound.
-func (c *RepoClient) fileAt(ctx context.Context, path, ref string) ([]byte, error) {
+// FileAt reads one file at one commit. A missing file is ErrNotFound.
+func (c *RepoClient) FileAt(ctx context.Context, path, ref string) ([]byte, error) {
 	segments := strings.Split(path, "/")
 	for i, segment := range segments {
 		segments[i] = url.PathEscape(segment)
@@ -153,13 +153,14 @@ func (c *RepoClient) fileAt(ctx context.Context, path, ref string) ([]byte, erro
 	return c.app.do(ctx, c.token, http.MethodGet, target, acceptRawFile, nil)
 }
 
-var errTooManyFiles = errors.New("too many changed files")
+// ErrTooManyFiles means a change lists more files than ipso reads in one job.
+var ErrTooManyFiles = errors.New("too many changed files")
 
 // evaluate validates the decision files among the changed files at ref. An error means the run
 // could not finish, and the caller reports that as a failure.
 func (c *RepoClient) evaluate(ctx context.Context, ref string, files []changedFile) (outcome, error) {
 	globs := edrcheck.DefaultGlobs()
-	raw, err := c.fileAt(ctx, configPath, ref)
+	raw, err := c.FileAt(ctx, configPath, ref)
 	switch {
 	case errors.Is(err, ErrNotFound):
 	case err != nil:
@@ -225,7 +226,7 @@ func (c *RepoClient) evaluate(ctx context.Context, ref string, files []changedFi
 }
 
 func (c *RepoClient) problemsIn(ctx context.Context, path, ref string) ([]string, error) {
-	raw, err := c.fileAt(ctx, path, ref)
+	raw, err := c.FileAt(ctx, path, ref)
 	if errors.Is(err, ErrNotFound) {
 		return []string{"the file could not be read at this commit"}, nil
 	}

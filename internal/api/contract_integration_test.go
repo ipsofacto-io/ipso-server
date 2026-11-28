@@ -294,6 +294,9 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 			if a["allow_check_eval"] != true {
 				t.Errorf("%v", a)
 			}
+			if repos, ok := a["advisory_repositories"].([]any); !ok || len(repos) != 0 {
+				t.Errorf("advisory_repositories is not an empty list: %v", a)
+			}
 		}},
 		{"list_freshness_policies", http.MethodGet, "/v1/freshness-policies", nil, func(t *testing.T, a map[string]any) {
 			if len(list(a, "freshness_policies")) != 1 {

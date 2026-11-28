@@ -99,6 +99,67 @@ func TestResolvePathsRefusesARequestThatWidensTheAnswer(t *testing.T) {
 	}
 }
 
+// A pull request runs in no environment yet, so the decisions of every environment apply to it, and the
+// rest of the answer is the one ResolvePaths gives (ADR-0174).
+func TestResolvePathsAnyEnvMatchesEveryEnvironment(t *testing.T) {
+	r := newRegistryDB(t)
+	org := r.scope(t, tenantA, uuid.Nil, "org", "acme")
+	repo := r.scope(t, tenantA, org, "repo", "acme/api")
+	docs := r.scope(t, tenantA, repo, "path", "docs/**")
+	prod := r.scope(t, tenantA, repo, "env", "prod")
+	staging := r.scope(t, tenantA, repo, "env", "staging")
+	other := r.scope(t, tenantA, org, "repo", "acme/web")
+	onDocs, onProd, onStaging, onOther := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	r.decision(t, tenantA, onDocs, "[2026-01-01,)", docs)
+	r.decision(t, tenantA, onProd, "[2026-01-01,)", prod)
+	r.decision(t, tenantA, onStaging, "[2026-01-01,)", staging)
+	r.decision(t, tenantA, onOther, "[2026-01-01,)", other)
+	knownAt := mark(t, r.admin)
+	validAt := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	got, err := ResolvePathsAnyEnv(t.Context(), r.app, tenantA, "acme/api", []string{"docs/a.md", "main.go"}, validAt, knownAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := func(in []uuid.UUID) map[uuid.UUID]bool {
+		out := map[uuid.UUID]bool{}
+		for _, id := range in {
+			out[id] = true
+		}
+		return out
+	}
+	first, second := ids(got.Resolutions[0].DecisionIDs), ids(got.Resolutions[1].DecisionIDs)
+	if len(first) != 3 || !first[onDocs] || !first[onProd] || !first[onStaging] {
+		t.Fatalf("docs/a.md: %v", got.Resolutions[0].DecisionIDs)
+	}
+	if len(second) != 2 || !second[onProd] || !second[onStaging] {
+		t.Fatalf("main.go: %v", got.Resolutions[1].DecisionIDs)
+	}
+	if len(got.Decisions) != 3 {
+		t.Fatalf("decisions %+v", got.Decisions)
+	}
+	// ResolvePaths with one env still names that env only.
+	prodOnly, err := ResolvePaths(t.Context(), r.app, tenantA, "acme/api", "prod", []string{"main.go"}, validAt, knownAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if only := ids(prodOnly.Resolutions[0].DecisionIDs); len(only) != 1 || !only[onProd] {
+		t.Fatalf("prod: %v", prodOnly.Resolutions[0].DecisionIDs)
+	}
+	tenantBRead, err := ResolvePathsAnyEnv(t.Context(), r.app, tenantB, "acme/api", []string{"main.go"}, validAt, knownAt)
+	if err != nil || len(tenantBRead.Decisions) != 0 {
+		t.Fatalf("tenant B read tenant A: %+v, %v", tenantBRead, err)
+	}
+	for name, paths := range map[string][]string{"no paths": nil, "a parent path": {"../a"}, "an empty path": {""}} {
+		if _, err := ResolvePathsAnyEnv(t.Context(), r.app, tenantA, "acme/api", paths, validAt, knownAt); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+	if _, err := ResolvePathsAnyEnv(t.Context(), r.app, tenantA, "", []string{"a"}, validAt, knownAt); !errors.Is(err, ErrInvalidSubject) {
+		t.Fatalf("no repo: %v", err)
+	}
+}
+
 func TestDecisionsPagesByIDAsKnown(t *testing.T) {
 	r := newRegistryDB(t)
 	org := r.scope(t, tenantA, uuid.Nil, "org", "acme")

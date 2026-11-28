@@ -167,13 +167,38 @@ type decisionScopes struct {
 //
 // The tenant must be the authenticated one, because ResolvePaths trusts it.
 func ResolvePaths(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo, env string, paths []string, validAt, knownAt time.Time) (Resolved, error) {
+	return resolvePaths(ctx, db, tenant, repo, env, false, paths, validAt, knownAt)
+}
+
+// ResolvePathsAnyEnv answers for a change that no environment runs yet, such as an open pull request:
+// the decisions in force for each path of repo in any environment, because an omitted env matches every
+// scope that names one (ADR-0051 decision 4). The advisory job of a pull request uses it, and no request
+// of the API reaches it (ADR-0174). repo and every path are still required, and the rest is ResolvePaths.
+func ResolvePathsAnyEnv(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo string, paths []string, validAt, knownAt time.Time) (Resolved, error) {
+	return resolvePaths(ctx, db, tenant, repo, "", true, paths, validAt, knownAt)
+}
+
+// ValidPath reports whether ResolvePaths accepts p as a path: relative UTF-8 of at most 4096 bytes, with
+// no control character and no empty, . or .. segment. A caller that holds paths from GitHub drops the
+// others first, so one odd file name does not refuse the whole request.
+func ValidPath(p string) bool {
+	if p == "" {
+		return false
+	}
+	_, err := splitSubjectPath(p)
+	return err == nil
+}
+
+// resolvePaths is the body of ResolvePaths and ResolvePathsAnyEnv. anyEnv requires an empty env, and
+// otherwise the env is required.
+func resolvePaths(ctx context.Context, db *sql.DB, tenant uuid.UUID, repo, env string, anyEnv bool, paths []string, validAt, knownAt time.Time) (Resolved, error) {
 	if tenant == uuid.Nil {
 		return Resolved{}, fmt.Errorf("%w: no tenant", ErrInvalidQuery)
 	}
 	if validAt.IsZero() || knownAt.IsZero() {
 		return Resolved{}, fmt.Errorf("%w: the valid time and the transaction time are required", ErrInvalidQuery)
 	}
-	if repo == "" || env == "" {
+	if repo == "" || (env == "") != anyEnv {
 		return Resolved{}, fmt.Errorf("%w: a check request names the repo and the env", ErrInvalidSubject)
 	}
 	if len(paths) == 0 || len(paths) > MaxResolvePaths {

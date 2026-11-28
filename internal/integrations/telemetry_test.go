@@ -91,6 +91,30 @@ func TestAMergedJobIsKindMergedAndAFailureKeepsItsTextOffTheSpan(t *testing.T) {
 	rec.CheckKeys(t)
 }
 
+func TestAnAdvisoryJobIsKindAdvisoryUnderItsDelivery(t *testing.T) {
+	_, app := newFakeGitHub(t)
+	tel, rec := telemetrytest.New(t)
+	hooks := &advisoryHooks{enabled: optedIn}
+	s := advisoryService(t, app, nil, hooks, nil)
+	s.cfg.Telemetry = tel
+	mux := http.NewServeMux()
+	mux.Handle(webhookPath, s.Handler())
+	if code := deliverThrough(t, tel.Handler(uuid.Nil, mux), "pull_request", "r-1", prEvent("ready_for_review")); code != http.StatusAccepted {
+		t.Fatalf("status %d", code)
+	}
+	drain(s)
+
+	delivery := rec.Span(t, "POST /webhooks/github")
+	job := rec.Span(t, "job advisory_pr")
+	if got := telemetrytest.Attrs(job.Attributes); got["ipso.job.kind"] != "advisory_pr" || got["ipso.job.outcome"] != "ok" || got["ipso.tenant.id"] != testTenant.String() {
+		t.Errorf("the job span: %v", got)
+	}
+	if job.Parent.SpanID() != delivery.SpanContext.SpanID() {
+		t.Error("the advisory job is not a child of its delivery")
+	}
+	rec.CheckKeys(t)
+}
+
 func TestAPanickingJobIsObservedAsOne(t *testing.T) {
 	_, app := newFakeGitHub(t)
 	tel, rec := telemetrytest.New(t)

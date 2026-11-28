@@ -2037,7 +2037,7 @@ paths:
     get:
       operationId: get_llm_policy
       tags: [verification]
-      summary: Read the tenant opt-in policy for LLM authoring assist, engine llm evaluation, and agent proposal relations.
+      summary: Read the tenant opt-in policy for LLM authoring assist, engine llm evaluation, agent proposal relations, and llm-advisory checks on pull requests.
       responses:
         '200':
           description: The tenant LLM policy.
@@ -2060,7 +2060,7 @@ paths:
     put:
       operationId: set_llm_policy
       tags: [verification]
-      summary: Update the tenant opt-in policy for LLM authoring assist, engine llm evaluation, and agent proposal relations.
+      summary: Update the tenant opt-in policy for LLM authoring assist, engine llm evaluation, agent proposal relations, and llm-advisory checks on pull requests.
       requestBody:
         required: true
         content:
@@ -4075,6 +4075,13 @@ components:
         allow_agent_proposal_relations:
           type: boolean
           description: Compare each new agent proposal with the decisions in force through the LLM gateway and show the hint in the inbox (ADR-0172). Off when left out of a request; every response carries it.
+        advisory_repositories:
+          type: array
+          maxItems: 100
+          description: The repositories, as owner/name, whose pull requests send diff hunks through the LLM gateway to evaluate llm-advisory checks (ADR-0174). Names are stored in lowercase, sorted and once each. Empty when left out of a request; every response carries it.
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9_.-]{1,39}/[A-Za-z0-9_.-]{1,100}$'
         updated_at:
           type: string
           format: date-time

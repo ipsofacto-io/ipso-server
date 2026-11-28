@@ -344,6 +344,12 @@ func smuggleInserts() []smuggle {
 		{"verification.verdict", `
 			INSERT INTO verification.verdict (tenant_id, upload_id, decision_id, slug, check_index, mode, result, violations)
 			VALUES ($1::uuid, $2::uuid, '01M5QJ0V9EVXKR4C89XNBNT5GG', 'smuggled', 0, 'block', 'pass', 0)`, []any{tenantA, decisionKeep}, true},
+		{"verification.advisory_verdict", `
+			INSERT INTO verification.advisory_verdict
+				(tenant_id, repository_id, repo, pull_number, head_sha, base_sha, decision_id, decision_version, check_index,
+				 assessment, cited, reason, model_id, prompt_version, input_sha256)
+			VALUES ($1::uuid, 2, 'acme/smuggled', 1, repeat('cd', 20), repeat('ef', 20), $1::uuid, 1, 0,
+			        'complies', '[]'::jsonb, 'Smuggled', 'm', 'p', sha256('smuggled'))`, []any{tenantA}, true},
 		// The application role has no INSERT on the tombstone at all, so the privilege check refuses it.
 		{"tenancy.offboarding", `INSERT INTO tenancy.offboarding (tenant_id, deleted_rows, deleted_jobs, key_destroyed) VALUES ($1::uuid, 0, 0, false)`, []any{tenantA}, false},
 		{"identity.login", `INSERT INTO identity.login (tenant_id, principal_id, issuer, subject) VALUES ($1::uuid, $1::uuid, 'https://idp.example.test', 'smuggled')`, []any{tenantA}, true},
@@ -572,6 +578,7 @@ func policyTables() []string {
 		"tenancy.offboarding",
 		"tenancy.tenant",
 		"tenancy.tenant_key",
+		"verification.advisory_verdict",
 		"verification.agent_pin",
 		"verification.freshness_policy",
 		"verification.upload",
@@ -638,6 +645,7 @@ func expectedPolicies() []string {
 		"tenancy.offboarding":               "SELECT",
 		"tenancy.tenant":                    "SELECT INSERT",
 		"tenancy.tenant_key":                "SELECT INSERT",
+		"verification.advisory_verdict":     "SELECT INSERT",
 		"verification.agent_pin":            "SELECT INSERT DELETE",
 		"verification.freshness_policy":     "SELECT INSERT UPDATE DELETE",
 		"verification.upload":               "SELECT INSERT",
