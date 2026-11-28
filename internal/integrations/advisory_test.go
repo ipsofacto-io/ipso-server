@@ -350,7 +350,7 @@ func TestPublishAdvisoryCheckRunIsAlwaysNeutralAndPlainText(t *testing.T) {
 			EndLine:   i + 1,
 			Level:     level,
 			Title:     "Deviates: [click](https://evil.example) <script> @octocat",
-			Message:   SanitizeAdvisoryText("Adds [MySQL](https://evil.example) <b>table</b> @alice") + "\n\nAI-generated (mistral-medium, prompt pr-advisory-v2). Advisory only; does not block a merge.",
+			Message:   SanitizeAdvisoryText("Adds [MySQL](https://evil.example) javascript:alert(1) data:text/html,<b>table</b> @alice") + "\n\nAI-generated (mistral-medium, prompt pr-advisory-v2). Advisory only; does not block a merge.",
 		}
 	}
 	err = client.PublishAdvisoryCheckRun(t.Context(), headSHA, AdvisoryCheckRun{
@@ -383,7 +383,7 @@ func TestPublishAdvisoryCheckRunIsAlwaysNeutralAndPlainText(t *testing.T) {
 	}
 	title := first["title"].(string)
 	msg := first["message"].(string)
-	for _, forbidden := range []string{"https://", "<script>", "<b>", "@octocat", "@alice", "[click]", "[MySQL]"} {
+	for _, forbidden := range []string{"https://", "javascript:", "data:", "<script>", "<b>", "@octocat", "@alice", "[click]", "[MySQL]"} {
 		if strings.Contains(title, forbidden) || strings.Contains(msg, forbidden) {
 			t.Fatalf("forbidden token %q survived sanitization: title=%q msg=%q", forbidden, title, msg)
 		}

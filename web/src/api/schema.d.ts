@@ -1040,6 +1040,7 @@ export interface components {
             /** @enum {string} */
             assessment: "complies" | "deviates" | "unclear";
             cited: components["schemas"]["AdvisoryPlace"][];
+            /** @description Untrusted plain-text model reason bounded to 300 runes. Clients must render it as literal text and never interpret it as Markdown or HTML. */
             reason: string;
             model_id: string;
             prompt_version: string;

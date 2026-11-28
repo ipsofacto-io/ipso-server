@@ -26,7 +26,7 @@ const (
 
 var (
 	mdLinkPattern  = regexp.MustCompile(`\[([^\]\r\n]+)\]\([^)\r\n]+\)`)
-	urlPattern     = regexp.MustCompile(`(?i)\b(?:https?://|www\.)\S+`)
+	urlPattern     = regexp.MustCompile(`(?i)\b(?:https?://\S+|www\.\S+|(?:javascript|data|vbscript):\S*)`)
 	mentionPattern = regexp.MustCompile(`@[A-Za-z0-9][A-Za-z0-9_.-]*`)
 	anglePattern   = regexp.MustCompile(`[<>]`)
 )
