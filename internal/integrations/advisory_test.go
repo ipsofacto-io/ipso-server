@@ -76,18 +76,6 @@ func advisoryService(t *testing.T, app *App, logs io.Writer, hooks *advisoryHook
 
 func optedIn(repo string) (bool, error) { return repo == testRepo, nil }
 
-func advisoryMints(fake *fakeGitHub) []map[string]any {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	var out []map[string]any
-	for _, minted := range fake.minted {
-		if _, writes := minted["permissions"].(map[string]any)["checks"]; !writes {
-			out = append(out, minted)
-		}
-	}
-	return out
-}
-
 func TestNoAdvisoryHookStartsNoAdvisoryJob(t *testing.T) {
 	fake, app := newFakeGitHub(t)
 	s := newTestService(t, app, nil, nil)
@@ -101,8 +89,8 @@ func TestNoAdvisoryHookStartsNoAdvisoryJob(t *testing.T) {
 		t.Fatalf("queued %d check and %d advisory jobs, want 1 and 0", len(s.queue), len(s.advisory))
 	}
 	drain(s)
-	if len(advisoryMints(fake)) != 0 {
-		t.Fatalf("a token was minted for an advisory job: %v", fake.minted)
+	if len(fake.minted) != 1 {
+		t.Fatalf("expected only the 1 check-run token, got %d: %v", len(fake.minted), fake.minted)
 	}
 }
 
@@ -131,7 +119,7 @@ func TestARepositoryNotOptedInMintsNothingForTheAdvisoryJob(t *testing.T) {
 	}
 }
 
-func TestAnOptedInPullRequestRunsTheAdvisoryJobWithAReadOnlyToken(t *testing.T) {
+func TestAnOptedInPullRequestRunsTheAdvisoryJobWithScopedChecksToken(t *testing.T) {
 	fake, app := newFakeGitHub(t)
 	hooks := &advisoryHooks{enabled: optedIn}
 	s := advisoryService(t, app, nil, hooks, nil)
@@ -152,15 +140,17 @@ func TestAnOptedInPullRequestRunsTheAdvisoryJobWithAReadOnlyToken(t *testing.T) 
 	if pr.Tenant != testTenant || pr.InstallationID != 42 || pr.Repo != testRepo || pr.RepositoryID != 9 || pr.Number != 7 || pr.HeadSHA != headSHA || pr.Client == nil {
 		t.Fatalf("the hook got %+v", pr)
 	}
-	mints := advisoryMints(fake)
-	if len(mints) != 3 {
-		t.Fatalf("%d advisory tokens, want 3", len(mints))
+	// 3 check runs + 3 advisory jobs = 6 single-repo tokens.
+	if len(fake.minted) != 6 {
+		t.Fatalf("%d total tokens, want 6", len(fake.minted))
 	}
-	if got := fmt.Sprint(mints[0]["permissions"]); got != "map[contents:read metadata:read pull_requests:read]" {
-		t.Fatalf("the advisory token asks for %s", got)
-	}
-	if got := fmt.Sprint(mints[0]["repository_ids"]); got != "[9]" {
-		t.Fatalf("the advisory token names repositories %s", got)
+	for _, m := range fake.minted {
+		if got := fmt.Sprint(m["permissions"]); got != "map[checks:write contents:read metadata:read pull_requests:read]" {
+			t.Fatalf("the token asks for %s", got)
+		}
+		if got := fmt.Sprint(m["repository_ids"]); got != "[9]" {
+			t.Fatalf("the token names repositories %s", got)
+		}
 	}
 }
 
@@ -175,6 +165,15 @@ func TestReadyForReviewStartsOnlyTheAdvisoryJob(t *testing.T) {
 	drain(s)
 	if len(fake.created) != 0 || len(hooks.ran()) != 1 {
 		t.Fatalf("%d check runs and %d advisory jobs, want 0 and 1", len(fake.created), len(hooks.ran()))
+	}
+	if len(fake.minted) != 1 {
+		t.Fatalf("%d minted tokens, want 1", len(fake.minted))
+	}
+	if got := fmt.Sprint(fake.minted[0]["permissions"]); got != "map[checks:write contents:read metadata:read pull_requests:read]" {
+		t.Fatalf("the advisory token asks for %s", got)
+	}
+	if got := fmt.Sprint(fake.minted[0]["repository_ids"]); got != "[9]" {
+		t.Fatalf("the advisory token names repositories %s", got)
 	}
 }
 
@@ -326,5 +325,140 @@ func TestSlowAdvisoryJobsDoNotDelayOtherLanes(t *testing.T) {
 	}
 	if running := len(hooks.started); running != 0 {
 		t.Fatalf("%d advisory jobs beyond the %d worker of their lane started", running, advisoryWorkerCount)
+	}
+}
+
+func TestPublishAdvisoryCheckRunIsAlwaysNeutralAndPlainText(t *testing.T) {
+	fake, app := newFakeGitHub(t)
+	client, err := app.repoClient(t.Context(), 42, 9, testRepo, map[string]string{"checks": writeAccess})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 55 annotations force one in_progress POST (50) and one completing PATCH (5) with conclusion "neutral".
+	anns := make([]AdvisoryAnnotation, 55)
+	for i := range anns {
+		level := "notice"
+		if i == 0 {
+			level = "warning"
+		} else if i == 1 {
+			// A failure level must be clamped to notice.
+			level = "failure"
+		}
+		anns[i] = AdvisoryAnnotation{
+			Path:      "db/schema.sql",
+			StartLine: i + 1,
+			EndLine:   i + 1,
+			Level:     level,
+			Title:     "Deviates: [click](https://evil.example) <script> @octocat",
+			Message:   SanitizeAdvisoryText("Adds [MySQL](https://evil.example) javascript:alert(1) data:text/html,<b>table</b> @alice") + "\n\nAI-generated (mistral-medium, prompt pr-advisory-v2). Advisory only; does not block a merge.",
+		}
+	}
+	err = client.PublishAdvisoryCheckRun(t.Context(), headSHA, AdvisoryCheckRun{
+		Title:       "Advisory check: 1 deviation noted",
+		Summary:     "AI-generated advisory verdicts from llm-advisory checks.",
+		Annotations: anns,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.created) != 1 || len(fake.patches) != 1 {
+		t.Fatalf("created %d, patches %d, want 1 and 1", len(fake.created), len(fake.patches))
+	}
+	post := fake.created[0]
+	if post["name"] != AdvisoryCheckName || post["status"] != "in_progress" || post["conclusion"] != nil {
+		t.Fatalf("unexpected POST check run for multi-batch publish: %v", post)
+	}
+	output := post["output"].(map[string]any)
+	firstBatch := output["annotations"].([]any)
+	if len(firstBatch) != 50 {
+		t.Fatalf("first batch has %d annotations, want 50", len(firstBatch))
+	}
+	first := firstBatch[0].(map[string]any)
+	if first["annotation_level"] != "warning" {
+		t.Fatalf("first level = %v, want warning", first["annotation_level"])
+	}
+	second := firstBatch[1].(map[string]any)
+	if second["annotation_level"] != "notice" {
+		t.Fatalf("clamped level = %v, want notice", second["annotation_level"])
+	}
+	title := first["title"].(string)
+	msg := first["message"].(string)
+	for _, forbidden := range []string{"https://", "javascript:", "data:", "<script>", "<b>", "@octocat", "@alice", "[click]", "[MySQL]"} {
+		if strings.Contains(title, forbidden) || strings.Contains(msg, forbidden) {
+			t.Fatalf("forbidden token %q survived sanitization: title=%q msg=%q", forbidden, title, msg)
+		}
+	}
+	if !strings.Contains(msg, "AI-generated (mistral-medium, prompt pr-advisory-v2)") {
+		t.Fatalf("missing AI-generated label in message: %q", msg)
+	}
+	patch := fake.patches[0]
+	if patch["status"] != "completed" || patch["conclusion"] != "neutral" {
+		t.Fatalf("unexpected PATCH check run: %v", patch)
+	}
+	secondBatch := patch["output"].(map[string]any)["annotations"].([]any)
+	if len(secondBatch) != 5 {
+		t.Fatalf("second batch has %d annotations, want 5", len(secondBatch))
+	}
+
+	exists, err := client.HasAdvisoryCheckRun(t.Context(), headSHA)
+	if err != nil || !exists {
+		t.Fatalf("HasAdvisoryCheckRun after publish = %v, %v; want true, nil", exists, err)
+	}
+	otherSHA := "fedcba9876543210fedcba9876543210fedcba98"
+	exists, err = client.HasAdvisoryCheckRun(t.Context(), otherSHA)
+	if err != nil || exists {
+		t.Fatalf("HasAdvisoryCheckRun for unseen head = %v, %v; want false, nil", exists, err)
+	}
+
+	// Over maxRunAnnotations (500) caps annotations at 500 and notes the omitted count in summary.
+	many := make([]AdvisoryAnnotation, maxRunAnnotations+3)
+	for i := range many {
+		many[i] = AdvisoryAnnotation{Path: "db/schema.sql", StartLine: i + 1, EndLine: i + 1, Level: "notice", Title: "Complies", Message: "ok"}
+	}
+	if err := client.PublishAdvisoryCheckRun(t.Context(), otherSHA, AdvisoryCheckRun{
+		Title:       "Advisory check",
+		Summary:     "AI-generated advisory verdicts.",
+		Annotations: many,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cappedPost := fake.created[len(fake.created)-1]
+	cappedSummary := cappedPost["output"].(map[string]any)["summary"].(string)
+	if !strings.Contains(cappedSummary, "3 more advisory citations are not annotated.") {
+		t.Fatalf("summary missing omitted citation note: %q", cappedSummary)
+	}
+
+	// Single-batch publish (<= 50 annotations) completes atomically on POST with conclusion "neutral".
+	singleSHA := "1111222233334444555566667777888899990000"
+	patchesBefore := len(fake.patches)
+	if err := client.PublishAdvisoryCheckRun(t.Context(), singleSHA, AdvisoryCheckRun{
+		Title:       "Advisory check: 1 check complied",
+		Summary:     "AI-generated advisory verdicts.",
+		Annotations: []AdvisoryAnnotation{{Path: "db/schema.sql", StartLine: 1, EndLine: 1, Level: "notice", Title: "Complies", Message: "ok"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	singlePost := fake.created[len(fake.created)-1]
+	if singlePost["status"] != "completed" || singlePost["conclusion"] != "neutral" || len(fake.patches) != patchesBefore {
+		t.Fatalf("single-batch publish did not complete atomically: post=%v patches=%d->%d", singlePost, patchesBefore, len(fake.patches))
+	}
+
+	// If a multi-batch PATCH fails, the check run stays in_progress so HasAdvisoryCheckRun returns false for retry.
+	failFake, failApp := newFakeGitHub(t)
+	failFake.statusFor["/repos/"+testRepo+"/check-runs/77"] = http.StatusInternalServerError
+	failClient, err := failApp.repoClient(t.Context(), 42, 9, testRepo, map[string]string{"checks": writeAccess})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := failClient.PublishAdvisoryCheckRun(t.Context(), headSHA, AdvisoryCheckRun{
+		Title:       "Advisory check",
+		Summary:     "AI-generated advisory verdicts.",
+		Annotations: anns,
+	}); err == nil {
+		t.Fatal("expected PATCH failure error")
+	}
+	exists, err = failClient.HasAdvisoryCheckRun(t.Context(), headSHA)
+	if err != nil || exists {
+		t.Fatalf("HasAdvisoryCheckRun after failed PATCH = %v, %v; want false, nil", exists, err)
 	}
 }

@@ -5,7 +5,7 @@
 // `respond` takes the state of its writes as an argument, so a test starts from nothing and `npm run fixtures`
 // keeps one state for as long as it runs. The role policy is not played here: every person may write.
 import type { Decision, HumanProposal, PremiseHost, Waiver } from '../src/api/types.ts';
-import { agentProposals, checkProposals, decisionHealthOf, decisions, humanProposals, ids, premiseHostRows, premiseReasons, proposals, scopes, verdicts, waivers } from './data.ts';
+import { advisoryVerdicts, agentProposals, checkProposals, decisionHealthOf, decisions, humanProposals, ids, premiseHostRows, premiseReasons, proposals, scopes, verdicts, waivers } from './data.ts';
 
 export interface FixtureRequest {
   method: string;
@@ -655,6 +655,25 @@ export function respond(request: FixtureRequest, now: Date = new Date(), state: 
     const repo = query.get('repo');
     const rows = verdicts(now).filter((v) => (decision === null || v.decision_id === decision || v.slug === decision) && (repo === null || v.repo === repo.toLowerCase()));
     return json(200, { known: echo.known, verdicts: page(rows, query) });
+  }
+  if (path === '/v1/advisory-verdicts') {
+    const refused = allow('repo', 'decision', 'pull_number', 'assessment', ...PAGED);
+    if (refused) return refused;
+    const decision = query.get('decision');
+    const repo = query.get('repo');
+    const pullRaw = query.get('pull_number');
+    const assessment = query.get('assessment');
+    if (pullRaw !== null && !/^[1-9][0-9]*$/.test(pullRaw)) return json(400, { error: 'invalid query' });
+    if (assessment !== null && !['complies', 'deviates', 'unclear'].includes(assessment)) return json(400, { error: 'invalid query' });
+    const pullNumber = pullRaw === null ? null : Number(pullRaw);
+    const rows = advisoryVerdicts(now).filter(
+      (v) =>
+        (decision === null || v.decision_id === decision) &&
+        (repo === null || v.repo === repo.toLowerCase()) &&
+        (pullNumber === null || v.pull_number === pullNumber) &&
+        (assessment === null || v.assessment === assessment),
+    );
+    return json(200, { advisory_verdicts: page(rows, query) });
   }
 
   if (path === '/v1/audit/decisions') {

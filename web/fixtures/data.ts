@@ -2,6 +2,7 @@
 // lifecycle, a supersession, waivers at different deadlines, drafts in all three queues, and CI verdicts.
 // Times that matter to a view (when a waiver ends) are relative to `now`, so the views read the same on any day.
 import type {
+  AdvisoryVerdict,
   AgentProposal,
   CheckProposal,
   Decision,
@@ -434,5 +435,50 @@ export function decisionHealthOf(decision: Decision, now: Date): DecisionHealth 
       scopes: [],
     },
   };
+}
+
+export function advisoryVerdicts(now: Date): AdvisoryVerdict[] {
+  return [
+    {
+      id: uuid(902),
+      repo: 'acme/payments',
+      pull_number: 42,
+      pull_url: 'https://github.com/acme/payments/pull/42',
+      head_sha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+      base_sha: '9876543210fedcba9876543210fedcba98765432',
+      decision_id: ids.useTls,
+      decision_version: 2,
+      decision_title: 'Public ingress terminates TLS 1.2 or later',
+      check_index: 0,
+      mode: 'advise',
+      result: 'advisory',
+      assessment: 'deviates',
+      cited: [{ path: 'deploy/ingress.yaml', start_line: 14, end_line: 18 }],
+      reason: 'Configures minVersion TLSv1.1 on the public ingress listener.',
+      model_id: 'mistral-medium-latest',
+      prompt_version: 'pr-advisory-v2',
+      recorded_at: iso(new Date(now.getTime() - 45 * 60 * 1000)),
+    },
+    {
+      id: uuid(901),
+      repo: 'acme/web',
+      pull_number: 11,
+      pull_url: 'https://github.com/acme/web/pull/11',
+      head_sha: 'b1c2d3e4f5a60718293a4b5c6d7e8f9012345678',
+      base_sha: '9876543210fedcba9876543210fedcba98765432',
+      decision_id: ids.postgresOnly,
+      decision_version: 1,
+      decision_title: 'New services use PostgreSQL for transactional data',
+      check_index: 0,
+      mode: 'advise',
+      result: 'advisory',
+      assessment: 'complies',
+      cited: [{ path: 'db/schema.sql', start_line: 9, end_line: 9 }],
+      reason: 'Uses PostgreSQL table DDL.',
+      model_id: 'mistral-medium-latest',
+      prompt_version: 'pr-advisory-v2',
+      recorded_at: iso(new Date(now.getTime() - 3 * 60 * 60 * 1000)),
+    },
+  ];
 }
 

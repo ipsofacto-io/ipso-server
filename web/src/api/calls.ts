@@ -1,5 +1,6 @@
 import { api as defaultApi, type Api } from './client';
 import type {
+  AdvisoryVerdict,
   AgentProposal,
   Approval,
   ApprovalRequest,
@@ -93,6 +94,10 @@ export function makeCalls(api: Api) {
       api.getJSON<{ check_proposals: CheckProposal[] }>('/v1/check-proposals', q, signal),
     listVerdicts: (q: { repo?: string; decision?: string; known?: string } & Paging = {}, signal?: AbortSignal) =>
       api.getJSON<{ known: string; verdicts: StoredVerdict[] }>('/v1/verdicts', q, signal),
+    listAdvisoryVerdicts: (
+      q: { repo?: string; decision?: string; pull_number?: number; assessment?: 'complies' | 'deviates' | 'unclear' } & Paging = {},
+      signal?: AbortSignal,
+    ) => api.getJSON<{ advisory_verdicts: AdvisoryVerdict[] }>('/v1/advisory-verdicts', q, signal),
     auditDecisions: (q: Subject & { valid: string; known: string }, signal?: AbortSignal) =>
       api.getJSON<AuditDecisions>('/v1/audit/decisions', q, signal),
     auditBeliefs: (q: Subject & { valid: string; then: string; now: string }, signal?: AbortSignal) =>

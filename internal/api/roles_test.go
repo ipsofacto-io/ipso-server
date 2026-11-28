@@ -51,8 +51,9 @@ var mayCall = func() map[string][]string {
 		"audit_merges":         auditors,
 		"audit_supersessions":  auditors,
 		"audit_waivers":        auditors,
-		"read_audit_log":       auditors,
-		"list_verdicts":        every,
+		"read_audit_log":         auditors,
+		"list_verdicts":          every,
+		"list_advisory_verdicts": every,
 
 		// The writes of ADR-0109, by the roles that hold the action in policy.rego.
 		"create_scope":              {identity.RoleDecisionOwner, identity.RoleAdmin},

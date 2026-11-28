@@ -4,6 +4,7 @@ import { AppProvider } from './app/AppContext';
 import { Layout } from './app/Layout';
 import { EmptyState } from './components/EmptyState';
 import { Page } from './components/Page';
+import { AdvisoryView } from './views/Advisory';
 import {
   AuditBeliefsView,
   AuditDecisionsView,
@@ -48,6 +49,7 @@ export function AppRoutes() {
         <Route path="decisions/:ref" element={<DecisionDetailView />} />
         <Route path="scopes" element={<ScopesView />} />
         <Route path="inbox" element={<InboxView />} />
+        <Route path="advisory" element={<AdvisoryView />} />
         <Route path="waivers" element={<WaiversView />} />
         <Route path="waivers/new" element={<RecordWaiverView />} />
         <Route path="premises" element={<PremisesView />} />

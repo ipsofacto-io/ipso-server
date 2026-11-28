@@ -8,6 +8,7 @@ export const PAGES = [
   { to: '/decisions/new', label: 'New decision' },
   { to: '/scopes', label: 'Scopes' },
   { to: '/inbox', label: 'Inbox' },
+  { to: '/advisory', label: 'Advisory verdicts' },
   { to: '/waivers', label: 'Waivers' },
   { to: '/premises', label: 'Premises' },
   { to: '/audit', label: 'Audit' },

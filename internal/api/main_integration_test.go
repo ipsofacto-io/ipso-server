@@ -89,6 +89,8 @@ type fixture struct {
 	checkProposal uuid.UUID
 	// uploads is the one verdict upload seeded for each tenant.
 	uploads map[uuid.UUID]uuid.UUID
+	// advisoryVerdicts is the one advisory verdict seeded for each tenant.
+	advisoryVerdicts map[uuid.UUID]uuid.UUID
 	// gateway is optional and enabled by tests that exercise LLM check evaluation.
 	gateway *llmgw.Gateway
 }
@@ -234,6 +236,25 @@ func newFixture(t *testing.T) *fixture {
 			INSERT INTO verification.verdict (tenant_id, upload_id, decision_id, slug, check_index, mode, result, violations)
 			VALUES ($1, $2, '01M5QJ0V9EVXKR4C89XNBNT5GG', 'use-tls', 0, 'block', 'fail', 2)`, tenant, upload)
 		f.uploads[tenant] = upload
+	}
+	f.advisoryVerdicts = map[uuid.UUID]uuid.UUID{}
+	for _, seed := range []struct {
+		tenant   uuid.UUID
+		repo     string
+		decision uuid.UUID
+	}{
+		{tenantA, "acme/api", f.tls},
+		{tenantB, "globex/web", f.other},
+	} {
+		adv := f.insert(t, `
+			INSERT INTO verification.advisory_verdict
+				(tenant_id, repository_id, repo, pull_number, head_sha, base_sha, decision_id, decision_version,
+				 check_index, assessment, cited, reason, model_id, prompt_version, input_sha256)
+			VALUES ($1, 42, $2::text, 7, repeat('ab', 20), repeat('cd', 20), $3, 1, 0, 'deviates',
+			        '[{"path":"ingress/tls.yaml","start_line":4,"end_line":6}]'::jsonb,
+			        'Configures TLS 1.1 on the ingress listener.', 'advisory-model', 'pr-advisory-v2', sha256('input'))
+			RETURNING id`, seed.tenant, seed.repo, seed.decision)
+		f.advisoryVerdicts[seed.tenant] = adv
 	}
 	f.known = clock(t, admin)
 	return f

@@ -577,7 +577,8 @@ func (s *Service) routePullRequest(body []byte) (routed, error) {
 
 // advisoryJob is the advisory job of an open pull request, or nil when the service has no advisory hook. The job
 // reads the opt-in again before it mints a token, so a repository removed from the list while the job waited
-// mints nothing. The token reads contents, metadata and pull requests, and writes nothing (ADR-0174).
+// mints nothing. The token reads contents, metadata and pull requests, and writes checks so it can publish the
+// non-blocking ipso / advisory check run (ADR-0174, IPSO-162).
 func (s *Service) advisoryJob(install installation, repo repository, number int, sha string) *advisoryJob {
 	if s.cfg.AdvisoryEnabled == nil || s.cfg.OnPullRequest == nil {
 		return nil
@@ -589,7 +590,7 @@ func (s *Service) advisoryJob(install installation, repo repository, number int,
 			return err
 		}
 		client, err := s.cfg.App.repoClient(ctx, install.ID, repo.ID, repo.FullName, map[string]string{
-			"contents": readAccess, "metadata": readAccess, "pull_requests": readAccess,
+			"checks": writeAccess, "contents": readAccess, "metadata": readAccess, "pull_requests": readAccess,
 		})
 		if err != nil {
 			return err

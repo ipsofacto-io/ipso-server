@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/ipsofacto-io/ipso-server/internal/verification"
 )
 
@@ -373,5 +375,61 @@ func TestTheAdvisorySchemaAndPromptAskForTheReasonFirst(t *testing.T) {
 	parsed, err := parseAdvisory(example, 2)
 	if err != nil || parsed.assessment != verification.Deviates || !slices.Equal(parsed.hunks, []int{2}) {
 		t.Fatalf("%+v, %v", parsed, err)
+	}
+}
+
+func TestBuildAdvisoryCheckRunKeepsSummaryServerAuthoredAndLabelsEveryAnnotation(t *testing.T) {
+	d1 := uuid.MustParse("0190c7b8-0000-7000-8000-000000000001")
+	d2 := uuid.MustParse("0190c7b8-0000-7000-8000-000000000002")
+	run := buildAdvisoryCheckRun([]verification.StoredAdvisoryVerdict{
+		{
+			DecisionID:      d1,
+			DecisionVersion: 1,
+			DecisionTitle:   "Keep PostgreSQL",
+			Assessment:      verification.Deviates,
+			Cited:           []verification.Place{{Path: "db/schema.sql", StartLine: 2, EndLine: 4}},
+			Reason:          "Adds [MySQL](https://evil.example) <b>table</b> @alice",
+			ModelID:         "mistral-medium",
+			PromptVersion:   "pr-advisory-v2",
+		},
+		{
+			DecisionID:      d2,
+			DecisionVersion: 1,
+			Assessment:      verification.Complies,
+			Cited:           []verification.Place{{Path: "api/handler.go", StartLine: 10, EndLine: 12}},
+			Reason:          "Uses parameterized queries.",
+			ModelID:         "mistral-medium",
+			PromptVersion:   "pr-advisory-v2",
+		},
+	})
+	if run.Title != "Advisory check: 1 deviation noted" {
+		t.Fatalf("title = %q", run.Title)
+	}
+	// Summary is server-authored and must never include model reasons.
+	if strings.Contains(run.Summary, "MySQL") || strings.Contains(run.Summary, "parameterized") {
+		t.Fatalf("summary leaked model reason: %q", run.Summary)
+	}
+	if !strings.Contains(run.Summary, "1 deviates, 1 complies, 0 unclear") || !strings.Contains(run.Summary, "advisory only") {
+		t.Fatalf("unexpected summary: %q", run.Summary)
+	}
+	if len(run.Annotations) != 2 {
+		t.Fatalf("got %d annotations, want 2", len(run.Annotations))
+	}
+	if run.Annotations[0].Level != "warning" || run.Annotations[0].Title != "Deviates: Keep PostgreSQL" {
+		t.Fatalf("first annotation = %+v", run.Annotations[0])
+	}
+	for _, forbidden := range []string{"https://", "<b>", "@alice", "[MySQL]"} {
+		if strings.Contains(run.Annotations[0].Message, forbidden) {
+			t.Fatalf("annotation message kept forbidden %q: %q", forbidden, run.Annotations[0].Message)
+		}
+	}
+	if !strings.Contains(run.Annotations[0].Message, "AI-generated (mistral-medium, prompt pr-advisory-v2)") {
+		t.Fatalf("first annotation missing AI label: %q", run.Annotations[0].Message)
+	}
+	if run.Annotations[1].Level != "notice" || run.Annotations[1].Title != "Complies: decision 0190c7b8" {
+		t.Fatalf("second annotation = %+v", run.Annotations[1])
+	}
+	if !strings.Contains(run.Annotations[1].Message, "AI-generated (mistral-medium, prompt pr-advisory-v2)") {
+		t.Fatalf("second annotation missing AI label: %q", run.Annotations[1].Message)
 	}
 }

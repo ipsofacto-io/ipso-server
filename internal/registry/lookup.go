@@ -3,7 +3,10 @@ package registry
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -101,6 +104,85 @@ func DecisionsByEDRID(ctx context.Context, db *sql.DB, tenant uuid.UUID, edrIDs 
 		if len(decisions) == 1 {
 			out[edrID] = decisions[0]
 		}
+	}
+	return out, nil
+}
+
+// DecisionVersionKey identifies one stored version of a decision.
+type DecisionVersionKey struct {
+	ID      uuid.UUID
+	Version int
+}
+
+const decisionTitlesByVersion = `
+SELECT DISTINCT ON (d.decision_id, d.version) d.decision_id, d.version, d.body
+FROM registry.decision_version_all d
+WHERE d.tenant_id = ipso.current_tenant()
+  AND (d.decision_id, d.version) IN (
+    SELECT * FROM unnest($1::uuid[], $2::integer[])
+  )
+ORDER BY d.decision_id, d.version, upper(d.sys_period) NULLS FIRST`
+
+// DecisionTitlesByVersion maps each requested (decision_id, version) pair to its title under row-level
+// security. Missing versions, versions without a title, and sensitive decisions (sensitive: true or the
+// "sensitive" tag, ADR-0072) are omitted.
+func DecisionTitlesByVersion(ctx context.Context, db *sql.DB, tenant uuid.UUID, keys []DecisionVersionKey) (map[DecisionVersionKey]string, error) {
+	if tenant == uuid.Nil {
+		return nil, fmt.Errorf("%w: no tenant", ErrInvalidQuery)
+	}
+	if len(keys) == 0 {
+		return map[DecisionVersionKey]string{}, nil
+	}
+	seen := make(map[DecisionVersionKey]struct{}, len(keys))
+	ids := make([]uuid.UUID, 0, len(keys))
+	versions := make([]int32, 0, len(keys))
+	for _, k := range keys {
+		if k.ID == uuid.Nil || k.Version < 1 {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		ids = append(ids, k.ID)
+		versions = append(versions, int32(k.Version))
+	}
+	if len(ids) == 0 {
+		return map[DecisionVersionKey]string{}, nil
+	}
+	out := make(map[DecisionVersionKey]string, len(ids))
+	err := readTx(ctx, db, tenant, func(ctx context.Context, tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, decisionTitlesByVersion, ids, versions)
+		if err != nil {
+			return fmt.Errorf("read decision titles: %w", err)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var id uuid.UUID
+			var version int
+			var raw []byte
+			if err := rows.Scan(&id, &version, &raw); err != nil {
+				return fmt.Errorf("read decision titles: %w", err)
+			}
+			var meta struct {
+				Title     string   `json:"title"`
+				Sensitive bool     `json:"sensitive"`
+				Tags      []string `json:"tags"`
+			}
+			if json.Unmarshal(raw, &meta) != nil {
+				continue
+			}
+			if meta.Sensitive || slices.Contains(meta.Tags, "sensitive") {
+				continue
+			}
+			if title := strings.TrimSpace(meta.Title); title != "" {
+				out[DecisionVersionKey{ID: id, Version: version}] = title
+			}
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }

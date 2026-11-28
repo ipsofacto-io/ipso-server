@@ -304,3 +304,56 @@ func TestTheListRefusesAQueryItCannotReadBeforeTheStore(t *testing.T) {
 		t.Errorf("no caller: status %d, want 401", w.Code)
 	}
 }
+
+func TestListAdvisoryVerdictsValidatesTheQuery(t *testing.T) {
+	db, err := sql.Open("pgx", unreachable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	h := &verdictRoutes{db: db, now: func() time.Time { return time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC) }}
+	list := func(target string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, target, nil)
+		r = r.WithContext(context.WithValue(r.Context(), callerKey{}, Caller{Tenant: tenantA}))
+		w := httptest.NewRecorder()
+		h.listAdvisory(w, r)
+		return w
+	}
+	for _, target := range []string{
+		"/v1/advisory-verdicts?limit=0",
+		"/v1/advisory-verdicts?limit=101",
+		"/v1/advisory-verdicts?limit=x",
+		"/v1/advisory-verdicts?before=not-a-uuid",
+		"/v1/advisory-verdicts?before=00000000-0000-0000-0000-000000000000",
+		"/v1/advisory-verdicts?repo=",
+		"/v1/advisory-verdicts?repo=not%20a%20repo",
+		"/v1/advisory-verdicts?repo=a/b/c",
+		"/v1/advisory-verdicts?decision=",
+		"/v1/advisory-verdicts?decision=use-tls",
+		"/v1/advisory-verdicts?decision=00000000-0000-0000-0000-000000000000",
+		"/v1/advisory-verdicts?pull_number=",
+		"/v1/advisory-verdicts?pull_number=0",
+		"/v1/advisory-verdicts?pull_number=-2",
+		"/v1/advisory-verdicts?pull_number=abc",
+		"/v1/advisory-verdicts?assessment=",
+		"/v1/advisory-verdicts?assessment=fail",
+		"/v1/advisory-verdicts?assessment=pass",
+	} {
+		if w := list(target); w.Code != http.StatusBadRequest || errorOf(t, w) != errInvalidQuery {
+			t.Errorf("%s: status %d, want 400", target, w.Code)
+		}
+	}
+	for _, target := range []string{
+		"/v1/advisory-verdicts",
+		"/v1/advisory-verdicts?repo=Acme/API&decision=00000000-0000-7000-8000-000000000001&pull_number=7&assessment=deviates&limit=5",
+	} {
+		if w := list(target); w.Code != http.StatusInternalServerError || errorOf(t, w) != errInternal {
+			t.Errorf("%s: status %d, want 500", target, w.Code)
+		}
+	}
+	w := httptest.NewRecorder()
+	h.listAdvisory(w, httptest.NewRequest(http.MethodGet, "/v1/advisory-verdicts", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("no caller: status %d, want 401", w.Code)
+	}
+}

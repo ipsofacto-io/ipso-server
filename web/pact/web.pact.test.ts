@@ -34,6 +34,7 @@ const PACT_FILE = resolve(PACT_DIR, 'ipso-web-ipso-server.json');
 // The provider states. Every row they describe is synthetic (internal/api/main_integration_test.go).
 const REGISTRY = 'tenant A holds decisions, scopes, a waiver, and proposals';
 const VERDICTS = 'tenant A holds a stored verdict';
+const ADVISORY_VERDICTS = 'tenant A holds an advisory verdict';
 // A verdict whose digests are all in the baseline recorded for its decision and repository (ADR-0122).
 const VERDICT_IN_BASELINE = 'tenant A holds a verdict whose digests are all in the recorded baseline of its decision';
 // A verdict that a waiver recorded for its decision covers (ADR-0123).
@@ -545,6 +546,68 @@ describe('the web app and the control plane API', () => {
         const reading = (await calls.listVerdicts({ decision: '01M7PACT000000000000000001', limit: 20 })).verdicts[0]?.waiver;
         expect(reading?.result).toBe('waived');
         expect(typeof reading?.expires_at).toBe('string');
+      },
+    );
+  });
+
+  const advisoryVerdict = () => ({
+    id: uuid('0194f2a0-0000-7000-8000-000000000a11'),
+    repo: like('acme/api'),
+    pull_number: integer(7),
+    pull_url: regex('^https://github\\.com/[^/]+/[^/]+/pull/[0-9]+$', 'https://github.com/acme/api/pull/7'),
+    head_sha: regex('^[0-9a-f]{40}([0-9a-f]{24})?$', 'abababababababababababababababababababab'),
+    base_sha: regex('^[0-9a-f]{40}([0-9a-f]{24})?$', 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd'),
+    decision_id: uuid('00000000-0000-7000-8000-000000000001'),
+    decision_version: integer(1),
+    decision_title: like('Use TLS'),
+    check_index: integer(0),
+    mode: 'advise',
+    result: 'advisory',
+    assessment: regex('^(complies|deviates|unclear)$', 'deviates'),
+    cited: eachLike({
+      path: like('ingress/tls.yaml'),
+      start_line: integer(4),
+      end_line: integer(6),
+    }),
+    reason: like('Configures TLS 1.1 on the ingress listener.'),
+    model_id: like('advisory-model'),
+    prompt_version: like('pr-advisory-v2'),
+    recorded_at: timestamp(KNOWN),
+  });
+
+  it('lists stored advisory verdicts filtered by repository, pull request, and assessment', async () => {
+    await interact(
+      {
+        description: 'a request for the stored advisory verdicts of a pull request',
+        state: ADVISORY_VERDICTS,
+        path: '/v1/advisory-verdicts',
+        query: { repo: 'acme/api', pull_number: '7', assessment: 'deviates', limit: '20' },
+        status: 200,
+        body: { advisory_verdicts: eachLike(advisoryVerdict()) },
+      },
+      async (calls) => {
+        const answer = await calls.listAdvisoryVerdicts({ repo: 'acme/api', pull_number: 7, assessment: 'deviates', limit: 20 });
+        expect(answer.advisory_verdicts[0]?.mode).toBe('advise');
+        expect(answer.advisory_verdicts[0]?.result).toBe('advisory');
+        expect(answer.advisory_verdicts[0]?.model_id).toBe('advisory-model');
+      },
+    );
+  });
+
+  it('lists stored advisory verdicts for one decision', async () => {
+    await interact(
+      {
+        description: 'a request for the stored advisory verdicts of a decision',
+        state: ADVISORY_VERDICTS,
+        path: '/v1/advisory-verdicts',
+        query: { decision: '00000000-0000-7000-8000-000000000001', limit: '20' },
+        status: 200,
+        body: { advisory_verdicts: eachLike(advisoryVerdict()) },
+      },
+      async (calls) => {
+        const answer = await calls.listAdvisoryVerdicts({ decision: '00000000-0000-7000-8000-000000000001', limit: 20 });
+        expect(answer.advisory_verdicts[0]?.decision_id).toBe('00000000-0000-7000-8000-000000000001');
+        expect(answer.advisory_verdicts[0]?.decision_title).toBe('Use TLS');
       },
     );
   });

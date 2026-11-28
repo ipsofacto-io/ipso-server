@@ -29,15 +29,19 @@ const (
 // fakePullRequest is GitHub for one pull request. Each read of the pull request takes the next answer of
 // pulls, and the last one repeats.
 type fakePullRequest struct {
-	pulls       []integrations.PullRequest
-	patches     []integrations.Patch
-	patchErr    error
-	files       map[string]string
-	canWrite    bool
-	canWriteErr error
-	reads       int
-	asked       []string
-	fileReads   []string
+	pulls          []integrations.PullRequest
+	patches        []integrations.Patch
+	patchErr       error
+	files          map[string]string
+	canWrite       bool
+	canWriteErr    error
+	hasCheckRun    bool
+	hasCheckRunErr error
+	publishErr     error
+	published      []integrations.AdvisoryCheckRun
+	reads          int
+	asked          []string
+	fileReads      []string
 }
 
 func (f *fakePullRequest) PullRequest(_ context.Context, number int) (integrations.PullRequest, error) {
@@ -65,6 +69,19 @@ func (f *fakePullRequest) FileAt(_ context.Context, path, ref string) ([]byte, e
 func (f *fakePullRequest) CanWrite(_ context.Context, login string) (bool, error) {
 	f.asked = append(f.asked, login)
 	return f.canWrite, f.canWriteErr
+}
+
+func (f *fakePullRequest) HasAdvisoryCheckRun(_ context.Context, _ string) (bool, error) {
+	return f.hasCheckRun, f.hasCheckRunErr
+}
+
+func (f *fakePullRequest) PublishAdvisoryCheckRun(_ context.Context, _ string, run integrations.AdvisoryCheckRun) error {
+	if f.publishErr != nil {
+		return f.publishErr
+	}
+	f.published = append(f.published, run)
+	f.hasCheckRun = true
+	return nil
 }
 
 func openPull(head string) integrations.PullRequest {
@@ -484,5 +501,53 @@ func TestRunAdvisoryResolvesEveryNameOfARenamedTree(t *testing.T) {
 	stats, err := RunAdvisory(t.Context(), db, judge.complete, gh, advisoryTarget(tenantA, advisoryHead))
 	if err != nil || stats.Skipped != "" || stats.Stored != 1 || len(judge.users) != 1 || !strings.Contains(judge.users[0], "db/schema.sql") {
 		t.Fatalf("stats %+v, %d calls, %v", stats, len(judge.users), err)
+	}
+}
+
+func TestRunAdvisoryPublishesCheckRunAndRetriesWithoutRecallingModel(t *testing.T) {
+	db := newDB(t)
+	f := newAdvisoryFixture(t, db, tenantA)
+	f.decision(t, f.dbPath, "0190c7b8-0000-7000-8000-000000000001", postgresDecision(map[string]any{"engine": "llm-advisory"}))
+
+	// First attempt fails while publishing the check run after storing the verdict.
+	gh := newPullRequest(advisoryHead)
+	gh.publishErr = errors.New("github unavailable")
+	judge := &advisoryJudge{}
+	stats, err := RunAdvisory(t.Context(), db, judge.complete, gh, advisoryTarget(tenantA, advisoryHead))
+	if err == nil || stats.Stored != 1 || stats.Published || len(gh.published) != 0 {
+		t.Fatalf("first attempt: stats %+v, err %v, published %d", stats, err, len(gh.published))
+	}
+
+	// Redelivery sees the stored verdict (Known == 1), does not call the LLM again, and publishes the check run.
+	ghRetry := newPullRequest(advisoryHead)
+	stats, err = RunAdvisory(t.Context(), db, judge.complete, ghRetry, advisoryTarget(tenantA, advisoryHead))
+	if err != nil || stats.Known != 1 || !stats.Published || len(judge.users) != 1 || len(ghRetry.published) != 1 {
+		t.Fatalf("retry: stats %+v, calls %d, published %d, err %v", stats, len(judge.users), len(ghRetry.published), err)
+	}
+	run := ghRetry.published[0]
+	if run.Title != "Advisory check: 1 deviation noted" || len(run.Annotations) != 1 {
+		t.Fatalf("published run = %+v", run)
+	}
+	if run.Annotations[0].Level != "warning" || !strings.Contains(run.Annotations[0].Message, "AI-generated (advisory-model, prompt "+AdvisoryPromptVersion+")") {
+		t.Fatalf("annotation = %+v", run.Annotations[0])
+	}
+	if strings.Contains(run.Summary, "octocat") || strings.Contains(run.Annotations[0].Message, "octocat") {
+		t.Fatalf("check run exposed author login: %+v", run)
+	}
+
+	// An idempotent delivery (e.g. PR reopened on the same head) sees the existing check run and does not duplicate it.
+	ghReopen := newPullRequest(advisoryHead)
+	ghReopen.hasCheckRun = true
+	stats, err = RunAdvisory(t.Context(), db, judge.complete, ghReopen, advisoryTarget(tenantA, advisoryHead))
+	if err != nil || stats.Known != 1 || stats.Published || len(judge.users) != 1 || len(ghReopen.published) != 0 {
+		t.Fatalf("reopen: stats %+v, calls %d, published %d, err %v", stats, len(judge.users), len(ghReopen.published), err)
+	}
+
+	// A PR with no in-scope advisory verdicts publishes no check run.
+	ghNone := newPullRequest(advisoryHead2)
+	ghNone.patches = []integrations.Patch{{Filename: "README.md", Status: "modified", Changes: 1, Patch: "@@ -1 +1 @@\n-a\n+b"}}
+	stats, err = RunAdvisory(t.Context(), db, judge.complete, ghNone, advisoryTarget(tenantA, advisoryHead2))
+	if err != nil || stats.Published || len(ghNone.published) != 0 {
+		t.Fatalf("no-verdict run published unexpectedly: stats %+v, published %d, err %v", stats, len(ghNone.published), err)
 	}
 }

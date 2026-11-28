@@ -329,6 +329,7 @@ func routesWithLive(db *sql.DB, now func() time.Time, log *slog.Logger, origin s
 		{"GET /v1/audit/supersessions/{decisionID}", "audit_supersessions", authz.AuditRead, []string{"known"}, nil, audits},
 		{"GET /v1/audit/waivers", "audit_waivers", authz.AuditRead, []string{"known", "now"}, nil, audits},
 		{"GET /v1/verdicts", "list_verdicts", authz.VerdictsRead, []string{"repo", "decision", "known", "limit", "before"}, nil, http.HandlerFunc(verdicts.list)},
+		{"GET /v1/advisory-verdicts", "list_advisory_verdicts", authz.VerdictsRead, []string{"repo", "decision", "pull_number", "assessment", "limit", "before"}, nil, http.HandlerFunc(verdicts.listAdvisory)},
 	}
 	return slices.Concat(reads, writeRoutes(db, log), authoringWriteRoutes(db, policy, log, evictPin), exportRoutes(db, log), invitationRoutes(db, log, origin), roleBindingRoutes(db, log), erasureRoutes(db, log), auditLogRoutes(db, log), enterpriseRoutes(), trackerRoutes(db, log), chatRoutes())
 }
