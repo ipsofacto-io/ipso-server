@@ -338,9 +338,9 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 		return
 	}
 	t.Run("every operation is covered", func(t *testing.T) {
-		// 26 are called above as a person, the writes in writes_integration_test.go, the export/invitation/role-binding
+		// 27 are called above as a person, the writes in writes_integration_test.go, the export/invitation/role-binding
 		// reads in their integration tests, and upload_verdicts + upload_live_verdicts as CI/agent runners.
-		if got, want := 26+len(writeOps)+len(exportOps)+len(invitationOps)+len(roleBindingOps)+2, len(operations(t, loadDocument(t))); got != want {
+		if got, want := 27+len(writeOps)+len(exportOps)+len(invitationOps)+len(roleBindingOps)+2, len(operations(t, loadDocument(t))); got != want {
 			t.Fatalf("%d operations covered, the document has %d", got, want)
 		}
 	})
