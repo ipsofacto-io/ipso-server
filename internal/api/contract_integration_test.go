@@ -272,7 +272,7 @@ func TestEveryOperationMatchesTheDocument(t *testing.T) {
 				return
 			}
 			item := v[0].(map[string]any)
-			if item["id"] != f.advisoryVerdicts[tenantA].String() || item["mode"] != "advise" || item["result"] != "advisory" || item["decision_title"] != "Use TLS" {
+			if item["id"] != f.advisoryVerdicts[tenantA].String() || item["mode"] != "advise" || item["result"] != "advisory" || item["decision_title"] != "use-tls" {
 				t.Errorf("%v", item)
 			}
 		}},

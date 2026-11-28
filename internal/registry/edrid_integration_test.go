@@ -77,12 +77,12 @@ func TestDecisionTitlesByVersionOmitsSensitiveAndOtherTenants(t *testing.T) {
 	r := newRegistryDB(t)
 	rootA := r.scope(t, tenantA, uuid.Nil, "org", "acme")
 	rootB := r.scope(t, tenantB, uuid.Nil, "org", "acme")
-	insertBody := func(tenant, id uuid.UUID, version int, body string, scope uuid.UUID) {
+	insertBody := func(tenant, id uuid.UUID, version int, body, valid string, scope uuid.UUID) {
 		t.Helper()
 		if _, err := pgtest.Exec(t.Context(), r.app, tenant.String(), `
 			INSERT INTO registry.decision_version (decision_id, version, tenant_id, body, scope_refs, valid_period)
-			VALUES ($1, $2, $3, $4::jsonb, ARRAY[$5::uuid], '[2026-01-01,)'::tstzrange)`,
-			id, version, tenant, body, scope); err != nil {
+			VALUES ($1, $2, $3, $4::jsonb, ARRAY[$5::uuid], $6::text::tstzrange)`,
+			id, version, tenant, body, scope, valid); err != nil {
 			t.Fatalf("insert decision version: %v", err)
 		}
 	}
@@ -92,11 +92,11 @@ func TestDecisionTitlesByVersionOmitsSensitiveAndOtherTenants(t *testing.T) {
 	dOtherTenant := uuid.MustParse("00000000-0000-4000-8000-0000000000a4")
 	dMissing := uuid.MustParse("00000000-0000-4000-8000-0000000000a5")
 
-	insertBody(tenantA, dPlain, 1, `{"title":"Keep PostgreSQL"}`, rootA)
-	insertBody(tenantA, dPlain, 2, `{"title":"Keep PostgreSQL 18"}`, rootA)
-	insertBody(tenantA, dSensitiveFlag, 1, `{"title":"Internal range","sensitive":true}`, rootA)
-	insertBody(tenantA, dSensitiveTag, 1, `{"title":"Vendor deal","tags":["legal","sensitive"]}`, rootA)
-	insertBody(tenantB, dOtherTenant, 1, `{"title":"Tenant B secret"}`, rootB)
+	insertBody(tenantA, dPlain, 1, `{"title":"Keep PostgreSQL"}`, "[2026-01-01,2026-06-01)", rootA)
+	insertBody(tenantA, dPlain, 2, `{"title":"Keep PostgreSQL 18"}`, "[2026-06-01,)", rootA)
+	insertBody(tenantA, dSensitiveFlag, 1, `{"title":"Internal range","sensitive":true}`, "[2026-01-01,)", rootA)
+	insertBody(tenantA, dSensitiveTag, 1, `{"title":"Vendor deal","tags":["legal","sensitive"]}`, "[2026-01-01,)", rootA)
+	insertBody(tenantB, dOtherTenant, 1, `{"title":"Tenant B secret"}`, "[2026-01-01,)", rootB)
 
 	got, err := DecisionTitlesByVersion(t.Context(), r.app, tenantA, []DecisionVersionKey{
 		{ID: dPlain, Version: 1},

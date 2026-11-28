@@ -338,9 +338,10 @@ func TestPublishAdvisoryCheckRunIsAlwaysNeutralAndPlainText(t *testing.T) {
 	anns := make([]AdvisoryAnnotation, 55)
 	for i := range anns {
 		level := "notice"
-		if i == 0 {
+		switch i {
+		case 0:
 			level = "warning"
-		} else if i == 1 {
+		case 1:
 			// A failure level must be clamped to notice.
 			level = "failure"
 		}

@@ -182,7 +182,7 @@ func TestListAdvisoryFiltersPagesEnrichesAndIsolatesTenants(t *testing.T) {
 
 	var scopeA uuid.UUID
 	if err := s.admin.QueryRowContext(ctx, `
-		INSERT INTO registry.scope (tenant_id, kind, name) VALUES ($1, 'org', 'acme') RETURNING scope_id`, tenantA).Scan(&scopeA); err != nil {
+		INSERT INTO registry.scope (tenant_id, parent_id, kind, selector) VALUES ($1, NULL, 'org', 'acme') RETURNING id`, tenantA).Scan(&scopeA); err != nil {
 		t.Fatal(err)
 	}
 	insertDecision := func(id uuid.UUID, version int, body string) {
