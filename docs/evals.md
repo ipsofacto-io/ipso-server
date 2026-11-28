@@ -1,6 +1,6 @@
 # LLM evals
 
-`internal/evals` scores each LLM pipeline on synthetic golden datasets and holds the score against a committed baseline ([ADR-0082](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0082-go-eval-harness.md), [ADR-0164](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0164-one-case-eval-gate-and-deterministic-eval-markers.md), [ADR-0166](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0166-eval-scores-on-the-production-route.md)). The datasets are the five suites of `internal/evals/testdata`: `pr` (decision extraction from a pull request discussion), `redteam` (prompt injection), `checks` (drafted agent-edit checks), `templates` (the choice of a built-in template for a check, [ADR-0165](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0165-template-check-proposals.md)) and `relations` (how a pending proposal relates to the decisions in force, [ADR-0172](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0172-proposal-relation-annotations.md)). Every dataset is synthetic, and `TestDatasetsAreSynthetic` fails when one holds a URL whose host, or a mailbox whose domain, is not reserved (`.example`, `.test`, `.invalid`, `example.com`). It does not read a bare hostname or an IP address, so a person who reviews a new dataset still checks for those.
+`internal/evals` scores each LLM pipeline on synthetic golden datasets and holds the score against a committed baseline ([ADR-0082](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0082-go-eval-harness.md), [ADR-0164](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0164-one-case-eval-gate-and-deterministic-eval-markers.md), [ADR-0166](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0166-eval-scores-on-the-production-route.md), [ADR-0173](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0173-local-evals-without-github-cpu-runner.md)). The datasets are the five suites of `internal/evals/testdata`: `pr` (decision extraction from a pull request discussion), `redteam` (prompt injection), `checks` (drafted agent-edit checks), `templates` (the choice of a built-in template for a check, [ADR-0165](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0165-template-check-proposals.md)) and `relations` (how a pending proposal relates to the decisions in force, [ADR-0172](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0172-proposal-relation-annotations.md)). Every dataset is synthetic, and `TestDatasetsAreSynthetic` fails when one holds a URL whose host, or a mailbox whose domain, is not reserved (`.example`, `.test`, `.invalid`, `example.com`). It does not read a bare hostname or an IP address, so a person who reviews a new dataset still checks for those.
 
 ## Two routes
 
@@ -8,7 +8,7 @@ A recorded answer is keyed by its prompt and not by the model, so each route kee
 
 | Route | Model | Where it runs | Files in `internal/evals/testdata` | Gated by |
 | --- | --- | --- | --- | --- |
-| `local` | Qwen3-4B Q4_K_M, served by llama.cpp on the runner | the `evals` workflow, and `go test ./...` in `ci / test` for the replay | `cassette.json`, `baseline.json`, `history.jsonl`, `local-model.json` | every pull request that touches the pipelines |
+| `local` | Qwen3-4B Q4_K_M, served locally by llama.cpp | `scripts/evals-local.sh` on developer hardware, and `go test ./...` in `ci / test` for the replay | `cassette.json`, `baseline.json`, `history.jsonl`, `local-model.json` | `ci / test` replay on every pull request, and local runs before committing pipeline changes |
 | `mistral` | the operator default route of the gateway, `mistral-medium-latest` | the `evals-provider` workflow, on `main` only | `mistral/cassette.json`, `mistral/baseline.json`, `mistral/history.jsonl`, `mistral/gateway.json` | the weekly run and a manual dispatch |
 
 A pull request never calls a provider and never sees its key. `ci / test` replays the `local` route only. The `mistral` route is recorded by `evals-provider`, which reads the secret `IPSO_LLM_MISTRAL` of the GitHub environment `evals-provider`, an environment that only `main` may deploy to. A run that records is gated against the baseline of its own route: a metric more than one case below it fails, and so does a metric under its floor. A floor is the product target of section 9.9 of the spec, so both routes hold the same one.
@@ -58,10 +58,17 @@ The baseline score of each metric, from the committed baselines. This table is g
 
 ## Record a route
 
-For the `local` route, run the `evals` workflow, copy `cassette.json` from its artifact into `internal/evals/testdata`, and write the baseline:
+For the `local` route, install `llama.cpp` locally (on macOS: `brew install llama.cpp`) and run `scripts/evals-local.sh` ([ADR-0173](https://github.com/ipsofacto-io/ipso-spec/blob/main/docs/adr/0173-local-evals-without-github-cpu-runner.md)). The script downloads and SHA-256-verifies the pinned `Qwen3-4B-Q4_K_M.gguf` file into `${XDG_CACHE_HOME:-$HOME/.cache}/ipso-evals/`, starts `llama-server` on `127.0.0.1:8080`, and shuts it down on exit:
 
 ```sh
-go test ./internal/evals -run '^TestEvals$' -route local -update
+# Check live scores against the committed baseline and restore cassette.json on exit
+./scripts/evals-local.sh
+
+# Record a fresh cassette.json into internal/evals/testdata and keep it in the working tree
+./scripts/evals-local.sh --record
+
+# Record cassette.json, update baseline.json, history.jsonl, and the table above, then verify floors
+./scripts/evals-local.sh --update
 ```
 
 For the `mistral` route, dispatch `evals-provider` on `main`, copy `cassette.json` from its artifact into `internal/evals/testdata/mistral`, and write the baseline:
@@ -72,7 +79,7 @@ go test ./internal/evals -run '^TestEvals$' -route mistral -update
 
 `-update` keeps the floors, appends a line to the history of the route and rewrites the table above. Do not lower a floor or a baseline to make a run pass.
 
-A recording answers every prompt again, and two live runs of unchanged prompts differ by about one case. When a pull request adds a suite, take from the artifact only the answers whose prompts the committed cassette does not hold, so every other suite keeps its recorded answers and its baseline, then run `-update` and add the floors of the new suite to the baseline by hand.
+A recording answers every prompt again, and two live runs of unchanged prompts differ by about one case. When a pull request adds a suite, take from the recorded cassette only the answers whose prompts the committed cassette does not hold, so every other suite keeps its recorded answers and its baseline, then run `-update` and add the floors of the new suite to the baseline by hand.
 
 ## Acceptance rate of proposals
 

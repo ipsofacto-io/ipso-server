@@ -23,9 +23,9 @@ type RouteFiles struct {
 	History  string
 }
 
-// Routes lists the routes in the order of the scores table. The local route is Qwen3-4B on the CI
-// runner and keeps the files it had before there was a second route. The mistral route is the
-// operator default of the gateway, the route tenants use.
+// Routes lists the routes in the order of the scores table. The local route is Qwen3-4B served
+// locally by llama.cpp and keeps the files it had before there was a second route. The mistral route
+// is the operator default of the gateway, the route tenants use.
 var Routes = []RouteFiles{
 	{
 		Name:     "local",
